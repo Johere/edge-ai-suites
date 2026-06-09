@@ -26,6 +26,7 @@ from ..config import (
 from ..webhook import WebhookClient
 from .motion_detector import MotionDetector
 from .segment_extractor import SegmentExtractor
+from .prefilter import YoloPrefilter, FramePrefilter
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +50,30 @@ class StreamPipeline:
         self._motion_cfg = source.motion or defaults.motion
         self._segment_cfg = source.segment or defaults.segment
         self._recording_cfg = source.recording or defaults.recording
+        self._prefilter_cfg = source.prefilter or defaults.prefilter
 
         self._data_dir = os.path.join(expand_path(data_dir), self.source_id)
         os.makedirs(self._data_dir, exist_ok=True)
+
+        # Initialize prefilter if enabled
+        self._prefilter: FramePrefilter | None = None
+        if self._prefilter_cfg.enabled and self._prefilter_cfg.model_path:
+            try:
+                yolo = YoloPrefilter(
+                    model_path=self._prefilter_cfg.model_path,
+                    target_classes=self._prefilter_cfg.target_classes,
+                    min_confidence=self._prefilter_cfg.min_confidence,
+                    device=self._prefilter_cfg.device,
+                )
+                self._prefilter = FramePrefilter(
+                    yolo=yolo,
+                    detect_fps=self._prefilter_cfg.detect_fps,
+                    min_frames_hit=self._prefilter_cfg.min_frames_hit,
+                )
+                logger.info("[%s] Prefilter enabled: classes=%s", self.source_id, self._prefilter_cfg.target_classes)
+            except Exception as e:
+                logger.warning("[%s] Prefilter init failed, running without: %s", self.source_id, e)
+                self._prefilter = None
 
         self._thread: threading.Thread | None = None
         self._running = False
@@ -163,21 +185,37 @@ class StreamPipeline:
             if motion_detected and not in_motion:
                 in_motion = True
                 extractor.start_segment()
+                if self._prefilter:
+                    self._prefilter.reset()
             elif not motion_detected and detector.is_static and in_motion:
                 in_motion = False
                 result = extractor.finish()
                 if result:
-                    self._emit_segment(result)
+                    self._maybe_emit(result)
 
             # While in motion, write frames
             if in_motion:
+                if self._prefilter:
+                    self._prefilter.accumulate(frame, self._fps)
                 result = extractor.add_frame(frame)
                 if result:
-                    self._emit_segment(result)
-                    # Continue recording in new segment if still in motion
+                    self._maybe_emit(result)
                     extractor.start_segment()
+                    if self._prefilter:
+                        self._prefilter.reset()
 
         extractor.close()
+
+    def _maybe_emit(self, result):
+        """Check prefilter and emit or discard segment."""
+        if self._prefilter:
+            pf_result = self._prefilter.result()
+            if not pf_result.passed:
+                if os.path.exists(result.path):
+                    os.remove(result.path)
+                logger.debug("[%s] Segment discarded by prefilter: %s", self.source_id, result.path)
+                return
+        self._emit_segment(result)
 
     def _emit_segment(self, result):
         """Post segment to webhook as motion event."""
