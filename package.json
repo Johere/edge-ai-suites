@@ -1,0 +1,16 @@
+{
+  "name": "smart-community-ai-automation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Agent-native video analysis platform with MCP integration",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev": "npm run dev --workspace=packages/mcp-server"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
