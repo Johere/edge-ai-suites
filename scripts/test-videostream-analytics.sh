@@ -200,6 +200,10 @@ if $RUN_INTEGRATION; then
         --name "$CONTAINER_NAME" \
         --network host \
         -e WEBHOOK_URL="http://localhost:$WEBHOOK_PORT/events" \
+        -e no_proxy="localhost,127.0.0.1" \
+        -e http_proxy="" \
+        -e https_proxy="" \
+        -v "$HOME/models:/models:ro" \
         "$DOCKER_IMAGE" \
         python -m src.main --host 0.0.0.0 --port $ANALYTICS_PORT
     sleep 3
@@ -224,7 +228,7 @@ if $RUN_INTEGRATION; then
 
     # --- Step 5: Run integration tests ---
     info "Running integration tests..."
-    $PYTHON -m pytest tests/integration/ $PYTEST_ARGS --tb=short -q -m integration --timeout=180
+    $PYTHON -m pytest tests/integration/ $PYTEST_ARGS --tb=short -q -m integration --timeout=360
     INTEG_EXIT=$?
 
     if [[ $INTEG_EXIT -eq 0 ]]; then

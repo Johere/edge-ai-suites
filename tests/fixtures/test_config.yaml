@@ -23,7 +23,7 @@ defaults:
     fps: 15
     retention_days: 5
   prefilter:
-    enabled: false
+    enabled: true
     model_path: ""
     target_classes: ["person"]
     min_confidence: 0.4

@@ -61,7 +61,7 @@ class TestMotionToWebhook:
     def test_motion_event_duration_within_range(self, http_client, webhook_url):
         """Motion event duration should be within configured segment interval."""
         events = wait_for_events(
-            http_client, webhook_url, event_type="motion", min_count=1, timeout=60
+            http_client, webhook_url, event_type="motion", min_count=1, timeout=240
         )
         assert len(events) >= 1
         for event in events:
@@ -72,6 +72,6 @@ class TestMotionToWebhook:
     def test_multiple_motion_events_over_time(self, http_client, webhook_url):
         """Running long enough should produce multiple motion events."""
         events = wait_for_events(
-            http_client, webhook_url, event_type="motion", min_count=2, timeout=90
+            http_client, webhook_url, event_type="motion", min_count=2, timeout=240
         )
         assert len(events) >= 2, f"Expected >=2 motion events, got {len(events)}"
