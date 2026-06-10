@@ -10,8 +10,10 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "@smartbuilding-video/tools": "workspace:*",
-    "@smartbuilding-video/db": "workspace:*"
+    "@smartbuilding-video/tools": "*",
+    "@smartbuilding-video/db": "*",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "typescript": "^5.8.0",

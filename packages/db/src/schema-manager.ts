@@ -1,3 +1,5 @@
+import Database from "better-sqlite3";
+
 export interface SchemaExtension {
   name: string;
   type: "text" | "integer" | "real";
@@ -10,23 +12,75 @@ export interface SchemaDefinition {
   custom_tables?: Array<{ name: string; columns: SchemaExtension[] }>;
 }
 
-/**
- * Manages DB schema customization based on YAML declarations.
- * On startup: compares declared schema with actual DB columns,
- * applies ALTER TABLE ADD COLUMN for new fields.
- */
 export class SchemaManager {
-  async applySchema(schema: SchemaDefinition): Promise<void> {
-    // TODO: compare declared vs actual, apply migrations
+  private db: Database.Database;
+
+  constructor(db: Database.Database) {
+    this.db = db;
   }
 
-  async validatePromptSchema(
+  applySchema(schema: SchemaDefinition): { added: string[]; warnings: string[] } {
+    const added: string[] = [];
+    const warnings: string[] = [];
+
+    if (schema.video_summary_tasks?.extensions) {
+      for (const ext of schema.video_summary_tasks.extensions) {
+        const result = this.addColumnIfMissing("video_summary_tasks", ext);
+        if (result === "added") added.push(`video_summary_tasks.${ext.name}`);
+        else if (result === "type_mismatch") warnings.push(`video_summary_tasks.${ext.name}: type mismatch, manual migration required`);
+      }
+    }
+
+    if (schema.alerts?.extensions) {
+      for (const ext of schema.alerts.extensions) {
+        const result = this.addColumnIfMissing("alerts", ext);
+        if (result === "added") added.push(`alerts.${ext.name}`);
+        else if (result === "type_mismatch") warnings.push(`alerts.${ext.name}: type mismatch, manual migration required`);
+      }
+    }
+
+    if (schema.custom_tables) {
+      for (const table of schema.custom_tables) {
+        this.createCustomTable(table.name, table.columns);
+        added.push(`table:${table.name}`);
+      }
+    }
+
+    return { added, warnings };
+  }
+
+  validatePromptSchema(
     requiredFields: string[],
     prompt: string,
-  ): Promise<{ valid: boolean; missing: string[] }> {
+  ): { valid: boolean; missing: string[] } {
     const missing = requiredFields.filter(
       (field) => !prompt.toLowerCase().includes(field.toLowerCase()),
     );
     return { valid: missing.length === 0, missing };
+  }
+
+  private getExistingColumns(table: string): Map<string, string> {
+    const columns = new Map<string, string>();
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as any[];
+    for (const row of rows) {
+      columns.set(row.name, row.type.toLowerCase());
+    }
+    return columns;
+  }
+
+  private addColumnIfMissing(table: string, ext: SchemaExtension): "exists" | "added" | "type_mismatch" {
+    const existing = this.getExistingColumns(table);
+    if (existing.has(ext.name)) {
+      const currentType = existing.get(ext.name)!;
+      if (currentType !== ext.type) return "type_mismatch";
+      return "exists";
+    }
+    this.db.prepare(`ALTER TABLE ${table} ADD COLUMN ${ext.name} ${ext.type.toUpperCase()}`).run();
+    return "added";
+  }
+
+  private createCustomTable(name: string, columns: SchemaExtension[]): void {
+    const cols = columns.map((c) => `${c.name} ${c.type.toUpperCase()}`).join(", ");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS ${name} (id INTEGER PRIMARY KEY AUTOINCREMENT, ${cols})`);
   }
 }

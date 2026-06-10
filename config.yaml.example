@@ -1,0 +1,24 @@
+db:
+  path: ./data/smartbuilding.db
+
+summary_service:
+  url: http://localhost:8192
+
+videostream_analytics:
+  url: http://localhost:8080
+
+segments_dir: ./segments
+file_server_port: 8199
+poll_interval_ms: 5000
+vlm_max_concurrent: 2
+
+schema:
+  video_summary_tasks:
+    extensions:
+      - { name: "event", type: "text", required: true }
+      - { name: "severity", type: "text", required: true }
+      - { name: "desc", type: "text", required: true }
+      - { name: "confidence", type: "real", required: false }
+  alerts:
+    extensions: []
+  custom_tables: []
