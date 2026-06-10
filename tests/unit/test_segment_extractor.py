@@ -12,7 +12,7 @@ from src.pipeline.segment_extractor import SegmentExtractor, SegmentResult
 class TestSegmentExtractorWithRealVideo:
     @pytest.fixture
     def extractor(self, tmp_path):
-        config = SegmentConfig(interval=5.0, min_duration=0.5)
+        config = SegmentConfig(max_duration=5.0, min_duration=0.5)
         return SegmentExtractor(
             config=config,
             output_dir=str(tmp_path / "motion_events"),
@@ -25,20 +25,20 @@ class TestSegmentExtractorWithRealVideo:
         extractor.start_segment()
         assert extractor.is_recording is True
 
-    def test_add_frames_below_interval_returns_none(self, extractor, video_frames):
-        """Adding frames below the interval threshold should not produce a result."""
+    def test_add_frames_below_max_duration_returns_none(self, extractor, video_frames):
+        """Adding frames below the max_duration threshold should not produce a result."""
         extractor.start_segment()
-        # Add 30 frames (1 second at 30fps) — well below 5s interval
+        # Add 30 frames (1 second at 30fps) — well below 5s max_duration
         for frame in video_frames[:30]:
             result = extractor.add_frame(frame)
         assert result is None
         assert extractor.is_recording is True
 
-    def test_interval_reached_produces_segment(self, extractor, video_frames):
-        """Adding enough frames to exceed interval should produce a SegmentResult."""
+    def test_max_duration_reached_produces_segment(self, extractor, video_frames):
+        """Adding enough frames to exceed max_duration should produce a SegmentResult."""
         extractor.start_segment()
         result = None
-        # 5s interval × 30fps = 150 frames needed
+        # 5s max_duration × 30fps = 150 frames needed
         for frame in video_frames[:160]:
             r = extractor.add_frame(frame)
             if r is not None:
@@ -47,20 +47,26 @@ class TestSegmentExtractorWithRealVideo:
         assert result is not None
         assert isinstance(result, SegmentResult)
 
+    def test_finish_produces_segment(self, extractor, video_frames):
+        """Calling finish() mid-recording should produce a valid segment."""
+        extractor.start_segment()
+        for frame in video_frames[:90]:  # 3s of frames
+            extractor.add_frame(frame)
+        result = extractor.finish()
+        assert result is not None
+        assert isinstance(result, SegmentResult)
+        assert 2.5 <= result.duration_s <= 3.5
+
     def test_output_file_exists_and_readable(self, extractor, video_frames):
         """Produced clip file should exist and be openable by OpenCV."""
         extractor.start_segment()
-        result = None
-        for frame in video_frames[:160]:
-            r = extractor.add_frame(frame)
-            if r is not None:
-                result = r
-                break
+        for frame in video_frames[:90]:
+            extractor.add_frame(frame)
+        result = extractor.finish()
         assert result is not None
         assert os.path.exists(result.path)
         assert result.file_size > 0
 
-        # Verify file is readable by OpenCV
         cap = cv2.VideoCapture(result.path)
         assert cap.isOpened()
         frame_count = 0
@@ -72,10 +78,11 @@ class TestSegmentExtractorWithRealVideo:
         cap.release()
         assert frame_count > 0
 
-    def test_output_frame_count_matches_interval(self, extractor, video_frames):
-        """Frame count in output file should approximately match fps × interval."""
+    def test_output_frame_count_matches_duration(self, extractor, video_frames):
+        """Frame count in output file should match frames written."""
         extractor.start_segment()
         result = None
+        # 5s max_duration × 30fps = 150 frames
         for frame in video_frames[:160]:
             r = extractor.add_frame(frame)
             if r is not None:
@@ -89,7 +96,7 @@ class TestSegmentExtractorWithRealVideo:
             frame_count += 1
         cap.release()
 
-        expected = 30.0 * 5.0  # fps × interval
+        expected = 30.0 * 5.0  # fps × max_duration
         assert abs(frame_count - expected) / expected < 0.1, (
             f"Frame count {frame_count} too far from expected {expected}"
         )
@@ -108,7 +115,7 @@ class TestSegmentExtractorWithRealVideo:
 
     def test_finish_below_min_duration_returns_none(self, tmp_path, video_frames):
         """Segment shorter than min_duration should be discarded."""
-        config = SegmentConfig(interval=10.0, min_duration=2.0)
+        config = SegmentConfig(max_duration=60.0, min_duration=2.0)
         extractor = SegmentExtractor(
             config=config,
             output_dir=str(tmp_path / "motion_events"),
@@ -126,14 +133,10 @@ class TestSegmentExtractorWithRealVideo:
     def test_output_directory_has_date_structure(self, extractor, video_frames):
         """Output path should include date subdirectory."""
         extractor.start_segment()
-        result = None
-        for frame in video_frames[:160]:
-            r = extractor.add_frame(frame)
-            if r is not None:
-                result = r
-                break
+        for frame in video_frames[:90]:
+            extractor.add_frame(frame)
+        result = extractor.finish()
         assert result is not None
-        # Path should contain a YYYY-MM-DD directory
         parts = result.path.split(os.sep)
         date_parts = [p for p in parts if len(p) == 10 and p[4] == "-" and p[7] == "-"]
         assert len(date_parts) == 1
@@ -141,12 +144,9 @@ class TestSegmentExtractorWithRealVideo:
     def test_filename_contains_source_id(self, extractor, video_frames):
         """Output filename should include the source_id."""
         extractor.start_segment()
-        result = None
-        for frame in video_frames[:160]:
-            r = extractor.add_frame(frame)
-            if r is not None:
-                result = r
-                break
+        for frame in video_frames[:90]:
+            extractor.add_frame(frame)
+        result = extractor.finish()
         assert result is not None
         filename = os.path.basename(result.path)
         assert "test_cam" in filename

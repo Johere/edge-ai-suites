@@ -204,6 +204,10 @@ class StreamPipeline:
                     if self._prefilter:
                         self._prefilter.reset()
 
+        if in_motion:
+            result = extractor.finish()
+            if result:
+                self._maybe_emit(result)
         extractor.close()
 
     def _maybe_emit(self, result):

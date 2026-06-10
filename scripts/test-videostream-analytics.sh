@@ -204,6 +204,7 @@ if $RUN_INTEGRATION; then
         -e http_proxy="" \
         -e https_proxy="" \
         -v "$HOME/models:/models:ro" \
+        -v /tmp/smartbuilding-clips:/root/.smartbuilding/data \
         "$DOCKER_IMAGE" \
         python -m src.main --host 0.0.0.0 --port $ANALYTICS_PORT
     sleep 3

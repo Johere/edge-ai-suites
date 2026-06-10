@@ -17,7 +17,7 @@ class MotionConfig(BaseModel):
 
 
 class SegmentConfig(BaseModel):
-    interval: float = 10.0
+    max_duration: float = 60.0
     min_duration: float = 1.0
 
 

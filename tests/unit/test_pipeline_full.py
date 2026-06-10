@@ -41,7 +41,7 @@ class TestFullPipeline:
         )
         defaults = DefaultsConfig(
             motion=MotionConfig(diff_threshold=25, area_ratio=0.015, stable_frames=30),
-            segment=SegmentConfig(interval=5.0, min_duration=1.0),
+            segment=SegmentConfig(max_duration=60.0, min_duration=1.0),
         )
         p = StreamPipeline(
             source=source,
@@ -54,7 +54,7 @@ class TestFullPipeline:
     def test_pipeline_produces_motion_clips(self, pipeline, data_dir, mock_webhook):
         """Pipeline should produce at least 1 motion clip from child_safety_demo.mp4."""
         pipeline.start()
-        # Let it run for 20 seconds (enough for ~2 segments at 5s interval)
+        # Let it run for 20 seconds (enough for motion events to trigger)
         time.sleep(20)
         pipeline.stop()
 
@@ -94,11 +94,10 @@ class TestFullPipeline:
                 frame_count += 1
             cap.release()
             assert frame_count > 0, f"Clip has no frames: {clip_path}"
-            # At 30fps, 5s interval = ~150 frames (tolerance)
             assert frame_count > 20, f"Clip too short ({frame_count} frames): {clip_path}"
 
     def test_clip_duration_reasonable(self, pipeline, data_dir, mock_webhook):
-        """Clip duration should be approximately the configured interval."""
+        """Clip duration should be within min_duration to max_duration range."""
         pipeline.start()
         time.sleep(20)
         pipeline.stop()
@@ -120,8 +119,8 @@ class TestFullPipeline:
                 frame_count += 1
             cap.release()
             duration = frame_count / fps
-            # Should be within 1-6s (configured interval=5s, min_duration=1s)
-            assert 1.0 <= duration <= 6.0, f"Clip duration {duration:.1f}s out of range"
+            # Event-level: duration depends on motion length (min 1s, max 60s)
+            assert 1.0 <= duration <= 61.0, f"Clip duration {duration:.1f}s out of range"
 
     def test_webhook_receives_status_online(self, pipeline, mock_webhook):
         """Webhook should receive a status='online' event when pipeline connects."""

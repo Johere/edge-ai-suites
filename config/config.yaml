@@ -12,11 +12,11 @@ data_dir: "~/.smartbuilding/data"
 
 defaults:
   motion:
-    diff_threshold: 25
-    area_ratio: 0.015
-    stable_frames: 30
+    diff_threshold: 15
+    area_ratio: 0.005
+    stable_frames: 45
   segment:
-    interval: 10
+    max_duration: 60
     min_duration: 1.0
   recording:
     interval: 60
