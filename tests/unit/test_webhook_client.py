@@ -5,8 +5,8 @@ from unittest.mock import patch, MagicMock
 import httpx
 import pytest
 
-from src.config import WebhookConfig
-from src.webhook import WebhookClient
+from videostream_analytics.shared.config import WebhookConfig
+from videostream_analytics.shared.webhook_client import WebhookClient
 
 
 @pytest.fixture

@@ -4,8 +4,8 @@ from unittest.mock import patch, MagicMock, PropertyMock
 
 import pytest
 
-from src.config import AppConfig, SourceConfig
-from src.source_manager import SourceManager
+from videostream_analytics.shared.config import AppConfig, SourceConfig
+from videostream_analytics.source_worker import SourceManager
 
 
 @pytest.fixture
@@ -15,7 +15,7 @@ def config():
 
 @pytest.fixture
 def mock_pipeline_class():
-    with patch("src.source_manager.StreamPipeline") as mock_cls:
+    with patch("videostream_analytics.source_worker.StreamPipeline") as mock_cls:
         instance = MagicMock()
         instance.is_running = True
         instance.status = "online"
@@ -29,7 +29,7 @@ def mock_pipeline_class():
 
 @pytest.fixture
 def manager(config, mock_pipeline_class):
-    with patch("src.source_manager.WebhookClient"):
+    with patch("videostream_analytics.source_worker.WebhookSink"):
         mgr = SourceManager(config)
     return mgr
 

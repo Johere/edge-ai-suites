@@ -1,4 +1,4 @@
-"""Full pipeline integration test — reads real video, produces clips and webhook calls."""
+"""Full pipeline integration test — reads real video, produces clips and sink events."""
 
 import os
 import time
@@ -8,15 +8,15 @@ from unittest.mock import MagicMock, patch
 import cv2
 import pytest
 
-from src.config import (
+from videostream_analytics.shared.config import (
     AppConfig,
     SourceConfig,
     DefaultsConfig,
     MotionConfig,
     SegmentConfig,
 )
-from src.pipeline.stream_pipeline import StreamPipeline
-from src.webhook import WebhookClient
+from videostream_analytics.stream_monitor.rtsp_monitor import StreamPipeline
+from videostream_analytics.sinks import EventSink
 
 
 class TestFullPipeline:
@@ -25,16 +25,14 @@ class TestFullPipeline:
         return str(tmp_path / "pipeline_data")
 
     @pytest.fixture
-    def mock_webhook(self):
-        """A mock WebhookClient that records all calls."""
-        webhook = MagicMock(spec=WebhookClient)
-        webhook.send_event.return_value = True
-        webhook.send_motion_event.return_value = True
-        webhook.send_status_event.return_value = True
-        return webhook
+    def mock_sink(self):
+        """A mock EventSink that records all emit() calls."""
+        sink = MagicMock(spec=EventSink)
+        sink.emit.return_value = True
+        return sink
 
     @pytest.fixture
-    def pipeline(self, test_video_path, data_dir, mock_webhook):
+    def pipeline(self, test_video_path, data_dir, mock_sink):
         source = SourceConfig(
             source_id="test_child",
             rtsp_url=test_video_path,  # OpenCV can open file paths directly
@@ -47,11 +45,11 @@ class TestFullPipeline:
             source=source,
             defaults=defaults,
             data_dir=data_dir,
-            webhook=mock_webhook,
+            sink=mock_sink,
         )
         return p
 
-    def test_pipeline_produces_motion_clips(self, pipeline, data_dir, mock_webhook):
+    def test_pipeline_produces_motion_clips(self, pipeline, data_dir, mock_sink):
         """Pipeline should produce at least 1 motion clip from child_safety_demo.mp4."""
         pipeline.start()
         # Let it run for 20 seconds (enough for motion events to trigger)
@@ -71,7 +69,7 @@ class TestFullPipeline:
             f"Expected at least 1 clip file, found {len(clip_files)} in {motion_dir}"
         )
 
-    def test_clip_files_are_playable(self, pipeline, data_dir, mock_webhook):
+    def test_clip_files_are_playable(self, pipeline, data_dir, mock_sink):
         """Produced clip files should be openable and contain frames."""
         pipeline.start()
         time.sleep(20)
@@ -96,7 +94,7 @@ class TestFullPipeline:
             assert frame_count > 0, f"Clip has no frames: {clip_path}"
             assert frame_count > 20, f"Clip too short ({frame_count} frames): {clip_path}"
 
-    def test_clip_duration_reasonable(self, pipeline, data_dir, mock_webhook):
+    def test_clip_duration_reasonable(self, pipeline, data_dir, mock_sink):
         """Clip duration should be within min_duration to interval range."""
         pipeline.start()
         time.sleep(20)
@@ -122,40 +120,39 @@ class TestFullPipeline:
             # Fixed interval: duration should be around interval (10s) or shorter for tail segments
             assert 1.0 <= duration <= 11.0, f"Clip duration {duration:.1f}s out of range"
 
-    def test_webhook_receives_status_online(self, pipeline, mock_webhook):
-        """Webhook should receive a status='online' event when pipeline connects."""
+    def test_sink_receives_status_online(self, pipeline, mock_sink):
+        """Sink should receive a status='online' event when pipeline connects."""
         pipeline.start()
         time.sleep(3)
         pipeline.stop()
 
-        mock_webhook.send_status_event.assert_any_call("test_child", "online")
+        status_events = [
+            call.args[0] for call in mock_sink.emit.call_args_list
+            if call.args[0].get("event_type") == "status"
+        ]
+        online_events = [e for e in status_events if e.get("status") == "online"]
+        assert len(online_events) >= 1, f"Expected online status event, got: {status_events}"
 
-    def test_webhook_receives_motion_events(self, pipeline, data_dir, mock_webhook):
-        """Webhook should receive motion events with correct payload fields."""
+    def test_sink_receives_motion_events(self, pipeline, data_dir, mock_sink):
+        """Sink should receive motion events with correct payload fields."""
         pipeline.start()
         time.sleep(20)
         pipeline.stop()
 
-        # Should have at least 1 motion event call
-        assert mock_webhook.send_motion_event.call_count >= 1
+        motion_events = [
+            call.args[0] for call in mock_sink.emit.call_args_list
+            if call.args[0].get("event_type") == "motion"
+        ]
+        assert len(motion_events) >= 1, "Expected at least 1 motion event"
 
-        # Check the payload of the first motion event
-        call_args = mock_webhook.send_motion_event.call_args_list[0]
-        kwargs = call_args.kwargs if call_args.kwargs else {}
-        args = call_args.args if call_args.args else ()
+        event = motion_events[0]
+        assert event["source_id"] == "test_child"
+        assert event["duration_seconds"] > 0
+        assert event["clip_path"].endswith(".mp4")
+        assert isinstance(event["start_time"], str)
+        assert isinstance(event["end_time"], str)
 
-        # send_motion_event is called with keyword args
-        if kwargs:
-            assert kwargs["source_id"] == "test_child"
-            assert kwargs["duration_seconds"] > 0
-            assert kwargs["clip_path"].endswith(".mp4")
-            assert isinstance(kwargs["start_time"], str)
-            assert isinstance(kwargs["end_time"], str)
-        else:
-            # Positional args: source_id, start_time, end_time, duration_seconds, clip_path, ...
-            assert args[0] == "test_child"
-
-    def test_pipeline_stops_cleanly(self, pipeline, mock_webhook):
+    def test_pipeline_stops_cleanly(self, pipeline, mock_sink):
         """Pipeline should stop without errors and report stopped status."""
         pipeline.start()
         time.sleep(5)

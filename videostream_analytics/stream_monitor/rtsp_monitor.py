@@ -19,7 +19,7 @@ from datetime import datetime
 
 import cv2
 
-from ..config import (
+from ..shared.config import (
     MotionConfig,
     SegmentConfig,
     RecordingConfig,
@@ -28,10 +28,10 @@ from ..config import (
     DefaultsConfig,
     expand_path,
 )
-from ..webhook import WebhookClient
-from .motion_detector import MotionDetector
-from .segment_extractor import SegmentExtractor
-from .prefilter import YoloPrefilter, FramePrefilter
+from ..sinks import EventSink
+from .pipeline.motion_detector import MotionDetector
+from .pipeline.segment_extractor import SegmentExtractor
+from .pipeline.prefilter_yolo import YoloPrefilter, FramePrefilter
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +44,12 @@ class StreamPipeline:
         source: SourceConfig,
         defaults: DefaultsConfig,
         data_dir: str,
-        webhook: WebhookClient,
+        sink: EventSink,
     ):
         self.source = source
         self.source_id = source.source_id
         self.rtsp_url = source.rtsp_url
-        self.webhook = webhook
+        self._sink = sink
 
         # Merge per-source config with defaults
         self._motion_cfg = source.motion or defaults.motion
@@ -119,7 +119,7 @@ class StreamPipeline:
                 self._connect()
                 if self._cap and self._cap.isOpened():
                     self._status = "online"
-                    self.webhook.send_status_event(self.source_id, "online")
+                    self._emit_status("online")
                     self._process_loop()
             except Exception as e:
                 logger.error("[%s] Pipeline error: %s", self.source_id, e)
@@ -131,11 +131,11 @@ class StreamPipeline:
 
             if self._running:
                 self._status = "reconnecting"
-                self.webhook.send_status_event(self.source_id, "reconnecting")
+                self._emit_status("reconnecting")
                 logger.info("[%s] Reconnecting in 10s...", self.source_id)
                 time.sleep(10)
 
-        self.webhook.send_status_event(self.source_id, "stopped")
+        self._emit_status("stopped")
 
     def _connect(self):
         """Connect to RTSP stream."""
@@ -253,21 +253,31 @@ class StreamPipeline:
         self._emit_segment(result)
 
     def _emit_segment(self, result):
-        """Post segment to webhook as motion event."""
-        self.webhook.send_motion_event(
-            source_id=self.source_id,
-            start_time=result.start_time,
-            end_time=result.end_time,
-            duration_seconds=result.duration_s,
-            clip_path=result.path,
-            clip_size_bytes=result.file_size,
-        )
+        """Post segment as motion event via sink."""
+        event = {
+            "source_id": self.source_id,
+            "event_type": "motion",
+            "start_time": result.start_time,
+            "end_time": result.end_time,
+            "duration_seconds": result.duration_s,
+            "clip_path": result.path,
+            "clip_size_bytes": result.file_size,
+        }
+        self._sink.emit(event)
         logger.debug(
             "[%s] Emitted segment: %.1fs, %s",
             self.source_id,
             result.duration_s,
             result.path,
         )
+
+    def _emit_status(self, status: str):
+        """Emit a status event via sink."""
+        self._sink.emit({
+            "source_id": self.source_id,
+            "event_type": "status",
+            "status": status,
+        })
 
     def _get_frame_size(self) -> tuple[int, int]:
         if self._cap:

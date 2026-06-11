@@ -8,8 +8,8 @@ import sys
 
 import uvicorn
 
-from .config import load_config
-from .app import create_app
+from .shared.config import load_config
+from .service import create_app
 
 
 def main():

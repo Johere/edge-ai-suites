@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .config import AppConfig, SourceConfig
-from .pipeline.stream_pipeline import StreamPipeline
-from .webhook import WebhookClient
+from .shared.config import AppConfig, SourceConfig
+from .stream_monitor.rtsp_monitor import StreamPipeline
+from .sinks import EventSink, WebhookSink
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class SourceManager:
     def __init__(self, config: AppConfig):
         self.config = config
-        self.webhook = WebhookClient(config.webhook)
+        self._default_sink: EventSink = WebhookSink(config.webhook)
         self._pipelines: dict[str, StreamPipeline] = {}
 
     def register_source(self, source: SourceConfig) -> dict[str, Any]:
@@ -34,7 +34,7 @@ class SourceManager:
             source=source,
             defaults=self.config.defaults,
             data_dir=self.config.data_dir,
-            webhook=self.webhook,
+            sink=self._default_sink,
         )
         self._pipelines[source.source_id] = pipeline
         pipeline.start()
@@ -87,5 +87,5 @@ class SourceManager:
         for pipeline in self._pipelines.values():
             pipeline.stop()
         self._pipelines.clear()
-        self.webhook.close()
+        self._default_sink.close()
         logger.info("All sources stopped")

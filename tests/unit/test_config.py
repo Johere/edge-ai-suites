@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.config import (
+from videostream_analytics.shared.config import (
     AppConfig,
     MotionConfig,
     SegmentConfig,

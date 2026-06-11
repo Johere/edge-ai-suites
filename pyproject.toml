@@ -30,7 +30,7 @@ dev = [
 ]
 
 [project.scripts]
-videostream-analytics = "src.main:main"
+videostream-analytics = "videostream_analytics.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -43,4 +43,4 @@ timeout = 60
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]
+include = ["videostream_analytics*"]

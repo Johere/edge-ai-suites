@@ -9,7 +9,7 @@ from typing import Optional
 
 import cv2
 
-from ..config import SegmentConfig
+from ...shared.config import SegmentConfig
 
 
 class SegmentResult:

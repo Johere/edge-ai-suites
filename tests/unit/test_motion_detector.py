@@ -4,8 +4,8 @@ import cv2
 import numpy as np
 import pytest
 
-from src.config import MotionConfig
-from src.pipeline.motion_detector import MotionDetector
+from videostream_analytics.shared.config import MotionConfig
+from videostream_analytics.stream_monitor.pipeline.motion_detector import MotionDetector
 
 
 class TestMotionDetectorWithRealVideo:
