@@ -5,7 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from ...shared.config import MotionConfig
+from shared.config import MotionConfig
 
 
 class MotionDetector:

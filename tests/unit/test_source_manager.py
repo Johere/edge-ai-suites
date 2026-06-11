@@ -4,8 +4,8 @@ from unittest.mock import patch, MagicMock, PropertyMock
 
 import pytest
 
-from videostream_analytics.shared.config import AppConfig, SourceConfig
-from videostream_analytics.source_worker import SourceManager
+from shared.config import AppConfig, SourceConfig
+from source_worker import SourceManager
 
 
 @pytest.fixture
@@ -15,7 +15,7 @@ def config():
 
 @pytest.fixture
 def mock_pipeline_class():
-    with patch("videostream_analytics.source_worker.StreamPipeline") as mock_cls:
+    with patch("source_worker.StreamPipeline") as mock_cls:
         instance = MagicMock()
         instance.is_running = True
         instance.status = "online"
@@ -29,7 +29,7 @@ def mock_pipeline_class():
 
 @pytest.fixture
 def manager(config, mock_pipeline_class):
-    with patch("videostream_analytics.source_worker.WebhookSink"):
+    with patch("source_worker.WebhookSink"):
         mgr = SourceManager(config)
     return mgr
 
@@ -115,7 +115,7 @@ class TestSourceManagerQuery:
 class TestSourceManagerPerSourceWebhook:
     def test_register_with_webhook_url_creates_dedicated_sink(self, config, mock_pipeline_class):
         mock_cls, instance = mock_pipeline_class
-        with patch("videostream_analytics.source_worker.WebhookSink") as mock_ws:
+        with patch("source_worker.WebhookSink") as mock_ws:
             mock_ws.return_value = MagicMock()
             mgr = SourceManager(config)
             # First call is default sink in __init__

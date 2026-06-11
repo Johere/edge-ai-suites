@@ -19,7 +19,7 @@ from datetime import datetime
 
 import cv2
 
-from ..shared.config import (
+from shared.config import (
     MotionConfig,
     SegmentConfig,
     RecordingConfig,
@@ -28,10 +28,10 @@ from ..shared.config import (
     DefaultsConfig,
     expand_path,
 )
-from ..sinks import EventSink
-from .pipeline.motion_detector import MotionDetector
-from .pipeline.segment_extractor import SegmentExtractor
-from .pipeline.prefilter_yolo import YoloPrefilter, FramePrefilter
+from sinks import EventSink
+from stream_monitor.pipeline.motion_detector import MotionDetector
+from stream_monitor.pipeline.segment_extractor import SegmentExtractor
+from stream_monitor.pipeline.prefilter_yolo import YoloPrefilter, FramePrefilter
 
 logger = logging.getLogger(__name__)
 

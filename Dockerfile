@@ -16,9 +16,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml .
 RUN pip install --no-cache-dir ".[npu]"
 
-COPY videostream_analytics/ videostream_analytics/
+COPY shared/ shared/
+COPY sinks/ sinks/
+COPY stream_monitor/ stream_monitor/
+COPY cli.py service.py source_worker.py __init__.py __main__.py ./
 COPY config/ config/
 
 EXPOSE 8999
 
-CMD ["python", "-m", "videostream_analytics", "--config", "config/config.yaml"]
+CMD ["python", "__main__.py", "--config", "config/config.yaml"]

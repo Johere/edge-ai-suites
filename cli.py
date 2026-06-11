@@ -29,8 +29,8 @@ def _setup_logging(level: str = "INFO"):
 def cmd_serve(args):
     """Start HTTP API server."""
     import uvicorn
-    from .shared.config import load_config
-    from .service import create_app
+    from shared.config import load_config
+    from service import create_app
 
     config = load_config(args.config)
     log_level = config.logging.get("level", "INFO").upper()
@@ -45,9 +45,9 @@ def cmd_serve(args):
 
 def cmd_stream(args):
     """Single-source streaming mode — output events to stdout."""
-    from .shared.config import load_config, SourceConfig, DefaultsConfig
-    from .stream_monitor.rtsp_monitor import StreamPipeline
-    from .sinks import StdoutSink, NullSink, WebhookSink
+    from shared.config import load_config, SourceConfig, DefaultsConfig
+    from stream_monitor.rtsp_monitor import StreamPipeline
+    from sinks import StdoutSink, NullSink, WebhookSink
 
     config = load_config(args.config)
     log_level = config.logging.get("level", "INFO").upper()

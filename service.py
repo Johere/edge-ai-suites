@@ -9,8 +9,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from .shared.config import AppConfig, SourceConfig, MotionConfig, SegmentConfig, PrefilterConfig
-from .source_worker import SourceManager
+from shared.config import AppConfig, SourceConfig, MotionConfig, SegmentConfig, PrefilterConfig
+from source_worker import SourceManager
 
 logger = logging.getLogger(__name__)
 

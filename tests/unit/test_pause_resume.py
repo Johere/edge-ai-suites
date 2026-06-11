@@ -6,16 +6,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from videostream_analytics.shared.config import (
+from shared.config import (
     AppConfig,
     SourceConfig,
     DefaultsConfig,
     MotionConfig,
     SegmentConfig,
 )
-from videostream_analytics.stream_monitor.rtsp_monitor import StreamPipeline
-from videostream_analytics.source_worker import SourceManager
-from videostream_analytics.sinks import EventSink
+from stream_monitor.rtsp_monitor import StreamPipeline
+from source_worker import SourceManager
+from sinks import EventSink
 
 
 class TestStreamPipelinePauseResume:
@@ -106,7 +106,7 @@ class TestSourceManagerPauseResume:
 
     @pytest.fixture
     def mock_pipeline_class(self):
-        with patch("videostream_analytics.source_worker.StreamPipeline") as mock_cls:
+        with patch("source_worker.StreamPipeline") as mock_cls:
             instance = MagicMock()
             instance.is_running = True
             instance.status = "online"
@@ -119,7 +119,7 @@ class TestSourceManagerPauseResume:
 
     @pytest.fixture
     def manager(self, config, mock_pipeline_class):
-        with patch("videostream_analytics.source_worker.WebhookSink"):
+        with patch("source_worker.WebhookSink"):
             mgr = SourceManager(config)
         return mgr
 

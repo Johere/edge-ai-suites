@@ -8,15 +8,15 @@ from unittest.mock import MagicMock, patch
 import cv2
 import pytest
 
-from videostream_analytics.shared.config import (
+from shared.config import (
     AppConfig,
     SourceConfig,
     DefaultsConfig,
     MotionConfig,
     SegmentConfig,
 )
-from videostream_analytics.stream_monitor.rtsp_monitor import StreamPipeline
-from videostream_analytics.sinks import EventSink
+from stream_monitor.rtsp_monitor import StreamPipeline
+from sinks import EventSink
 
 
 class TestFullPipeline:

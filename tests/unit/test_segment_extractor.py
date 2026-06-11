@@ -5,8 +5,8 @@ import os
 import cv2
 import pytest
 
-from videostream_analytics.shared.config import SegmentConfig
-from videostream_analytics.stream_monitor.pipeline.segment_extractor import SegmentExtractor, SegmentResult
+from shared.config import SegmentConfig
+from stream_monitor.pipeline.segment_extractor import SegmentExtractor, SegmentResult
 
 
 class TestSegmentExtractorWithRealVideo:

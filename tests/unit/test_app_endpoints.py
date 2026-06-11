@@ -8,8 +8,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-from videostream_analytics.shared.config import AppConfig, MotionConfig, SegmentConfig, PrefilterConfig, SourceConfig
-from videostream_analytics.source_worker import SourceManager
+from shared.config import AppConfig, MotionConfig, SegmentConfig, PrefilterConfig, SourceConfig
+from source_worker import SourceManager
 
 
 class RegisterSourceRequest(BaseModel):

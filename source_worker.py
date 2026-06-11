@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .shared.config import AppConfig, SourceConfig, WebhookConfig
-from .stream_monitor.rtsp_monitor import StreamPipeline
-from .sinks import EventSink, WebhookSink
+from shared.config import AppConfig, SourceConfig, WebhookConfig
+from stream_monitor.rtsp_monitor import StreamPipeline
+from sinks import EventSink, WebhookSink
 
 logger = logging.getLogger(__name__)
 

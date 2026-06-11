@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from ..shared.config import WebhookConfig
-from ..shared.webhook_client import WebhookClient
-from .base import EventSink
+from shared.config import WebhookConfig
+from shared.webhook_client import WebhookClient
+from sinks.base import EventSink
 
 
 class WebhookSink(EventSink):

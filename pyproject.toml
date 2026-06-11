@@ -30,10 +30,11 @@ dev = [
 ]
 
 [project.scripts]
-videostream-analytics = "videostream_analytics.cli:main"
+videostream-analytics = "cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "unit: Unit tests (no Docker, no network)",
     "integration: Integration tests (require Docker + RTSP + webhook)",
@@ -43,4 +44,4 @@ timeout = 60
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["videostream_analytics*"]
+include = ["shared*", "sinks*", "stream_monitor*"]
