@@ -16,6 +16,7 @@ class RegisterSourceRequest(BaseModel):
     source_id: str
     rtsp_url: str
     use_case: str = "default"
+    webhook_url: str | None = None
     motion: MotionConfig | None = None
     segment: SegmentConfig | None = None
     prefilter: PrefilterConfig | None = None
@@ -64,6 +65,7 @@ def app_and_client(mock_manager):
             source_id=req.source_id,
             rtsp_url=req.rtsp_url,
             use_case=req.use_case,
+            webhook_url=req.webhook_url,
             motion=req.motion,
             segment=req.segment,
             prefilter=req.prefilter,

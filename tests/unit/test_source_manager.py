@@ -112,6 +112,39 @@ class TestSourceManagerQuery:
         assert manager.get_source_status("nope") is None
 
 
+class TestSourceManagerPerSourceWebhook:
+    def test_register_with_webhook_url_creates_dedicated_sink(self, config, mock_pipeline_class):
+        mock_cls, instance = mock_pipeline_class
+        with patch("videostream_analytics.source_worker.WebhookSink") as mock_ws:
+            mock_ws.return_value = MagicMock()
+            mgr = SourceManager(config)
+            # First call is default sink in __init__
+            default_call_count = mock_ws.call_count
+
+            source = SourceConfig(
+                source_id="cam1",
+                rtsp_url="rtsp://localhost:8554/live/cam1",
+                webhook_url="http://other-server:9000/events",
+            )
+            mgr.register_source(source)
+
+            # Should have created a second WebhookSink with the per-source URL
+            assert mock_ws.call_count == default_call_count + 1
+            last_call_args = mock_ws.call_args
+            webhook_cfg = last_call_args[0][0]
+            assert webhook_cfg.url == "http://other-server:9000/events"
+
+    def test_register_without_webhook_url_uses_default_sink(self, manager, mock_pipeline_class):
+        mock_cls, instance = mock_pipeline_class
+        source = SourceConfig(
+            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+        )
+        manager.register_source(source)
+        # Pipeline should receive the default sink
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["sink"] is manager._default_sink
+
+
 class TestSourceManagerStopAll:
     def test_stop_all_clears_pipelines(self, manager, mock_pipeline_class):
         _, instance = mock_pipeline_class

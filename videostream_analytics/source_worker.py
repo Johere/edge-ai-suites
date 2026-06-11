@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .shared.config import AppConfig, SourceConfig
+from .shared.config import AppConfig, SourceConfig, WebhookConfig
 from .stream_monitor.rtsp_monitor import StreamPipeline
 from .sinks import EventSink, WebhookSink
 
@@ -30,11 +30,16 @@ class SourceManager:
             # Re-register: stop old and create new
             existing.stop()
 
+        if source.webhook_url:
+            sink = WebhookSink(WebhookConfig(url=source.webhook_url))
+        else:
+            sink = self._default_sink
+
         pipeline = StreamPipeline(
             source=source,
             defaults=self.config.defaults,
             data_dir=self.config.data_dir,
-            sink=self._default_sink,
+            sink=sink,
         )
         self._pipelines[source.source_id] = pipeline
         pipeline.start()

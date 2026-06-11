@@ -62,6 +62,7 @@ class SourceConfig(BaseModel):
     source_id: str
     rtsp_url: str
     use_case: str = "default"
+    webhook_url: Optional[str] = None
     motion: Optional[MotionConfig] = None
     segment: Optional[SegmentConfig] = None
     recording: Optional[RecordingConfig] = None
