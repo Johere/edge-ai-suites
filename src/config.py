@@ -19,6 +19,7 @@ class MotionConfig(BaseModel):
 class SegmentConfig(BaseModel):
     max_duration: float = 60.0
     min_duration: float = 1.0
+    merge_gap: float = 3.0
 
 
 class RecordingConfig(BaseModel):

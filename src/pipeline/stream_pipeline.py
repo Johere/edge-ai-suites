@@ -159,6 +159,9 @@ class StreamPipeline:
         )
 
         in_motion = False
+        in_gap = False
+        gap_frames = 0
+        merge_gap_frames = int(self._segment_cfg.merge_gap * self._fps)
         consecutive_failures = 0
         max_failures = 100
 
@@ -182,19 +185,28 @@ class StreamPipeline:
             # Motion detection
             motion_detected = detector.detect(frame)
 
-            if motion_detected and not in_motion:
+            if motion_detected and not in_motion and not in_gap:
                 in_motion = True
                 extractor.start_segment()
                 if self._prefilter:
                     self._prefilter.reset()
+            elif motion_detected and in_gap:
+                in_gap = False
+                in_motion = True
+                gap_frames = 0
             elif not motion_detected and detector.is_static and in_motion:
                 in_motion = False
-                result = extractor.finish()
-                if result:
-                    self._maybe_emit(result)
+                in_gap = True
+                gap_frames = 0
 
-            # While in motion, write frames
-            if in_motion:
+            if in_gap:
+                gap_frames += 1
+                if gap_frames >= merge_gap_frames:
+                    in_gap = False
+                    result = extractor.finish()
+                    if result:
+                        self._maybe_emit(result)
+            elif in_motion:
                 if self._prefilter:
                     self._prefilter.accumulate(frame, self._fps)
                 result = extractor.add_frame(frame)
@@ -204,7 +216,7 @@ class StreamPipeline:
                     if self._prefilter:
                         self._prefilter.reset()
 
-        if in_motion:
+        if in_motion or in_gap:
             result = extractor.finish()
             if result:
                 self._maybe_emit(result)

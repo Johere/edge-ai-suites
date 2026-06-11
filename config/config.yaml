@@ -18,6 +18,7 @@ defaults:
   segment:
     max_duration: 60
     min_duration: 1.0
+    merge_gap: 8.0
   recording:
     interval: 60
     fps: 15
@@ -27,7 +28,7 @@ defaults:
     model_path: "/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.xml"
     target_classes: ["person"]
     min_confidence: 0.4
-    min_frames_hit: 2
+    min_frames_hit: 1
     detect_fps: 2.0
     device: "CPU"
 
