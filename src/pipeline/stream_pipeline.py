@@ -1,7 +1,12 @@
 """Per-source video stream pipeline.
 
 Each registered source gets its own StreamPipeline running in a background thread.
-Pipeline: RTSP read → motion detect → segment extract → webhook POST.
+Pipeline: RTSP read -> motion detect -> segment extract -> webhook POST.
+
+Exit logic (cascaded):
+  - prefilter disabled: motion detector says static
+  - prefilter enabled, before decision: static + prefilter decided
+  - prefilter enabled, after pass: static (prefilter already confirmed person present)
 """
 
 from __future__ import annotations
@@ -146,8 +151,23 @@ class StreamPipeline:
         h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
         logger.info("[%s] Connected: %dx%d @ %.1f fps", self.source_id, w, h, self._fps)
 
+    def _should_exit_motion(self, detector: MotionDetector, motion_frames: int) -> bool:
+        """Cascaded exit logic: motion detector + prefilter collaboration.
+
+        Without prefilter: exit when detector says static.
+        With prefilter, before pass: exit when static AND min_dur reached AND decided.
+        With prefilter, after pass: exit ONLY when exit_decided (YOLO no longer sees person).
+        """
+        if self._prefilter is None:
+            return detector.is_static
+        if self._prefilter.pass_decided:
+            return self._prefilter.exit_decided
+        min_dur_ok = (self._segment_cfg.min_duration <= 0
+                      or motion_frames / self._fps >= self._segment_cfg.min_duration)
+        return detector.is_static and min_dur_ok and self._prefilter.is_decided
+
     def _process_loop(self):
-        """Read frames, detect motion, extract segments."""
+        """Read frames, detect motion, extract segments with fixed interval."""
         detector = MotionDetector(self._motion_cfg)
         motion_dir = os.path.join(self._data_dir, "motion_events")
         extractor = SegmentExtractor(
@@ -159,9 +179,7 @@ class StreamPipeline:
         )
 
         in_motion = False
-        in_gap = False
-        gap_frames = 0
-        merge_gap_frames = int(self._segment_cfg.merge_gap * self._fps)
+        motion_frames = 0
         consecutive_failures = 0
         max_failures = 100
 
@@ -185,38 +203,39 @@ class StreamPipeline:
             # Motion detection
             motion_detected = detector.detect(frame)
 
-            if motion_detected and not in_motion and not in_gap:
+            # State: enter motion
+            if motion_detected and not in_motion:
                 in_motion = True
+                motion_frames = 0
                 extractor.start_segment()
                 if self._prefilter:
                     self._prefilter.reset()
-            elif motion_detected and in_gap:
-                in_gap = False
-                in_motion = True
-                gap_frames = 0
-            elif not motion_detected and detector.is_static and in_motion:
-                in_motion = False
-                in_gap = True
-                gap_frames = 0
+                logger.info("[%s] Motion started", self.source_id)
 
-            if in_gap:
-                gap_frames += 1
-                if gap_frames >= merge_gap_frames:
-                    in_gap = False
-                    result = extractor.finish()
-                    if result:
-                        self._maybe_emit(result)
-            elif in_motion:
+            # State: in motion — record frames
+            if in_motion:
+                motion_frames += 1
                 if self._prefilter:
                     self._prefilter.accumulate(frame, self._fps)
+
                 result = extractor.add_frame(frame)
                 if result:
+                    # Interval reached — emit segment, start next one
                     self._maybe_emit(result)
                     extractor.start_segment()
                     if self._prefilter:
-                        self._prefilter.reset()
+                        self._prefilter.reset_for_next_segment()
 
-        if in_motion or in_gap:
+                # Cascaded exit check
+                if self._should_exit_motion(detector, motion_frames):
+                    tail = extractor.finish()
+                    if tail:
+                        self._maybe_emit(tail)
+                    in_motion = False
+                    logger.info("[%s] Motion ended", self.source_id)
+
+        # Drain remaining segment on shutdown
+        if in_motion:
             result = extractor.finish()
             if result:
                 self._maybe_emit(result)

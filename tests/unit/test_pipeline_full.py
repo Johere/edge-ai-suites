@@ -41,7 +41,7 @@ class TestFullPipeline:
         )
         defaults = DefaultsConfig(
             motion=MotionConfig(diff_threshold=25, area_ratio=0.015, stable_frames=30),
-            segment=SegmentConfig(max_duration=60.0, min_duration=1.0),
+            segment=SegmentConfig(interval=10.0, min_duration=1.0),
         )
         p = StreamPipeline(
             source=source,
@@ -97,7 +97,7 @@ class TestFullPipeline:
             assert frame_count > 20, f"Clip too short ({frame_count} frames): {clip_path}"
 
     def test_clip_duration_reasonable(self, pipeline, data_dir, mock_webhook):
-        """Clip duration should be within min_duration to max_duration range."""
+        """Clip duration should be within min_duration to interval range."""
         pipeline.start()
         time.sleep(20)
         pipeline.stop()
@@ -119,8 +119,8 @@ class TestFullPipeline:
                 frame_count += 1
             cap.release()
             duration = frame_count / fps
-            # Event-level: duration depends on motion length (min 1s, max 60s)
-            assert 1.0 <= duration <= 61.0, f"Clip duration {duration:.1f}s out of range"
+            # Fixed interval: duration should be around interval (10s) or shorter for tail segments
+            assert 1.0 <= duration <= 11.0, f"Clip duration {duration:.1f}s out of range"
 
     def test_webhook_receives_status_online(self, pipeline, mock_webhook):
         """Webhook should receive a status='online' event when pipeline connects."""

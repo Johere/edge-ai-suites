@@ -12,7 +12,7 @@ from src.pipeline.segment_extractor import SegmentExtractor, SegmentResult
 class TestSegmentExtractorWithRealVideo:
     @pytest.fixture
     def extractor(self, tmp_path):
-        config = SegmentConfig(max_duration=5.0, min_duration=0.5)
+        config = SegmentConfig(interval=5.0, min_duration=0.5)
         return SegmentExtractor(
             config=config,
             output_dir=str(tmp_path / "motion_events"),
@@ -25,20 +25,20 @@ class TestSegmentExtractorWithRealVideo:
         extractor.start_segment()
         assert extractor.is_recording is True
 
-    def test_add_frames_below_max_duration_returns_none(self, extractor, video_frames):
-        """Adding frames below the max_duration threshold should not produce a result."""
+    def test_add_frames_below_interval_returns_none(self, extractor, video_frames):
+        """Adding frames below the interval threshold should not produce a result."""
         extractor.start_segment()
-        # Add 30 frames (1 second at 30fps) — well below 5s max_duration
+        # Add 30 frames (1 second at 30fps) — well below 5s interval
         for frame in video_frames[:30]:
             result = extractor.add_frame(frame)
         assert result is None
         assert extractor.is_recording is True
 
-    def test_max_duration_reached_produces_segment(self, extractor, video_frames):
-        """Adding enough frames to exceed max_duration should produce a SegmentResult."""
+    def test_interval_reached_produces_segment(self, extractor, video_frames):
+        """Adding enough frames to exceed interval should produce a SegmentResult."""
         extractor.start_segment()
         result = None
-        # 5s max_duration × 30fps = 150 frames needed
+        # 5s interval × 30fps = 150 frames needed
         for frame in video_frames[:160]:
             r = extractor.add_frame(frame)
             if r is not None:
@@ -82,7 +82,7 @@ class TestSegmentExtractorWithRealVideo:
         """Frame count in output file should match frames written."""
         extractor.start_segment()
         result = None
-        # 5s max_duration × 30fps = 150 frames
+        # 5s interval × 30fps = 150 frames
         for frame in video_frames[:160]:
             r = extractor.add_frame(frame)
             if r is not None:
@@ -96,7 +96,7 @@ class TestSegmentExtractorWithRealVideo:
             frame_count += 1
         cap.release()
 
-        expected = 30.0 * 5.0  # fps × max_duration
+        expected = 30.0 * 5.0  # fps × interval
         assert abs(frame_count - expected) / expected < 0.1, (
             f"Frame count {frame_count} too far from expected {expected}"
         )
@@ -115,7 +115,7 @@ class TestSegmentExtractorWithRealVideo:
 
     def test_finish_below_min_duration_returns_none(self, tmp_path, video_frames):
         """Segment shorter than min_duration should be discarded."""
-        config = SegmentConfig(max_duration=60.0, min_duration=2.0)
+        config = SegmentConfig(interval=60.0, min_duration=2.0)
         extractor = SegmentExtractor(
             config=config,
             output_dir=str(tmp_path / "motion_events"),

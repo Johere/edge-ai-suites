@@ -1,4 +1,4 @@
-"""Event-level motion clip writer with max_duration safety cap."""
+"""Fixed-interval segment writer with min_duration filter."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class SegmentExtractor:
         fps: float = 15.0,
         frame_size: tuple[int, int] = (640, 480),
     ):
-        self.max_duration = config.max_duration
+        self.interval = config.interval
         self.min_duration = config.min_duration
         self.output_dir = output_dir
         self.source_id = source_id
@@ -65,7 +65,7 @@ class SegmentExtractor:
         )
 
     def add_frame(self, frame: cv2.typing.MatLike) -> Optional[SegmentResult]:
-        """Add a frame. Returns SegmentResult only if max_duration exceeded (safety cap)."""
+        """Add a frame. Returns SegmentResult when interval reached."""
         if self._writer is None:
             self.start_segment()
 
@@ -73,7 +73,7 @@ class SegmentExtractor:
         self._frame_count += 1
 
         duration = self._frame_count / self.fps
-        if duration >= self.max_duration:
+        if duration >= self.interval:
             return self.finish()
         return None
 
@@ -89,7 +89,6 @@ class SegmentExtractor:
         end_time = datetime.now().isoformat(timespec="seconds")
 
         if duration < self.min_duration:
-            # Too short, remove
             try:
                 os.unlink(self._current_path)
             except OSError:

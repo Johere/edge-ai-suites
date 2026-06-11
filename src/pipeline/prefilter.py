@@ -170,43 +170,105 @@ class YoloPrefilter:
 class FramePrefilter:
     """Per-frame YOLO accumulator for the pipeline read loop.
 
-    Lifecycle per motion segment:
-        pf.reset()                   # on motion_start or new segment
-        pf.accumulate(frame, fps)    # each in-motion frame
-        result = pf.result()         # when segment finalized
+    Lifecycle per motion event:
+        pf.reset()                       # on motion_start
+        pf.accumulate(frame, fps)        # each in-motion frame
+        pf.reset_for_next_segment()      # on interval cut (preserves pass state)
+        result = pf.result()             # when segment finalized
+
+    Exit logic:
+        After pass (person confirmed), exit only when YOLO stops detecting
+        person for consecutive misses >= exit_miss_threshold.
     """
 
     def __init__(self, yolo: YoloPrefilter, detect_fps: float = 2.0, min_frames_hit: int = 2):
         self._yolo = yolo
         self.detect_fps = detect_fps
         self.min_frames_hit = min_frames_hit
+        self._exit_miss_threshold = max(2, min_frames_hit * 2)
         self.reset()
 
     def reset(self):
+        """Full reset — call on motion event start."""
         self._frame_idx = 0
         self._next_infer = 0
         self._frame_hits = 0
+        self._samples_taken = 0
         self._hit_classes: set = set()
+        self._pass_decided = False
+        self._consecutive_misses = 0
+
+    def reset_for_next_segment(self):
+        """Partial reset — call on interval cut within same motion event.
+
+        Preserves pass_decided and consecutive_misses so exit logic works
+        across segment boundaries.
+        """
+        self._frame_idx = 0
+        self._next_infer = 0
+        self._frame_hits = 0
+        self._samples_taken = 0
+        self._hit_classes: set = set()
+
+    @property
+    def pass_decided(self) -> bool:
+        return self._pass_decided
+
+    @property
+    def skip_decided(self) -> bool:
+        return not self._pass_decided and self._samples_taken >= self.min_frames_hit
+
+    @property
+    def is_decided(self) -> bool:
+        """Whether prefilter has reached a pass or skip decision."""
+        return self._pass_decided or self.skip_decided
+
+    @property
+    def exit_decided(self) -> bool:
+        """True when person has left the scene (consecutive YOLO misses after pass)."""
+        return self._pass_decided and self._consecutive_misses >= self._exit_miss_threshold
 
     def accumulate(self, frame: np.ndarray, src_fps: float) -> bool:
         """Process one frame. Returns True once pass threshold is reached."""
         step = max(1, round(src_fps / self.detect_fps)) if src_fps > 0 else 1
         if self._frame_idx >= self._next_infer:
             dets = self._yolo.predict(frame)
+            if not self._pass_decided:
+                self._samples_taken += 1
+
             if dets:
-                self._frame_hits += 1
+                self._consecutive_misses = 0
+                if not self._pass_decided:
+                    self._frame_hits += 1
                 for d in dets:
                     self._hit_classes.add(d["name"])
+                if not self._pass_decided and self._frame_hits >= self.min_frames_hit:
+                    self._pass_decided = True
+            else:
+                if self._pass_decided:
+                    self._consecutive_misses += 1
+
             self._next_infer = self._frame_idx + step
         self._frame_idx += 1
-        return self._frame_hits >= self.min_frames_hit
+        return self._pass_decided
 
     def result(self) -> PrefilterResult:
-        passed = self._frame_hits >= self.min_frames_hit
+        """Return prefilter result for the current segment.
+
+        A segment passes if it has its own hits OR if the motion event
+        previously confirmed person presence AND this segment had at least
+        one detection (avoids emitting pure-static tail segments).
+        """
+        if self._pass_decided and self._frame_hits == 0:
+            # Tail segment with inherited pass but no own detections — skip
+            passed = False
+        else:
+            passed = self._pass_decided or self._frame_hits >= self.min_frames_hit
         logger.info(
-            "Prefilter %s: hits=%d classes=%s (need %d)",
+            "Prefilter %s: hits=%d classes=%s (need %d, pass_decided=%s)",
             "PASS" if passed else "SKIP",
             self._frame_hits, sorted(self._hit_classes), self.min_frames_hit,
+            self._pass_decided,
         )
         return PrefilterResult(
             passed=passed,

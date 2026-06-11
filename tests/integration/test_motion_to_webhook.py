@@ -59,15 +59,15 @@ class TestMotionToWebhook:
         assert event["clip_path"].endswith(".mp4")
 
     def test_motion_event_duration_within_range(self, http_client, webhook_url):
-        """Motion event duration should be within min_duration to max_duration range."""
+        """Motion event duration should be within min_duration to interval range."""
         events = wait_for_events(
             http_client, webhook_url, event_type="motion", min_count=1, timeout=240
         )
         assert len(events) >= 1
         for event in events:
             duration = event["duration_seconds"]
-            # Event-level cutting: duration depends on motion length (min 1s, max 60s)
-            assert 1.0 <= duration <= 61.0, f"Duration {duration}s out of range"
+            # Fixed interval cutting: each segment is at most interval (10s) + tolerance
+            assert 1.0 <= duration <= 11.0, f"Duration {duration}s out of range"
 
     def test_multiple_motion_events_over_time(self, http_client, webhook_url):
         """Running long enough should produce multiple motion events."""
