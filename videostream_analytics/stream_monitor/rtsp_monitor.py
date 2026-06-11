@@ -82,6 +82,8 @@ class StreamPipeline:
 
         self._thread: threading.Thread | None = None
         self._running = False
+        self._paused = threading.Event()  # set = not paused (normal running)
+        self._paused.set()
         self._status = "stopped"
         self._cap: cv2.VideoCapture | None = None
         self._frame_count = 0
@@ -107,10 +109,27 @@ class StreamPipeline:
 
     def stop(self):
         self._running = False
+        self._paused.set()  # unblock if paused, so thread can exit
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=10)
         self._status = "stopped"
         logger.info("[%s] Pipeline stopped", self.source_id)
+
+    def pause(self):
+        if not self._running or self._status == "paused":
+            return
+        self._paused.clear()
+        self._status = "paused"
+        self._emit_status("paused")
+        logger.info("[%s] Pipeline paused", self.source_id)
+
+    def resume(self):
+        if not self._running or self._status != "paused":
+            return
+        self._paused.set()
+        self._status = "online"
+        self._emit_status("online")
+        logger.info("[%s] Pipeline resumed", self.source_id)
 
     def _run(self):
         """Main pipeline loop with reconnection."""
@@ -199,6 +218,13 @@ class StreamPipeline:
 
             consecutive_failures = 0
             self._frame_count += 1
+
+            if not self._paused.is_set():
+                # Paused: keep reading frames (maintain RTSP connection) but skip processing
+                if not self._paused.wait(timeout=0.1):
+                    continue
+                if not self._running:
+                    break
 
             # Motion detection
             motion_detected = detector.detect(frame)

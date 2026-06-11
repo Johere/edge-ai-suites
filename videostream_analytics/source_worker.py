@@ -56,6 +56,26 @@ class SourceManager:
         logger.info("Unregistered source: %s", source_id)
         return {"status": "stopped", "source_id": source_id}
 
+    def pause_source(self, source_id: str) -> dict[str, Any]:
+        """Pause a running source pipeline."""
+        pipeline = self._pipelines.get(source_id)
+        if pipeline is None:
+            return {"status": "not_found", "source_id": source_id}
+        if not pipeline.is_running:
+            return {"status": "not_running", "source_id": source_id}
+        pipeline.pause()
+        return {"status": "paused", "source_id": source_id}
+
+    def resume_source(self, source_id: str) -> dict[str, Any]:
+        """Resume a paused source pipeline."""
+        pipeline = self._pipelines.get(source_id)
+        if pipeline is None:
+            return {"status": "not_found", "source_id": source_id}
+        if not pipeline.is_running:
+            return {"status": "not_running", "source_id": source_id}
+        pipeline.resume()
+        return {"status": "online", "source_id": source_id}
+
     def get_sources(self) -> list[dict[str, Any]]:
         """List all registered sources with their status."""
         return [

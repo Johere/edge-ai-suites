@@ -99,6 +99,22 @@ def app_and_client(mock_manager):
             return {"status": "restarted", "source_id": source_id}
         raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
 
+    @app.post("/sources/{source_id}/pause")
+    async def pause_source(source_id: str):
+        from fastapi import HTTPException
+        result = get_mgr().pause_source(source_id)
+        if result["status"] == "not_found":
+            raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
+        return result
+
+    @app.post("/sources/{source_id}/resume")
+    async def resume_source(source_id: str):
+        from fastapi import HTTPException
+        result = get_mgr().resume_source(source_id)
+        if result["status"] == "not_found":
+            raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
+        return result
+
     with TestClient(app, raise_server_exceptions=False) as tc:
         yield tc, mock_manager
 
@@ -250,4 +266,42 @@ class TestRestartSource:
     def test_restart_not_found(self, client, mock_mgr):
         mock_mgr.get_source_status.return_value = None
         resp = client.post("/sources/nonexistent/restart")
+        assert resp.status_code == 404
+
+
+class TestPauseSource:
+    def test_pause_success(self, client, mock_mgr):
+        mock_mgr.pause_source.return_value = {
+            "status": "paused",
+            "source_id": "cam1",
+        }
+        resp = client.post("/sources/cam1/pause")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "paused"
+
+    def test_pause_not_found(self, client, mock_mgr):
+        mock_mgr.pause_source.return_value = {
+            "status": "not_found",
+            "source_id": "cam1",
+        }
+        resp = client.post("/sources/cam1/pause")
+        assert resp.status_code == 404
+
+
+class TestResumeSource:
+    def test_resume_success(self, client, mock_mgr):
+        mock_mgr.resume_source.return_value = {
+            "status": "online",
+            "source_id": "cam1",
+        }
+        resp = client.post("/sources/cam1/resume")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "online"
+
+    def test_resume_not_found(self, client, mock_mgr):
+        mock_mgr.resume_source.return_value = {
+            "status": "not_found",
+            "source_id": "cam1",
+        }
+        resp = client.post("/sources/cam1/resume")
         assert resp.status_code == 404

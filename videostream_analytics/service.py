@@ -123,4 +123,20 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"status": "restarted", "source_id": source_id}
         raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
 
+    @app.post("/sources/{source_id}/pause")
+    async def pause_source(source_id: str) -> dict[str, Any]:
+        mgr = get_manager()
+        result = mgr.pause_source(source_id)
+        if result["status"] == "not_found":
+            raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
+        return result
+
+    @app.post("/sources/{source_id}/resume")
+    async def resume_source(source_id: str) -> dict[str, Any]:
+        mgr = get_manager()
+        result = mgr.resume_source(source_id)
+        if result["status"] == "not_found":
+            raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
+        return result
+
     return app
