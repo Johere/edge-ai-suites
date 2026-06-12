@@ -1,0 +1,22 @@
+services:
+  videostream-analytics:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    ports:
+      - "8999:8999"
+    environment:
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://host.docker.internal:18789/webhook/smarthome/event}
+      - RECORDINGS_DIR=/data
+      - http_proxy=
+      - https_proxy=
+      - no_proxy=localhost,127.0.0.1
+    volumes:
+      - ${DATA_DIR:-/tmp/smartbuilding-clips}:/data
+      - ${MODEL_DIR:-~/models}:/models:ro
+    network_mode: host
+    restart: unless-stopped

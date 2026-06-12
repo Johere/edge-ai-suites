@@ -29,6 +29,7 @@ from shared.config import (
     expand_path,
 )
 from sinks import EventSink
+from stream_monitor.base_monitor import BaseMonitor
 from stream_monitor.pipeline.motion_detector import MotionDetector
 from stream_monitor.pipeline.segment_extractor import SegmentExtractor
 from stream_monitor.pipeline.prefilter_yolo import YoloPrefilter, FramePrefilter
@@ -36,7 +37,7 @@ from stream_monitor.pipeline.prefilter_yolo import YoloPrefilter, FramePrefilter
 logger = logging.getLogger(__name__)
 
 
-class StreamPipeline:
+class StreamPipeline(BaseMonitor):
     """Manages a single RTSP source: connect, detect motion, extract clips, post webhooks."""
 
     def __init__(
