@@ -27,6 +27,7 @@ class RegisterSourceRequest(BaseModel):
     motion: MotionConfig | None = None
     segment: SegmentConfig | None = None
     prefilter: PrefilterConfig | None = None
+    health: HealthConfig | None = None
 
 
 class UnregisterSourceRequest(BaseModel):
@@ -96,6 +97,7 @@ def create_app(config: AppConfig) -> FastAPI:
             motion=req.motion,
             segment=req.segment,
             prefilter=req.prefilter,
+            health=req.health,
         )
         result = mgr.register_source(source)
         return result
