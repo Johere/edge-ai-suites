@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from shared.config import AppConfig, SourceConfig, WebhookConfig
+from shared.config import AppConfig, SourceConfig, WebhookConfig, MotionConfig, SegmentConfig, PrefilterConfig, HealthConfig
 from stream_monitor.rtsp_monitor import StreamPipeline
 from sinks import EventSink, WebhookSink
 
@@ -40,6 +40,7 @@ class SourceManager:
             defaults=self.config.defaults,
             data_dir=self.config.data_dir,
             sink=sink,
+            on_remove_callback=self._handle_source_removed,
         )
         self._pipelines[source.source_id] = pipeline
         pipeline.start()
@@ -60,6 +61,36 @@ class SourceManager:
         pipeline.stop()
         logger.info("Unregistered source: %s", source_id)
         return {"status": "stopped", "source_id": source_id}
+
+    def _handle_source_removed(self, source_id: str):
+        """Callback: pipeline triggered 'remove' recovery strategy."""
+        self._pipelines.pop(source_id, None)
+        logger.info("Source auto-removed by health policy: %s", source_id)
+
+    def update_pipeline_config(
+        self,
+        source_id: str,
+        motion: MotionConfig | None = None,
+        segment: SegmentConfig | None = None,
+        prefilter: PrefilterConfig | None = None,
+        health: HealthConfig | None = None,
+    ) -> dict[str, Any]:
+        """Hot-update pipeline config (stop + update + restart)."""
+        pipeline = self._pipelines.get(source_id)
+        if pipeline is None:
+            return {"status": "not_found", "source_id": source_id}
+
+        pipeline.stop()
+        pipeline.update_pipeline_config(
+            motion=motion,
+            segment=segment,
+            prefilter=prefilter,
+            health=health,
+        )
+        pipeline.start()
+
+        logger.info("Pipeline config updated: %s", source_id)
+        return {"status": "updated", "source_id": source_id}
 
     def pause_source(self, source_id: str) -> dict[str, Any]:
         """Pause a running source pipeline."""
@@ -90,6 +121,7 @@ class SourceManager:
                 "use_case": p.source.use_case,
                 "status": p.status,
                 "running": p.is_running,
+                "health": p.health_info,
             }
             for sid, p in self._pipelines.items()
         ]
@@ -105,6 +137,7 @@ class SourceManager:
             "use_case": pipeline.source.use_case,
             "status": pipeline.status,
             "running": pipeline.is_running,
+            "health": pipeline.health_info,
         }
 
     def stop_all(self):

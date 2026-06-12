@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from shared.config import AppConfig, SourceConfig, MotionConfig, SegmentConfig, PrefilterConfig
+from shared.config import AppConfig, SourceConfig, MotionConfig, SegmentConfig, PrefilterConfig, HealthConfig
 from source_worker import SourceManager
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,13 @@ class RegisterSourceRequest(BaseModel):
 
 class UnregisterSourceRequest(BaseModel):
     source_id: str
+
+
+class UpdatePipelineRequest(BaseModel):
+    motion: MotionConfig | None = None
+    segment: SegmentConfig | None = None
+    prefilter: PrefilterConfig | None = None
+    health: HealthConfig | None = None
 
 
 def get_manager() -> SourceManager:
@@ -137,6 +144,28 @@ def create_app(config: AppConfig) -> FastAPI:
     async def resume_source(source_id: str) -> dict[str, Any]:
         mgr = get_manager()
         result = mgr.resume_source(source_id)
+        if result["status"] == "not_found":
+            raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
+        return result
+
+    @app.put("/sources/{source_id}/pipeline")
+    async def update_pipeline(source_id: str, req: UpdatePipelineRequest) -> dict[str, Any]:
+        mgr = get_manager()
+        result = mgr.update_pipeline_config(
+            source_id=source_id,
+            motion=req.motion,
+            segment=req.segment,
+            prefilter=req.prefilter,
+            health=req.health,
+        )
+        if result["status"] == "not_found":
+            raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
+        return result
+
+    @app.delete("/sources/{source_id}")
+    async def delete_source(source_id: str) -> dict[str, Any]:
+        mgr = get_manager()
+        result = mgr.unregister_source(source_id)
         if result["status"] == "not_found":
             raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
         return result

@@ -24,6 +24,7 @@ from shared.config import (
     SegmentConfig,
     RecordingConfig,
     PrefilterConfig,
+    HealthConfig,
     SourceConfig,
     DefaultsConfig,
     expand_path,
@@ -46,40 +47,27 @@ class StreamPipeline(BaseMonitor):
         defaults: DefaultsConfig,
         data_dir: str,
         sink: EventSink,
+        on_remove_callback=None,
     ):
         self.source = source
         self.source_id = source.source_id
         self.rtsp_url = source.rtsp_url
         self._sink = sink
+        self._on_remove_callback = on_remove_callback
 
         # Merge per-source config with defaults
         self._motion_cfg = source.motion or defaults.motion
         self._segment_cfg = source.segment or defaults.segment
         self._recording_cfg = source.recording or defaults.recording
         self._prefilter_cfg = source.prefilter or defaults.prefilter
+        self._health_cfg = source.health or defaults.health
 
         self._data_dir = os.path.join(expand_path(data_dir), self.source_id)
         os.makedirs(self._data_dir, exist_ok=True)
 
         # Initialize prefilter if enabled
         self._prefilter: FramePrefilter | None = None
-        if self._prefilter_cfg.enabled and self._prefilter_cfg.model_path:
-            try:
-                yolo = YoloPrefilter(
-                    model_path=self._prefilter_cfg.model_path,
-                    target_classes=self._prefilter_cfg.target_classes,
-                    min_confidence=self._prefilter_cfg.min_confidence,
-                    device=self._prefilter_cfg.device,
-                )
-                self._prefilter = FramePrefilter(
-                    yolo=yolo,
-                    detect_fps=self._prefilter_cfg.detect_fps,
-                    min_frames_hit=self._prefilter_cfg.min_frames_hit,
-                )
-                logger.info("[%s] Prefilter enabled: classes=%s", self.source_id, self._prefilter_cfg.target_classes)
-            except Exception as e:
-                logger.warning("[%s] Prefilter init failed, running without: %s", self.source_id, e)
-                self._prefilter = None
+        self._init_prefilter()
 
         self._thread: threading.Thread | None = None
         self._running = False
@@ -89,6 +77,12 @@ class StreamPipeline(BaseMonitor):
         self._cap: cv2.VideoCapture | None = None
         self._frame_count = 0
         self._fps: float = 15.0
+
+        # Health state tracking
+        self._failure_count = 0
+        self._last_failure_time: str | None = None
+        self._start_time: str | None = None
+        self._reconnect_count = 0
 
     @property
     def status(self) -> str:
@@ -132,28 +126,134 @@ class StreamPipeline(BaseMonitor):
         self._emit_status("online")
         logger.info("[%s] Pipeline resumed", self.source_id)
 
+    def _init_prefilter(self):
+        """Initialize or rebuild prefilter from current config."""
+        self._prefilter = None
+        if self._prefilter_cfg.enabled and self._prefilter_cfg.model_path:
+            try:
+                yolo = YoloPrefilter(
+                    model_path=self._prefilter_cfg.model_path,
+                    target_classes=self._prefilter_cfg.target_classes,
+                    min_confidence=self._prefilter_cfg.min_confidence,
+                    device=self._prefilter_cfg.device,
+                )
+                self._prefilter = FramePrefilter(
+                    yolo=yolo,
+                    detect_fps=self._prefilter_cfg.detect_fps,
+                    min_frames_hit=self._prefilter_cfg.min_frames_hit,
+                )
+                logger.info("[%s] Prefilter enabled: classes=%s", self.source_id, self._prefilter_cfg.target_classes)
+            except Exception as e:
+                logger.warning("[%s] Prefilter init failed, running without: %s", self.source_id, e)
+
+    def update_pipeline_config(
+        self,
+        motion: MotionConfig | None = None,
+        segment: SegmentConfig | None = None,
+        prefilter: PrefilterConfig | None = None,
+        health: HealthConfig | None = None,
+    ):
+        """Update pipeline configuration. Caller must stop/start for changes to take effect."""
+        if motion:
+            self._motion_cfg = motion
+            self.source.motion = motion
+        if segment:
+            self._segment_cfg = segment
+            self.source.segment = segment
+        if prefilter:
+            self._prefilter_cfg = prefilter
+            self.source.prefilter = prefilter
+            self._init_prefilter()
+        if health:
+            self._health_cfg = health
+            self.source.health = health
+
+    @property
+    def health_info(self) -> dict:
+        """Current health state for status reporting."""
+        return {
+            "failure_count": self._failure_count,
+            "last_failure_time": self._last_failure_time,
+            "reconnect_count": self._reconnect_count,
+            "recovery_strategy": self._health_cfg.recovery_strategy,
+            "max_failures": self._health_cfg.max_failures,
+            "start_time": self._start_time,
+        }
+
+    def _calculate_backoff(self) -> float:
+        """Exponential backoff based on reconnect attempts."""
+        delay = self._health_cfg.backoff_base * (2 ** min(self._reconnect_count, 10))
+        return min(delay, self._health_cfg.backoff_max)
+
+    def _handle_unhealthy(self):
+        """Execute recovery strategy when max_failures threshold is reached."""
+        strategy = self._health_cfg.recovery_strategy
+
+        self._status = "unhealthy"
+        self._sink.emit({
+            "source_id": self.source_id,
+            "event_type": "status",
+            "status": "unhealthy",
+            "reason": "rtsp_timeout",
+        })
+        logger.warning("[%s] Source unhealthy (%d failures), strategy=%s",
+                       self.source_id, self._failure_count, strategy)
+
+        if strategy == "pause":
+            self._paused.clear()
+            self._status = "paused"
+            self._emit_status("paused")
+            self._paused.wait()
+            if not self._running:
+                return
+            self._failure_count = 0
+            self._reconnect_count = 0
+        elif strategy == "remove":
+            self._running = False
+            self._status = "removed"
+            if self._on_remove_callback:
+                self._on_remove_callback(self.source_id)
+        else:  # "retry"
+            delay = self._health_cfg.backoff_max
+            logger.info("[%s] Unhealthy, retrying in %.1fs...", self.source_id, delay)
+            time.sleep(delay)
+
     def _run(self):
-        """Main pipeline loop with reconnection."""
+        """Main pipeline loop with health-aware reconnection."""
+        self._start_time = datetime.now().isoformat(timespec="seconds")
+
         while self._running:
             try:
                 self._connect()
                 if self._cap and self._cap.isOpened():
                     self._status = "online"
+                    self._failure_count = 0
+                    self._reconnect_count = 0
                     self._emit_status("online")
                     self._process_loop()
             except Exception as e:
                 logger.error("[%s] Pipeline error: %s", self.source_id, e)
                 self._status = "error"
+                self._failure_count += 1
+                self._last_failure_time = datetime.now().isoformat(timespec="seconds")
 
             if self._cap:
                 self._cap.release()
                 self._cap = None
 
             if self._running:
-                self._status = "reconnecting"
-                self._emit_status("reconnecting")
-                logger.info("[%s] Reconnecting in 10s...", self.source_id)
-                time.sleep(10)
+                self._reconnect_count += 1
+                if self._failure_count >= self._health_cfg.max_failures:
+                    self._handle_unhealthy()
+                    if not self._running:
+                        break
+                else:
+                    self._status = "reconnecting"
+                    self._emit_status("reconnecting")
+                    delay = self._calculate_backoff()
+                    logger.info("[%s] Reconnecting in %.1fs (attempt %d)...",
+                               self.source_id, delay, self._reconnect_count)
+                    time.sleep(delay)
 
         self._emit_status("stopped")
 
@@ -201,13 +301,14 @@ class StreamPipeline(BaseMonitor):
         in_motion = False
         motion_frames = 0
         consecutive_failures = 0
-        max_failures = 100
 
         while self._running:
             ret, frame = self._cap.read()  # type: ignore
             if not ret:
                 consecutive_failures += 1
-                if consecutive_failures >= max_failures:
+                if consecutive_failures >= self._health_cfg.max_failures:
+                    self._failure_count += consecutive_failures
+                    self._last_failure_time = datetime.now().isoformat(timespec="seconds")
                     logger.warning(
                         "[%s] %d consecutive read failures, reconnecting",
                         self.source_id,

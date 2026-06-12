@@ -30,6 +30,11 @@ defaults:
     min_frames_hit: 1
     detect_fps: 2.0
     device: "CPU"
+  health:
+    max_failures: 30
+    recovery_strategy: "retry"
+    backoff_base: 2.0
+    backoff_max: 120.0
 
 logging:
   level: "INFO"

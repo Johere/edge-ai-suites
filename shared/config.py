@@ -37,6 +37,14 @@ class PrefilterConfig(BaseModel):
     device: str = "CPU"
 
 
+class HealthConfig(BaseModel):
+    """Per-source health monitoring configuration."""
+    max_failures: int = 30
+    recovery_strategy: str = "retry"  # "retry" | "pause" | "remove"
+    backoff_base: float = 2.0
+    backoff_max: float = 120.0
+
+
 class WebhookConfig(BaseModel):
     url: str = "http://localhost:18800/events"
     timeout: int = 10
@@ -54,6 +62,7 @@ class DefaultsConfig(BaseModel):
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
     prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
+    health: HealthConfig = Field(default_factory=HealthConfig)
 
 
 class SourceConfig(BaseModel):
@@ -67,6 +76,7 @@ class SourceConfig(BaseModel):
     segment: Optional[SegmentConfig] = None
     recording: Optional[RecordingConfig] = None
     prefilter: Optional[PrefilterConfig] = None
+    health: Optional[HealthConfig] = None
 
 
 class AppConfig(BaseModel):
