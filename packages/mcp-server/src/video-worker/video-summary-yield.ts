@@ -1,8 +1,8 @@
 /**
- * VLM load check — ensures the VLM service has capacity before dispatching.
+ * Video summary service load check — ensures the service has capacity before dispatching.
  * Prevents overloading the model with concurrent requests.
  */
-export class VllmYield {
+export class VideoSummaryYield {
   private maxConcurrent: number;
   private active = 0;
 

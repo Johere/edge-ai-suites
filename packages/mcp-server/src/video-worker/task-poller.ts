@@ -1,27 +1,27 @@
 import type { ServerConfig } from "../config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
-import type { VlmClient } from "./vlm-client.js";
-import type { VllmYield } from "./vllm-yield.js";
+import type { VideoSummaryClient } from "./video-summary-client.js";
+import type { VideoSummaryYield } from "./video-summary-yield.js";
 import type { AlertCallback } from "./index.js";
 
 export class TaskPoller {
   private intervals: Map<string, ReturnType<typeof setInterval>> = new Map();
   private config: ServerConfig;
   private db: SmartBuildingDB;
-  private vlmClient: VlmClient;
-  private yieldManager: VllmYield;
+  private videoSummaryClient: VideoSummaryClient;
+  private yieldManager: VideoSummaryYield;
   private onAlert?: AlertCallback;
 
   constructor(
     config: ServerConfig,
     db: SmartBuildingDB,
-    vlmClient: VlmClient,
-    yieldManager: VllmYield,
+    videoSummaryClient: VideoSummaryClient,
+    yieldManager: VideoSummaryYield,
     onAlert?: AlertCallback,
   ) {
     this.config = config;
     this.db = db;
-    this.vlmClient = vlmClient;
+    this.videoSummaryClient = videoSummaryClient;
     this.yieldManager = yieldManager;
     this.onAlert = onAlert;
   }
@@ -54,8 +54,8 @@ export class TaskPoller {
       await this.yieldManager.acquire();
       this.db.updateTaskStatus(task.id, "processing");
 
-      const videoUrl = `http://localhost:${this.config.fileServerPort}/${task.videoPath}`;
-      const result = await this.vlmClient.summarize({ videoUrl, taskId: String(task.id) });
+      const videoPath = `${this.config.segmentsDir}/${task.videoPath}`;
+      const result = await this.videoSummaryClient.summarize({ videoUrl: videoPath, taskId: String(task.id) });
 
       this.db.updateTaskStatus(task.id, "completed", result.summary);
 

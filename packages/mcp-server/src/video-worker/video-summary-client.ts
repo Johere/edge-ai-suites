@@ -12,7 +12,7 @@ export interface SummaryResponse {
 /**
  * REST client for the multi-level video understanding service.
  */
-export class VlmClient {
+export class VideoSummaryClient {
   private baseUrl: string;
 
   constructor(baseUrl: string) {
@@ -27,7 +27,7 @@ export class VlmClient {
     });
 
     if (!response.ok) {
-      throw new Error(`VLM service error: ${response.status} ${response.statusText}`);
+      throw new Error(`Video summary service error: ${response.status} ${response.statusText}`);
     }
 
     return response.json() as Promise<SummaryResponse>;

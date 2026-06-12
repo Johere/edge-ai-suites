@@ -1,8 +1,8 @@
 import type { ServerConfig } from "../config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
 import { TaskPoller } from "./task-poller.js";
-import { VlmClient } from "./vlm-client.js";
-import { VllmYield } from "./vllm-yield.js";
+import { VideoSummaryClient } from "./video-summary-client.js";
+import { VideoSummaryYield } from "./video-summary-yield.js";
 
 export interface MonitorWorker {
   monitorId: string;
@@ -17,9 +17,9 @@ export class WorkerService {
   private onAlert?: AlertCallback;
 
   constructor(config: ServerConfig, db: SmartBuildingDB, onAlert?: AlertCallback) {
-    const vlmClient = new VlmClient(config.summaryService.url);
-    const yieldManager = new VllmYield(config.vlmMaxConcurrent);
-    this.poller = new TaskPoller(config, db, vlmClient, yieldManager, onAlert);
+    const summaryClient = new VideoSummaryClient(config.summaryService.url);
+    const yieldManager = new VideoSummaryYield(config.videoSummaryMaxConcurrent);
+    this.poller = new TaskPoller(config, db, summaryClient, yieldManager, onAlert);
     this.onAlert = onAlert;
   }
 

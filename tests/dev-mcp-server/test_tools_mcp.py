@@ -83,9 +83,8 @@ summary_service:
 videostream_analytics:
   url: http://localhost:19998
 segments_dir: {tmp}/segments
-file_server_port: 19997
 poll_interval_ms: 60000
-vlm_max_concurrent: 1
+video_summary_max_concurrent: 1
 """)
 
     # Start MCP server
