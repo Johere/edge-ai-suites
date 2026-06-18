@@ -17,6 +17,9 @@ export interface ServerConfig {
   schema?: SchemaDefinition;
   pollIntervalMs: number;
   videoSummaryMaxConcurrent: number;
+  mcp?: {
+    port?: number;
+  };
 }
 
 const DEFAULT_CONFIG: ServerConfig = {
@@ -45,5 +48,6 @@ export function loadConfig(configPath?: string): ServerConfig {
     pollIntervalMs: parsed?.poll_interval_ms ?? DEFAULT_CONFIG.pollIntervalMs,
     videoSummaryMaxConcurrent: parsed?.video_summary_max_concurrent ?? DEFAULT_CONFIG.videoSummaryMaxConcurrent,
     schema: parsed?.schema,
+    mcp: parsed?.mcp,
   };
 }

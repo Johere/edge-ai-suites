@@ -2,17 +2,22 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { SmartBuildingDB, SchemaManager } from "@smartbuilding-video/db";
 import { registerTools } from "./tools.js";
 import { registerResources } from "./resources.js";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { WorkerService } from "./video-worker/index.js";
 import { EventsEndpoint } from "./events-endpoint.js";
+import express from "express";
+import cors from "cors";
 
 async function main() {
   const configPath = process.argv.includes("--config")
     ? process.argv[process.argv.indexOf("--config") + 1]
     : undefined;
+
+  const transportMode = process.argv.includes("--http") ? "http" : "stdio";
 
   const config: ServerConfig = loadConfig(configPath);
 
@@ -56,11 +61,37 @@ async function main() {
   registerTools(server, config, db, workerService);
   registerResources(server, config, db);
 
-  // Connect MCP transport first (so stdio is ready)
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // Connect transport
+  if (transportMode === "http") {
+    const app = express();
+    app.use(cors());
+    app.use(express.json());
 
-  // Start events webhook endpoint (after transport is connected)
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+
+    await server.connect(transport);
+
+    app.all("/mcp", async (req, res) => {
+      try {
+        await transport.handleRequest(req, res, req.body);
+      } catch (err) {
+        console.error("[mcp] error:", err);
+        if (!res.headersSent) res.status(500).json({ error: String(err) });
+      }
+    });
+
+    const port = config.mcp?.port ?? 3100;
+    app.listen(port, () => {
+      console.error(`[mcp-server] Streamable HTTP on http://localhost:${port}/mcp`);
+    });
+  } else {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+  }
+
+  // Start events webhook endpoint
   const eventsEndpoint = new EventsEndpoint(config, db, (event) => {
     server.server.notification({
       method: "notifications/resources/updated",
