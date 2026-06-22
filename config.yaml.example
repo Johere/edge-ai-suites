@@ -1,0 +1,31 @@
+db:
+  path: ./data/smartbuilding.db
+
+summary_service:
+  url: http://localhost:8192
+
+videostream_analytics:
+  url: http://localhost:8999
+
+segments_dir: ./segments
+poll_interval_ms: 5000
+video_summary_max_concurrent: 2
+
+# MCP Server HTTP 端口（用于 OpenClaw/Claude Desktop 连接）
+mcp:
+  port: 3100
+
+# Events Webhook 端口（用于接收 Python microservice 的事件推送）
+events_webhook:
+  port: 3101
+
+schema:
+  video_summary_tasks:
+    extensions:
+      - { name: "event", type: "text", required: true }
+      - { name: "severity", type: "text", required: true }
+      - { name: "desc", type: "text", required: true }
+      - { name: "confidence", type: "real", required: false }
+  alerts:
+    extensions: []
+  custom_tables: []
