@@ -11,6 +11,14 @@ segments_dir: ./segments
 poll_interval_ms: 5000
 video_summary_max_concurrent: 2
 
+# MCP Server HTTP 端口（用于 OpenClaw/Claude Desktop 连接）
+mcp:
+  port: 3100
+
+# Events Webhook 端口（用于接收 Python microservice 的事件推送）
+events_webhook:
+  port: 3101
+
 schema:
   video_summary_tasks:
     extensions:

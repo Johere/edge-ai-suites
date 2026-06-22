@@ -1,81 +1,86 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { z } from "zod";
-import express from "express";
-import cors from "cors";
 
-const server = new McpServer({ name: "hello-mcp", version: "0.1.0" });
+// 创建服务器实例的工厂函数（无状态模式下每个请求创建新实例）
+function createServer() {
+  const server = new McpServer({ name: "hello-mcp", version: "0.1.0" });
 
-// 函数实现
-/*
-    MCP SDK 要求返回特定结构:  { content: [{ type, text }] }, e.g.:
-    {
-        "content": [
-            { "type": "text", "text": "Hello, Alice!" }
-        ]
+  // 注册一个 Tool
+  server.registerTool(
+    "greet",
+    { description: "Say hello", inputSchema: { name: z.string() } },
+    async ({ name }: { name: string }) => {
+      return { content: [{ type: "text" as const, text: `Hello, ${name}! (I know you!! hiahiahiahiahia)` }] };
     }
-*/
-async function handleGreet({ name }: { name: string }) {
-  return { content: [{ type: "text" as const, text: `Hello, ${name}! (I know you!! hiahiahiahiahia)` }] };
+  );
+
+  // 注册一个 Resource
+  server.registerResource(
+    "server-info",
+    "hello://info",
+    { description: "Server status information" },
+    async () => ({
+      contents: [{ uri: "hello://info", text: "This server is running." }],
+    })
+  );
+
+  return server;
 }
-
-// 注册一个 Tool（类比 api.registerTool）
-server.registerTool(
-  "greet",
-  { description: "Say hello", inputSchema: { name: z.string() } },
-  handleGreet
-);
-
-// 注册一个 Resource（类比只读 API）
-/* 函数返回值示例：
-    {
-    "contents": [
-        { "uri": "hello://info", "text": "This server is running." }
-    ]
-    }
-*/
-server.registerResource(
-  "server-info",
-  "hello://info",
-  { description: "Server status information" },
-  async () => ({
-    contents: [{ uri: "hello://info", text: "This server is running." }],
-  })
-);
 
 // ─── 根据命令行参数选择传输方式 ───
 const args = process.argv.slice(2);
 const transportMode = args.includes("--http") ? "http" : "stdio";
 
 if (transportMode === "http") {
-  // Streamable HTTP 模式：启动 HTTP 服务器，等待 Client 连接
-  // 适用于 OpenClaw、远程部署、多 Client 同时连接
-  // （替代已废弃的 SSEServerTransport）
-  const app = express();
-  app.use(cors());
-  app.use(express.json());
+  // Streamable HTTP 模式：无状态，每个请求创建新的 server + transport
+  const app = createMcpExpressApp();
 
   app.all("/mcp", async (req, res) => {
+    const server = createServer();
+    console.error(`[mcp] ${req.method} /mcp - Accept: ${req.headers.accept}`);
+    if (req.body) {
+      console.error(`[mcp] Body:`, JSON.stringify(req.body).slice(0, 200));
+    } else {
+      console.error(`[mcp] No body (likely GET for SSE)`);
+    }
+
     try {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error("[mcp] handleRequest error:", err);
-      if (!res.headersSent) res.status(500).json({ error: String(err) });
+
+      res.on("close", () => {
+        console.error("[mcp] Request closed");
+        transport.close();
+        server.close();
+      });
+    } catch (error) {
+      console.error("[mcp] Error handling request:", error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32603,
+            message: "Internal server error",
+          },
+          id: null,
+        });
+      }
     }
   });
 
-  const port = 3100;
+  const port = 3111;
   app.listen(port, () => {
     console.error(`MCP HTTP server running on http://localhost:${port}/mcp`);
   });
 } else {
   // stdio 模式：Client 自动 spawn 本进程，通过 stdin/stdout 通信
-  // 适用于 Claude Desktop、VS Code Claude Code、Cursor
+  const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

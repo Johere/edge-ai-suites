@@ -20,6 +20,9 @@ export interface ServerConfig {
   mcp?: {
     port?: number;
   };
+  eventsWebhook?: {
+    port?: number;
+  };
 }
 
 const DEFAULT_CONFIG: ServerConfig = {
@@ -29,6 +32,8 @@ const DEFAULT_CONFIG: ServerConfig = {
   segmentsDir: "./segments",
   pollIntervalMs: 5000,
   videoSummaryMaxConcurrent: 2,
+  mcp: { port: 3100 },
+  eventsWebhook: { port: 3101 },
 };
 
 export function loadConfig(configPath?: string): ServerConfig {
@@ -48,6 +53,11 @@ export function loadConfig(configPath?: string): ServerConfig {
     pollIntervalMs: parsed?.poll_interval_ms ?? DEFAULT_CONFIG.pollIntervalMs,
     videoSummaryMaxConcurrent: parsed?.video_summary_max_concurrent ?? DEFAULT_CONFIG.videoSummaryMaxConcurrent,
     schema: parsed?.schema,
-    mcp: parsed?.mcp,
+    mcp: {
+      port: parsed?.mcp?.port ?? DEFAULT_CONFIG.mcp!.port,
+    },
+    eventsWebhook: {
+      port: parsed?.events_webhook?.port ?? DEFAULT_CONFIG.eventsWebhook!.port,
+    },
   };
 }

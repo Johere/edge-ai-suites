@@ -285,68 +285,86 @@ npx tsc --init --target es2022 --module nodenext --moduleResolution nodenext --o
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { z } from "zod";
-import express from "express";
-import cors from "cors";
 
-const server = new McpServer({ name: "hello-mcp", version: "0.1.0" });
+// ⚠️ 关键：Streamable HTTP 无状态模式下，每个请求需要独立的 server 实例
+// 用工厂函数创建，而不是全局单例
+function createServer() {
+  const server = new McpServer({ name: "hello-mcp", version: "0.1.0" });
 
-// ─── 注册 Tool ───
-server.registerTool(
-  "greet",
-  {
-    description: "Say hello to someone",
-    inputSchema: { name: z.string().describe("Who to greet") },
-  },
-  async ({ name }) => ({
-    content: [{ type: "text", text: `Hello, ${name}!` }],
-  })
-);
+  // ─── 注册 Tool ───
+  server.registerTool(
+    "greet",
+    {
+      description: "Say hello to someone",
+      inputSchema: { name: z.string().describe("Who to greet") },
+    },
+    async ({ name }: { name: string }) => ({
+      content: [{ type: "text" as const, text: `Hello, ${name}!` }],
+    })
+  );
 
-// ─── 注册 Resource ───
-server.registerResource(
-  "server-info",
-  "hello://info",
-  { description: "Server status information" },
-  async () => ({
-    contents: [{ uri: "hello://info", text: "This server is running." }],
-  })
-);
+  // ─── 注册 Resource ───
+  server.registerResource(
+    "server-info",
+    "hello://info",
+    { description: "Server status information" },
+    async () => ({
+      contents: [{ uri: "hello://info", text: "This server is running." }],
+    })
+  );
+
+  return server;
+}
 
 // ─── 根据命令行参数选择传输方式 ───
 const args = process.argv.slice(2);
 const transportMode = args.includes("--http") ? "http" : "stdio";
 
 if (transportMode === "http") {
-  // Streamable HTTP 模式：启动 HTTP 服务器，等待 Client 连接
-  // 适用于 OpenClaw、远程部署、多 Client 同时连接
-  // （替代已废弃的 SSEServerTransport）
-  const app = express();
-  app.use(cors());            // 允许跨域（Inspector 在浏览器中运行）
-  app.use(express.json());
+  // Streamable HTTP 模式：无状态，每个请求创建新的 server + transport
+  // ⚠️ 必须使用 createMcpExpressApp()，不能用普通 express()
+  const app = createMcpExpressApp();
 
-  // ⚠️ 关键：stateless 模式下，每个请求必须新建 transport 并 connect。
-  // 不能在外部创建单一 transport 复用 — 否则第二个请求会报 500 错误。
+  // ⚠️ 关键：支持 GET 和 POST（GET 用于 SSE 连接，POST 用于消息请求）
   app.all("/mcp", async (req, res) => {
+    const server = createServer();
+    console.error(`[mcp] ${req.method} /mcp`);
+
     try {
+      // ⚠️ 每个请求创建新 transport + 新 server.connect()
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,  // stateless 模式
+        sessionIdGenerator: undefined,  // 无状态模式
       });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error("[mcp] error:", err);
-      if (!res.headersSent) res.status(500).json({ error: String(err) });
+
+      // ⚠️ 请求结束时清理资源
+      res.on("close", () => {
+        transport.close();
+        server.close();
+      });
+    } catch (error) {
+      console.error("[mcp] Error:", error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: { code: -32603, message: "Internal server error" },
+          id: null,
+        });
+      }
     }
   });
 
-  const port = 3100;
+  const port = 3111;
   app.listen(port, () => {
     console.error(`MCP HTTP server running on http://localhost:${port}/mcp`);
   });
 } else {
   // stdio 模式：Client 自动 spawn 本进程，通过 stdin/stdout 通信
-  // 适用于 Claude Desktop、VS Code Claude Code、Cursor
+  // stdio 模式可以复用单一 server 实例
+  const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
@@ -362,7 +380,7 @@ npx tsx src/index.ts
 
 # HTTP 模式 — 手动启动，OpenClaw / 远程部署用
 npx tsx src/index.ts --http
-# 输出：MCP HTTP server running on http://localhost:3100/mcp
+# 输出：MCP HTTP server running on http://localhost:3111/mcp
 ```
 
 | | stdio | Streamable HTTP |
@@ -389,7 +407,7 @@ Inspector 自动 spawn server 子进程，通过 stdio 通信。浏览器打开 
 npx tsx src/index.ts --http
 
 # 终端 2：发送 initialize 请求
-curl -X POST http://localhost:3100/mcp \
+curl -X POST http://localhost:3111/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0.1.0"}}}'
@@ -424,7 +442,7 @@ MCP Server 写好后，通过配置文件告诉 Client 如何启动它。不同 
 {
   "mcpServers": {
     "hello-mcp-http": {
-      "url": "http://localhost:3100/mcp"
+      "url": "http://localhost:3111/mcp"
     }
   }
 }
@@ -448,22 +466,42 @@ MCP Server 写好后，通过配置文件告诉 Client 如何启动它。不同 
 
 重启 Claude Desktop → Agent 自动发现你的 tool。
 
-#### OpenClaw（SSE 模式，`openclaw.json` 或 UI 配置）
+#### OpenClaw（`openclaw.json` 或 UI 配置）
 
 ```json
 {
   "mcp": {
     "servers": {
       "hello-mcp": {
-        "transport": "sse",
-        "url": "http://localhost:3100"
+        "transport": "streamable-http",
+        "url": "http://localhost:3111/mcp"
       }
     }
   }
 }
 ```
 
-> OpenClaw 目前仅支持 SSE 传输（不支持 stdio）。需要 MCP Server 以 HTTP/SSE 模式启动，而非 stdio。
+⚠️ **重要配置说明**：
+- **transport 必须是 `"streamable-http"`**，不能是 `"sse"`
+  - OpenClaw 支持两种 transport：`"sse"` 和 `"streamable-http"`
+  - 旧版 MCP SDK 使用 `SSEServerTransport`（已废弃），对应 `"sse"` 配置
+  - 新版 MCP SDK (v1.29+) 使用 `StreamableHTTPServerTransport`，对应 `"streamable-http"` 配置
+  - **配置与服务器实现必须匹配**，否则会出现连接超时或 500 错误
+- **URL 必须包含完整路径**（如 `/mcp`），不能只写 `http://localhost:3111`
+- OpenClaw 不支持 stdio transport，只支持 HTTP 模式
+
+验证配置：
+```bash
+# 先启动 MCP Server
+npx tsx src/index.ts --http
+
+# 然后探测连接
+openclaw mcp probe hello-mcp
+
+# 应该输出：
+# MCP probe (/path/to/openclaw.json):
+# - hello-mcp: 1 tools, resources
+```
 
 #### Cursor（项目级 `.cursor/mcp.json`）
 
@@ -480,13 +518,13 @@ MCP Server 写好后，通过配置文件告诉 Client 如何启动它。不同 
 
 #### 各客户端配置对比
 
-| 客户端 | 配置文件位置 | 传输方式 |
-|--------|-------------|---------|
-| VS Code Claude Code | 项目根目录 `.mcp.json` | stdio / HTTP（`url` 字段） |
-| Claude Desktop | `~/.claude/claude_desktop_config.json` | stdio |
-| OpenClaw | `openclaw.json` 或 UI 配置 | SSE |
-| Cursor | 项目根目录 `.cursor/mcp.json` | stdio |
-| Hermes | `~/.hermes/config.yaml` | stdio / SSE |
+| 客户端 | 配置文件位置 | 传输方式 | 备注 |
+|--------|-------------|---------|------|
+| VS Code Claude Code | 项目根目录 `.mcp.json` | stdio / HTTP（`url` 字段） | HTTP 模式支持可能不完整 |
+| Claude Desktop | `~/.claude/claude_desktop_config.json` | stdio | 仅 stdio |
+| OpenClaw | `openclaw.json` 或 UI 配置 | Streamable HTTP | 必须用 `"transport": "streamable-http"` |
+| Cursor | 项目根目录 `.cursor/mcp.json` | stdio | 仅 stdio |
+| Hermes | `~/.hermes/config.yaml` | stdio / SSE | 取决于版本 |
 
 格式几乎一样 — 同一个 MCP Server，换个配置文件就能接入不同 Client。这就是 MCP "框架无关"的好处。
 
@@ -726,13 +764,207 @@ npx @modelcontextprotocol/inspector npx tsx packages/mcp-server/src/index.ts -- 
 | **stdout 污染** | MCP stdio 模式下，Server 的 stdout 是协议通道。`console.log()` 会破坏 JSON-RPC 帧 | 一律用 `console.error()` 输出日志 |
 | **Zod schema = JSON Schema** | `server.tool` 的第 3 参数必须是 Zod object（SDK 内部转 JSON Schema 发给 Client） | 不要传 raw JSON Schema |
 | **异步初始化** | DB、config 必须在 `server.connect()` 前就绪 | 参考 `index.ts` 的顺序 |
-| **HTTP stateless transport 复用** | Stateless 模式（`sessionIdGenerator: undefined`）下，每个请求必须新建 `StreamableHTTPServerTransport` 并调用 `server.connect(transport)`。复用单一 transport 实例会导致第二个请求 500 | 把 transport 创建放在路由 handler 内部 |
+| **HTTP stateless transport 复用** | Stateless 模式（`sessionIdGenerator: undefined`）下，**每个请求必须创建新的 server + transport 实例**。复用单一实例会导致"Already connected"错误或 500 错误 | 使用工厂函数 `createServer()`，在路由 handler 内部每次调用 |
+| **只监听 POST 导致 404** | OpenClaw 使用 GET 建立 SSE 连接，如果只监听 `app.post("/mcp")`，GET 请求返回 404 | 使用 `app.all("/mcp")` 同时支持 GET 和 POST |
+| **OpenClaw transport 配置错误** | 配置文件写 `"transport": "sse"` 但服务器用 `StreamableHTTPServerTransport` | 改为 `"transport": "streamable-http"`，必须与服务器实现匹配 |
+| **req.body 是 undefined** | GET 请求没有 body，直接调用 `req.body.slice()` 等方法会崩溃 | 添加 `if (req.body)` 检查 |
+| **使用 express() 而非 createMcpExpressApp()** | 手动创建的 express() 缺少 MCP 所需的中间件配置，可能导致 body parsing 或 CORS 问题 | 使用 SDK 提供的 `createMcpExpressApp()` |
 | **Resource URI 规范** | 自定义 scheme（如 `smartbuilding://`）需要 Client 支持 `list_changed` | 当前 SDK 默认支持 |
 | **热重载** | `tsx --watch` 会重启进程，Client 连接断开 | 开发时用 Inspector（每次手动连接） |
 
 ---
 
-## 11. 参考资料
+## 11. 故障排除指南
+
+### 11.1 OpenClaw 连接问题诊断流程
+
+#### 问题：`openclaw mcp probe hello-mcp` 失败
+
+**症状分类与解决方案**：
+
+| 错误信息 | 根本原因 | 解决方案 |
+|---------|---------|---------|
+| `SSE error: Non-200 status code (404)` | URL 路径错误或服务器未监听 GET | 检查 URL 是否包含 `/mcp`；确认代码用 `app.all()` 而非 `app.post()` |
+| `SSE error: Non-200 status code (500)` | 服务器内部错误，通常是代码 bug | 查看服务器日志（stderr）；检查是否有未处理的异常 |
+| `SSE error: Non-200 status code (400)` | 启用了 stateful 模式但客户端没提供 session ID | 改用 stateless：`sessionIdGenerator: undefined` |
+| `MCP server connection timed out after 30000ms` | transport 配置类型不匹配 | OpenClaw 配置改为 `"transport": "streamable-http"` |
+| `Error: Streamable HTTP error: Error POSTing to endpoint:` | 请求根本没到达服务器，或服务器崩溃 | 检查服务器是否在运行（`lsof -i :3111`）；查看服务器启动日志 |
+| `TypeError: fetch failed` | 服务器未启动或端口错误 | 先启动服务器：`npx tsx src/index.ts --http` |
+
+**调试步骤**：
+
+```bash
+# 1. 确认服务器正在运行
+lsof -i :3111
+# 应该看到 node 进程监听 3111 端口
+
+# 2. 用 curl 直接测试服务器（绕过 OpenClaw）
+curl -i -X POST http://localhost:3111/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+
+# 正常响应：
+# HTTP/1.1 200 OK
+# event: message
+# data: {"result":{},"jsonrpc":"2.0","id":1}
+
+# 3. 测试 initialize 方法（OpenClaw 的第一个请求）
+curl -X POST http://localhost:3111/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"jsonrpc":"2.0","id":1}'
+
+# 应返回 serverInfo 和 capabilities
+
+# 4. 确认 OpenClaw 配置正确
+openclaw mcp show hello-mcp
+# 应显示 "transport": "streamable-http"
+
+# 5. 最后才用 OpenClaw probe
+openclaw mcp probe hello-mcp
+```
+
+### 11.2 常见代码错误
+
+#### 错误 1：复用 transport 实例导致 "Already connected"
+
+**错误代码**：
+```typescript
+// ❌ 错误：在外部创建 transport，所有请求复用
+const app = express();
+const transport = new StreamableHTTPServerTransport({
+  sessionIdGenerator: undefined,
+});
+await server.connect(transport);  // 只 connect 一次
+
+app.all("/mcp", async (req, res) => {
+  // 第二个请求到来时，transport 已经 connected，报错
+  await transport.handleRequest(req, res, req.body);
+});
+```
+
+**正确代码**：
+```typescript
+// ✅ 正确：每个请求创建新 server + transport
+app.all("/mcp", async (req, res) => {
+  const server = createServer();  // 工厂函数
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+  });
+  await server.connect(transport);  // 每个请求都 connect
+  await transport.handleRequest(req, res, req.body);
+  
+  res.on("close", () => {
+    transport.close();
+    server.close();
+  });
+});
+```
+
+#### 错误 2：只监听 POST 导致 OpenClaw GET 请求 404
+
+**错误代码**：
+```typescript
+// ❌ 错误：只监听 POST，OpenClaw 的 GET（SSE 连接）返回 404
+app.post("/mcp", async (req, res) => { ... });
+```
+
+**正确代码**：
+```typescript
+// ✅ 正确：同时支持 GET 和 POST
+app.all("/mcp", async (req, res) => { ... });
+```
+
+#### 错误 3：OpenClaw 配置与服务器实现不匹配
+
+**错误配置**：
+```json
+{
+  "mcp": {
+    "servers": {
+      "hello-mcp": {
+        "transport": "sse",  // ❌ 旧协议，与 StreamableHTTPServerTransport 不兼容
+        "url": "http://localhost:3111"
+      }
+    }
+  }
+}
+```
+
+**正确配置**：
+```json
+{
+  "mcp": {
+    "servers": {
+      "hello-mcp": {
+        "transport": "streamable-http",  // ✅ 新协议
+        "url": "http://localhost:3111/mcp"  // ✅ 包含完整路径
+      }
+    }
+  }
+}
+```
+
+### 11.3 日志调试技巧
+
+在服务器代码中添加详细日志（使用 `console.error`，不影响 stdio 协议）：
+
+```typescript
+app.all("/mcp", async (req, res) => {
+  console.error(`[mcp] ${req.method} ${req.url}`);
+  console.error(`[mcp] Headers:`, JSON.stringify(req.headers));
+  if (req.body) {
+    console.error(`[mcp] Body:`, JSON.stringify(req.body).slice(0, 500));
+  }
+  
+  try {
+    const server = createServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+    
+    res.on("close", () => {
+      console.error("[mcp] Request closed");
+      transport.close();
+      server.close();
+    });
+  } catch (error) {
+    console.error("[mcp] Error:", error);
+    console.error("[mcp] Stack:", error instanceof Error ? error.stack : "N/A");
+    // ...
+  }
+});
+```
+
+查看日志：
+```bash
+# 服务器日志输出到 stderr，用 2>&1 捕获
+npx tsx src/index.ts --http 2>&1 | tee server.log
+
+# 或者后台运行并查看日志
+npx tsx src/index.ts --http > server.log 2>&1 &
+tail -f server.log
+```
+
+### 11.4 MCP Inspector vs OpenClaw 的差异
+
+| 工具 | 传输方式 | 适用场景 | 限制 |
+|------|---------|---------|------|
+| MCP Inspector | stdio（spawn 子进程） | 测试 stdio 模式服务器 | 某些版本对 HTTP 模式支持不完整 |
+| curl | HTTP | 直接测试 HTTP 协议层 | 需要手动构造 JSON-RPC 消息 |
+| OpenClaw | HTTP (Streamable HTTP) | 测试实际集成 | 需要正确的 transport 配置 |
+
+**推荐验证流程**：
+1. **先用 Inspector 验证 stdio 模式** → 确认 tools/resources 注册正确
+2. **再用 curl 验证 HTTP 模式** → 确认协议层通信正常
+3. **最后用 OpenClaw probe** → 确认实际客户端集成成功
+
+---
+
+## 12. 参考资料
 
 | 资源 | 链接/路径 |
 |------|-----------|
