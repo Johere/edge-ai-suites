@@ -325,14 +325,14 @@ if (transportMode === "http") {
   app.use(cors());            // 允许跨域（Inspector 在浏览器中运行）
   app.use(express.json());
 
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,  // stateless 模式
-  });
-
-  await server.connect(transport);
-
+  // ⚠️ 关键：stateless 模式下，每个请求必须新建 transport 并 connect。
+  // 不能在外部创建单一 transport 复用 — 否则第二个请求会报 500 错误。
   app.all("/mcp", async (req, res) => {
     try {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,  // stateless 模式
+      });
+      await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
       console.error("[mcp] error:", err);
@@ -408,6 +408,7 @@ MCP Server 写好后，通过配置文件告诉 Client 如何启动它。不同 
 在项目根目录创建 `.mcp.json`：
 
 ```json
+// stdio 模式（Client 自动 spawn Server）
 {
   "mcpServers": {
     "hello-mcp": {
@@ -418,7 +419,19 @@ MCP Server 写好后，通过配置文件告诉 Client 如何启动它。不同 
 }
 ```
 
-新开 Claude Code 会话 → 会提示是否允许加载 → 确认后即可使用。
+```json
+// HTTP 模式（Server 已手动启动，Client 通过 URL 连接）
+{
+  "mcpServers": {
+    "hello-mcp-http": {
+      "url": "http://localhost:3100/mcp"
+    }
+  }
+}
+```
+> Note: Failed!!!
+
+新开 Claude Code 会话 → 会提示是否允许加载 → 确认后即可使用。修改 `.mcp.json` 后需重启 MCP 连接（输入 `/mcp` → restart）。
 
 #### Claude Desktop（`~/.claude/claude_desktop_config.json`）
 
@@ -469,7 +482,7 @@ MCP Server 写好后，通过配置文件告诉 Client 如何启动它。不同 
 
 | 客户端 | 配置文件位置 | 传输方式 |
 |--------|-------------|---------|
-| VS Code Claude Code | 项目根目录 `.mcp.json` | stdio |
+| VS Code Claude Code | 项目根目录 `.mcp.json` | stdio / HTTP（`url` 字段） |
 | Claude Desktop | `~/.claude/claude_desktop_config.json` | stdio |
 | OpenClaw | `openclaw.json` 或 UI 配置 | SSE |
 | Cursor | 项目根目录 `.cursor/mcp.json` | stdio |
@@ -713,6 +726,7 @@ npx @modelcontextprotocol/inspector npx tsx packages/mcp-server/src/index.ts -- 
 | **stdout 污染** | MCP stdio 模式下，Server 的 stdout 是协议通道。`console.log()` 会破坏 JSON-RPC 帧 | 一律用 `console.error()` 输出日志 |
 | **Zod schema = JSON Schema** | `server.tool` 的第 3 参数必须是 Zod object（SDK 内部转 JSON Schema 发给 Client） | 不要传 raw JSON Schema |
 | **异步初始化** | DB、config 必须在 `server.connect()` 前就绪 | 参考 `index.ts` 的顺序 |
+| **HTTP stateless transport 复用** | Stateless 模式（`sessionIdGenerator: undefined`）下，每个请求必须新建 `StreamableHTTPServerTransport` 并调用 `server.connect(transport)`。复用单一 transport 实例会导致第二个请求 500 | 把 transport 创建放在路由 handler 内部 |
 | **Resource URI 规范** | 自定义 scheme（如 `smartbuilding://`）需要 Client 支持 `list_changed` | 当前 SDK 默认支持 |
 | **热重载** | `tsx --watch` 会重启进程，Client 连接断开 | 开发时用 Inspector（每次手动连接） |
 
