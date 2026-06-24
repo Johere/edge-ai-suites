@@ -1,5 +1,4 @@
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -10,6 +9,7 @@ import { registerResources } from "./resources.js";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { WorkerService } from "./video-worker/index.js";
 import { EventsEndpoint } from "./events-endpoint.js";
+import { logger } from "./logger.js";
 
 /**
  * 创建 MCP server 实例的工厂函数。
@@ -42,11 +42,13 @@ async function main() {
 
   const config: ServerConfig = loadConfig(configPath);
 
-  // Ensure DB directory exists
-  mkdirSync(dirname(config.db.path), { recursive: true });
+  // Ensure data directories exist
+  mkdirSync(config.dataDir, { recursive: true });
+  mkdirSync(config.segmentsDir, { recursive: true });
+  mkdirSync(config.logsDir, { recursive: true });
 
   // Initialize database
-  const db = new SmartBuildingDB(config.db.path);
+  const db = new SmartBuildingDB(config.dbPath);
   db.initialize();
 
   // Apply schema customization if defined
@@ -54,20 +56,15 @@ async function main() {
     const schemaManager = new SchemaManager((db as any).db);
     const result = schemaManager.applySchema(config.schema);
     if (result.added.length > 0) {
-      console.error(`[schema] Added columns: ${result.added.join(", ")}`);
+      logger.info(`[schema] Added columns: ${result.added.join(", ")}`);
     }
     if (result.warnings.length > 0) {
-      console.error(`[schema] Warnings: ${result.warnings.join(", ")}`);
+      logger.warn(`[schema] ${result.warnings.join(", ")}`);
     }
   }
 
-  // Alert callback: notify MCP resource subscribers
-  // 注意：无状态 HTTP 模式下，notification 只能发送给当前请求的 transport
-  // 如需跨请求推送，需使用 stateful 模式或外部消息队列
   const onAlert = (monitorId: string) => {
-    console.error(`[worker] Alert triggered for monitor ${monitorId}`);
-    // 在无状态模式下，这里无法直接推送通知
-    // notification 需要在请求上下文中发送
+    logger.debug(`[worker] Alert triggered for monitor ${monitorId}`);
   };
 
   // Initialize worker service
@@ -82,7 +79,7 @@ async function main() {
 
     // ⚠️ 关键：每个请求创建新的 server + transport（无状态模式）
     app.all("/mcp", async (req, res) => {
-      console.error(`[mcp] ${req.method} /mcp`);
+      logger.debug(`[mcp] ${req.method} /mcp`);
 
       // 为每个请求创建独立的 server 实例
       const server = createMcpServer(config, db, workerService, onAlert);
@@ -96,12 +93,12 @@ async function main() {
 
         // 请求结束时清理资源
         res.on("close", () => {
-          console.error("[mcp] Request closed");
+          logger.debug("[mcp] Request closed");
           transport.close();
           server.close();
         });
       } catch (error) {
-        console.error("[mcp] Error:", error);
+        logger.error(`[mcp] ${error}`);
         if (!res.headersSent) {
           res.status(500).json({
             jsonrpc: "2.0",
@@ -114,7 +111,7 @@ async function main() {
 
     const port = config.mcp!.port;
     app.listen(port, () => {
-      console.error(`[mcp-server] Streamable HTTP on http://localhost:${port}/mcp`);
+      logger.info(`[mcp-server] Streamable HTTP on http://localhost:${port}/mcp`);
     });
 
     // HTTP 无状态模式下，无法跨请求发送 notification
@@ -136,7 +133,7 @@ async function main() {
       });
     } else {
       // HTTP 无状态模式：无法主动推送，客户端需轮询 resources
-      console.error(`[webhook] Stats updated for ${event.sourceId} (notification skipped in HTTP mode)`);
+      logger.debug(`[webhook] Stats updated for ${event.sourceId} (notification skipped in HTTP mode)`);
     }
   });
   await eventsEndpoint.start(config.eventsWebhook!.port);
@@ -151,6 +148,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("MCP Server failed to start:", err);
+  logger.error(`MCP Server failed to start: ${err}`);
   process.exit(1);
 });

@@ -66,11 +66,11 @@ export class TaskPoller {
           const desc = String(event.desc ?? "");
 
           this.db.createAlert({
-            sourceId: monitorId,
-            event: eventName,
-            severity,
+            monitorId,
+            taskId: task.id,
+            useCase: "",
+            alertType: eventName,
             description: desc,
-            acked: false,
           });
 
           if (this.onAlert) {

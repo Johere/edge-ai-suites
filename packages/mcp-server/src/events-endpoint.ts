@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { ServerConfig } from "./config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
+import { logger } from "./logger.js";
 
 export interface VideoEvent {
   sourceId: string;
@@ -55,7 +56,7 @@ export class EventsEndpoint {
 
       this.server.on("error", (err: NodeJS.ErrnoException) => {
         if (err.code === "EADDRINUSE") {
-          console.error(`[events-endpoint] Port ${port} in use, skipping events endpoint`);
+          logger.warn(`[events-endpoint] Port ${port} in use, skipping events endpoint`);
           this.server = null;
           resolve();
         } else {
@@ -64,7 +65,7 @@ export class EventsEndpoint {
       });
 
       this.server.listen(port, () => {
-        console.error(`[events-endpoint] Listening on port ${port}`);
+        logger.info(`[events-endpoint] Listening on port ${port}`);
         resolve();
       });
     });
@@ -81,7 +82,7 @@ export class EventsEndpoint {
       if (videoPath && event.sourceId) {
         this.db.createTask({
           monitorId: event.sourceId,
-          videoPath,
+          clipFilePath: videoPath,
           status: "pending",
         });
       }
