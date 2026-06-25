@@ -138,13 +138,80 @@ async function main() {
   });
   await eventsEndpoint.start(config.eventsWebhook!.port);
 
+  // Startup reconciliation: clean up stale state from previous crash
+  await reconcileOnStartup(db, config.videostreamAnalytics.url);
+
   // Graceful shutdown
-  process.on("SIGINT", () => {
-    workerService.stopAll();
+  const shutdown = async () => {
+    logger.info("[mcp-server] Shutting down...");
+    await workerService.stopAll();
+    const onlineMonitors = db.listOnlineMonitors();
+    if (onlineMonitors.length > 0) {
+      logger.info(`[shutdown] Pausing ${onlineMonitors.length} online monitors in videostream-analytics (${config.videostreamAnalytics.url})`);
+      await Promise.all(onlineMonitors.map((m) =>
+        fetch(`${config.videostreamAnalytics.url}/sources/${m.id}/pause`, {
+          method: "POST", signal: AbortSignal.timeout(3000),
+        }).catch(() => {})
+      ));
+      for (const m of onlineMonitors) db.updateMonitorStatus(m.id, "offline");
+    }
     eventsEndpoint.stop();
     db.close();
     process.exit(0);
-  });
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+async function reconcileOnStartup(
+  db: SmartBuildingDB,
+  analyticsUrl: string,
+): Promise<void> {
+  let analyticsSources: Map<string, unknown>;
+  try {
+    const resp = await fetch(`${analyticsUrl}/sources`, { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) {
+      logger.warn(`[reconcile] videostream-analytics (${analyticsUrl}) returned HTTP ${resp.status} — skipping startup reconciliation`);
+      return;
+    }
+    const list = (await resp.json()) as any[];
+    analyticsSources = new Map(list.map((s: any) => [s.source_id, s]));
+  } catch {
+    logger.warn(`[reconcile] videostream-analytics (${analyticsUrl}) unreachable — skipping startup reconciliation`);
+    return;
+  }
+
+  let offlined = 0;
+  let deleted = 0;
+
+  // DB online monitors: clean up stale state
+  const onlineMonitors = db.listOnlineMonitors();
+  for (const m of onlineMonitors) {
+    if (analyticsSources.has(m.id)) {
+      // analytics still has it — delete and mark offline (don't auto re-register)
+      await fetch(`${analyticsUrl}/sources/${m.id}`, { method: "DELETE", signal: AbortSignal.timeout(5000) }).catch(() => {});
+      logger.warn(`[reconcile] monitor ${m.id} found in videostream-analytics (${analyticsUrl}) on startup, deleted and marked offline — call register_source to restart`);
+    } else {
+      logger.warn(`[reconcile] monitor ${m.id} not found in videostream-analytics (${analyticsUrl}) after restart, marked offline — call register_source to restart`);
+    }
+    db.updateMonitorStatus(m.id, "offline");
+    offlined++;
+  }
+
+  // Orphan sources in analytics not in DB: delete them (DB is source of truth)
+  const dbIds = new Set(db.listMonitors().map((m) => m.id));
+  for (const sourceId of analyticsSources.keys()) {
+    if (!dbIds.has(sourceId)) {
+      await fetch(`${analyticsUrl}/sources/${sourceId}`, { method: "DELETE", signal: AbortSignal.timeout(5000) }).catch(() => {
+        logger.warn(`[reconcile] failed to delete orphan source ${sourceId} from videostream-analytics (${analyticsUrl})`);
+      });
+      logger.info(`[reconcile] deleted orphan source ${sourceId} from videostream-analytics (${analyticsUrl})`);
+      deleted++;
+    }
+  }
+
+  logger.info(`[reconcile] complete: ${offlined} marked offline, ${deleted} orphans deleted`);
 }
 
 main().catch((err) => {

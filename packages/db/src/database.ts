@@ -24,6 +24,7 @@ function rowToEvent(row: any): Event {
     startTime: row.start_time,
     endTime: row.end_time ?? undefined,
     durationSeconds: row.duration_seconds ?? undefined,
+    eventFilePath: row.event_file_path ?? undefined,
     prefilterPassed: row.prefilter_passed ?? undefined,
     prefilterClasses: row.prefilter_classes ?? undefined,
     prefilterConfidence: row.prefilter_confidence ?? undefined,
@@ -53,7 +54,7 @@ function rowToTask(row: any): VideoSummaryTask {
     clipStartTime: row.clip_start_time ?? undefined,
     clipEndTime: row.clip_end_time ?? undefined,
     clipDuration: row.clip_duration ?? undefined,
-    clipFilePath: row.clip_file_path ?? undefined,
+    summaryClipInput: row.summary_clip_input ?? undefined,
     summaryText: row.summary_text ?? undefined,
     status: row.status,
     errorMessage: row.error_message ?? undefined,
@@ -85,6 +86,7 @@ CREATE TABLE IF NOT EXISTS events (
   start_time TEXT NOT NULL,
   end_time TEXT,
   duration_seconds REAL,
+  event_file_path TEXT,
   prefilter_passed INTEGER,
   prefilter_classes TEXT,
   prefilter_confidence REAL,
@@ -112,7 +114,7 @@ CREATE TABLE IF NOT EXISTS video_summary_tasks (
   clip_start_time TEXT,
   clip_end_time TEXT,
   clip_duration REAL,
-  clip_file_path TEXT,
+  summary_clip_input TEXT,
   summary_text TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   error_message TEXT,
@@ -164,14 +166,6 @@ CREATE TABLE IF NOT EXISTS reports (
   created_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_reports_monitor_period ON reports(monitor_id, period_start);
-
-CREATE TABLE IF NOT EXISTS monitor_state (
-  monitor_id TEXT PRIMARY KEY,
-  use_case TEXT,
-  state_json TEXT NOT NULL DEFAULT '{}',
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (monitor_id) REFERENCES monitors(id)
-);
 
 CREATE TABLE IF NOT EXISTS plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -256,6 +250,37 @@ export class SmartBuildingDB {
     this.db.prepare("DELETE FROM monitors WHERE id = ?").run(id);
   }
 
+  updateMonitor(id: string, updates: {
+    sourceUrl?: string;
+    name?: string;
+    useCaseId?: string;
+    videoSummaryTask?: string;
+    status?: Monitor["status"];
+  }): void {
+    const sets: string[] = [];
+    const values: any[] = [];
+    if (updates.sourceUrl !== undefined) { sets.push("source_url = ?"); values.push(updates.sourceUrl); }
+    if (updates.name !== undefined) { sets.push("name = ?"); values.push(updates.name); }
+    if (updates.useCaseId !== undefined) { sets.push("use_case_id = ?"); values.push(updates.useCaseId); }
+    if (updates.videoSummaryTask !== undefined) { sets.push("video_summary_task = ?"); values.push(updates.videoSummaryTask); }
+    if (updates.status !== undefined) { sets.push("status = ?"); values.push(updates.status); }
+    if (sets.length === 0) return;
+    values.push(id);
+    this.db.prepare(`UPDATE monitors SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+  }
+
+  listOnlineMonitors(): Monitor[] {
+    return (this.db.prepare("SELECT * FROM monitors WHERE status = 'online'").all() as any[]).map((row) => ({
+      id: row.id,
+      name: row.name,
+      sourceUrl: row.source_url,
+      status: row.status,
+      useCaseId: row.use_case_id,
+      videoSummaryTask: row.video_summary_task,
+      createdAt: row.created_at,
+    }));
+  }
+
   // --- Alerts ---
 
   createAlert(alert: Omit<Alert, "id" | "createdAt" | "ackAt" | "ackBy">): Alert {
@@ -329,7 +354,7 @@ export class SmartBuildingDB {
         a.id as alert_id, a.monitor_id, a.task_id, a.event_id,
         a.use_case, a.alert_type, a.description,
         a.created_at, a.ack_at, a.ack_by,
-        t.id as t_id, t.clip_file_path as t_clip_file_path,
+        t.id as t_id, t.summary_clip_input as t_summary_clip_input,
         t.summary_text as t_summary_text, t.status as t_status,
         e.id as e_id, e.motion_type as e_motion_type,
         e.start_time as e_start_time, e.end_time as e_end_time
@@ -350,7 +375,7 @@ export class SmartBuildingDB {
       }),
       taskDetails: row.t_id ? {
         id: row.t_id,
-        clipFilePath: row.t_clip_file_path,
+        summaryClipInput: row.t_summary_clip_input,
         summaryText: row.t_summary_text,
         status: row.t_status,
       } : undefined,
@@ -403,8 +428,10 @@ export class SmartBuildingDB {
     const result = this.db.prepare(`
       INSERT INTO events
         (monitor_id, motion_type, start_time, end_time, duration_seconds,
+         event_file_path,
          prefilter_passed, prefilter_classes, prefilter_confidence, trajectory_region)
       VALUES (@monitorId, @motionType, @startTime, @endTime, @durationSeconds,
+              @eventFilePath,
               @prefilterPassed, @prefilterClasses, @prefilterConfidence, @trajectoryRegion)
     `).run({
       monitorId: event.monitorId,
@@ -412,6 +439,7 @@ export class SmartBuildingDB {
       startTime: event.startTime,
       endTime: event.endTime ?? null,
       durationSeconds: event.durationSeconds ?? null,
+      eventFilePath: event.eventFilePath ?? null,
       prefilterPassed: event.prefilterPassed ?? null,
       prefilterClasses: event.prefilterClasses ?? null,
       prefilterConfidence: event.prefilterConfidence ?? null,
@@ -466,16 +494,16 @@ export class SmartBuildingDB {
 
   // --- Video Summary Tasks ---
 
-  createTask(task: Pick<VideoSummaryTask, "monitorId" | "eventId" | "clipStartTime" | "clipEndTime" | "clipFilePath" | "status">): VideoSummaryTask {
+  createTask(task: Pick<VideoSummaryTask, "monitorId" | "eventId" | "clipStartTime" | "clipEndTime" | "summaryClipInput" | "status">): VideoSummaryTask {
     const result = this.db.prepare(`
-      INSERT INTO video_summary_tasks (monitor_id, event_id, clip_start_time, clip_end_time, clip_file_path, status)
-      VALUES (@monitorId, @eventId, @clipStartTime, @clipEndTime, @clipFilePath, @status)
+      INSERT INTO video_summary_tasks (monitor_id, event_id, clip_start_time, clip_end_time, summary_clip_input, status)
+      VALUES (@monitorId, @eventId, @clipStartTime, @clipEndTime, @summaryClipInput, @status)
     `).run({
       monitorId: task.monitorId,
       eventId: task.eventId ?? null,
       clipStartTime: task.clipStartTime ?? null,
       clipEndTime: task.clipEndTime ?? null,
-      clipFilePath: task.clipFilePath ?? null,
+      summaryClipInput: task.summaryClipInput ?? null,
       status: task.status,
     });
     return this.getTask(result.lastInsertRowid as number)!;
@@ -515,22 +543,6 @@ export class SmartBuildingDB {
     } else {
       this.db.prepare("UPDATE video_summary_tasks SET status = ? WHERE id = ?").run(status, id);
     }
-  }
-
-  // --- Monitor State ---
-
-  getState(monitorId: string): Record<string, unknown> {
-    const row = this.db.prepare("SELECT state_json FROM monitor_state WHERE monitor_id = ?").get(monitorId) as any;
-    if (!row) return {};
-    return JSON.parse(row.state_json);
-  }
-
-  setState(monitorId: string, state: Record<string, unknown>): void {
-    this.db.prepare(`
-      INSERT INTO monitor_state (monitor_id, state_json, updated_at)
-      VALUES (?, ?, datetime('now'))
-      ON CONFLICT(monitor_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at
-    `).run(monitorId, JSON.stringify(state));
   }
 
   // --- Stats ---

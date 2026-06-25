@@ -143,53 +143,44 @@
 **SRT 调试文件**：自动持久化至 `$SMARTBUILDING_DATA_DIR/logs/reports/<monitor_id>_<type>_<start>_<end>_<ts>.srt.txt`
 
 ---
-<!-- TODO: half-job here -->
+
 ## 5. `smartbuilding_monitor_ctl` ✅
 
-**功能**：管理 monitor 生命周期，操作两层：
-1. DB：create / update / delete monitor 记录
-2. videostream-analytics microservice（`:8999`）：RESTful source 管理
+**功能**：原子化管理 monitor 生命周期，三层协调（DB + videostream-analytics + video-worker）在一次调用中完成。
+
+**前置校验（register_source）**：
+1. `use_case_id` / `video_summary_task` / `source_url` 必填
+2. 向 multilevel-video-understanding 服务验证 `video_summary_task` 存在（`GET /v1/tasks/{name}`），不存在则抛出异常并提示注册方法
+
+**状态矩阵（register_source）**：根据 DB / analytics / worker 三列当前状态自动选择处理路径，无需调用方判断。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `action` | enum | ✅ | 见下表 |
 | `monitor_id` | string | — | Monitor ID（除 `list` 外均必填） |
-| `source_url` | string | — | RTSP URL（for `register_source`，必须以 `rtsp://` 开头） |
-| `name` | string | — | 显示名（for `register_source`） |
-| `use_case_id` | string | — | 用例 ID（for `register_source`） |
-| `video_summary_task` | string | — | multilevel-video-understanding 服务中注册的 task 名称（for `register_source`，必填）。per-monitor 配置，存入 DB，`generate_report` 时自动读取 |
-| `pipeline_config` | object | — | Pipeline 配置（for `register_source`，默认启用 motion + recording） |
-| `webhook_url` | string | — | 事件 Webhook URL（for `register_source`，默认 `http://localhost:3101/events`） |
+| `source_url` | string | — | RTSP URL，必须以 `rtsp://` 开头（for `register_source`，必填） |
+| `name` | string | — | 显示名（for `register_source`，可选） |
+| `use_case_id` | string | — | 用例 ID（for `register_source`，**必填**） |
+| `video_summary_task` | string | — | multilevel-video-understanding 服务中已注册的 task 名称（for `register_source`，**必填**，调用前自动验证存在） |
+| `pipeline_config` | object | — | Analytics pipeline 配置（for `register_source`，默认启用 motion + recording） |
+| `webhook_url` | string | — | 事件 Webhook URL（for `register_source`，默认从 `config.eventsWebhook.port` 派生） |
 
 **Actions**：
 
 | action | 功能 | 返回值 |
 |--------|------|--------|
-| `list` | 列出所有已注册 monitors；尝试从 analytics 服务附加实时状态，analytics 不可达时静默忽略，只返回 DB 数据 | Monitor 数组 |
-| `register_source` | 注册新 monitor：写入 DB + 调用 analytics `/register_source`（analytics 立即开始拉流和运动检测）+ 自动启动 video-worker task poller | `{ success, monitor_id }` |
-| `unregister` | 注销 monitor：调用 analytics `DELETE /sources/{id}` + 停止 video-worker + 删除 DB 记录 | `{ success, monitor_id }` |
-| `start` | 恢复推流并启动 video-worker：调用 analytics `/sources/{id}/resume` + 启动 task poller + 更新 DB status=online | `{ success, monitor_id, status }` |
-| `stop` | 暂停推流并停止 video-worker：调用 analytics `/sources/{id}/pause` + 停止 task poller + 更新 DB status=offline | `{ success, monitor_id, status }` |
-| `status` | 查询单个 monitor 状态：DB 记录 + analytics 实时状态（analytics 不可达时 analyticsStatus=null） | Monitor + `analyticsStatus` |
+| `list` | 列出所有已注册 monitors；附加 analytics 实时状态（不可达时 `analyticsReachable=false` + 错误信息） | Monitor 数组（含 `analyticsReachable`, `analyticsStatus`） |
+| `register_source` | 原子注册：按状态矩阵处理 DB / analytics / worker，graceful stop 残留 worker 后重建 | `{ success, monitor_id }` 或 `{ status: "already_running" }` |
+| `unregister` | 注销：graceful stop worker → analytics DELETE（失败静默）→ 删除 DB 记录 | `{ success, monitor_id }` |
+| `start` | 恢复推流：analytics `/resume` + start worker + DB status=online | `{ success, monitor_id, status }` |
+| `stop` | 暂停推流：graceful stop worker → analytics `/pause` → DB status=offline | `{ success, monitor_id, status }` |
+| `status` | 查询状态：DB 记录 + analytics 实时状态（不可达时 `analyticsReachable=false`） | Monitor + `analyticsReachable` + `analyticsStatus` |
 
 ---
 
-## 6. `smartbuilding_rule_eval` ✅
+## 6. `smartbuilding_video_db` ✅
 
-**功能**：手动触发规则评估。扫描近期已完成的 `video_summary_tasks`，从 `summary_text` 中提取 `SEVERITY` 字段，为 `critical` / `warn` 级别的任务创建告警记录。
-
-**通用实现**：正则提取 `SEVERITY: critical|warn|info`，不硬编码用例逻辑。告警只存 `alert_type`（事件标识）和 `description`，severity 留在 `video_summary_tasks` 表，通过 `task_id` 外键追溯。
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `monitor_id` | string | ✅ | Monitor ID |
-| `since` | string | — | ISO 8601 时间戳（默认：过去 24 小时） |
-
-**返回值**：`{ monitor_id, evaluated: number, triggered: number, alerts_created: number }`
-
----
-
-## 7. `smartbuilding_video_db` ✅
+> **实时告警架构说明**：告警由 video-worker 内部的 rule engine callback 驱动——每当 summary task 完成，立刻调用 `defaultRuleEvaluator`（或 use-case Python override）决定是否写入 alert。Agent 通过 `smartbuilding_alert_query` 查询告警，不需要专门的 rule_eval 工具。
 
 **功能**：只读 SQL 查询，直接访问 monitor 数据库。仅允许 `SELECT` 语句。
 
@@ -204,7 +195,7 @@
 
 ---
 
-## 8. `smartbuilding_use_case_validate` ✅
+## 7. `smartbuilding_use_case_validate` ✅
 
 **功能**：验证 video summary prompt 是否覆盖了 schema 中所有必需字段（大小写不敏感子串匹配）。
 
@@ -235,7 +226,6 @@
 | `scene_query` | ✅ | vllm-serving-ipex 集成；ffmpeg resize；帧归档；`<think>` 过滤 |
 | `generate_report` | ✅ | SRT 构建；multilevel-video-understanding caption-only；reports 表写入；debug SRT 持久化 |
 | `monitor_ctl` | ✅ | DB + videostream-analytics 两层管理；RTSP 校验 |
-| `rule_eval` | ✅ | 通用 SEVERITY 提取；告警不冗余存 severity；通过 task_id 外键追溯 |
 | `video_db` | ✅ | 只读 SELECT；防止写操作 |
 | `use_case_validate` | ✅ | 大小写不敏感；返回 missing_fields |
 

@@ -2,19 +2,23 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { parseSummaryFields } from "./summary-parser.js";
+
+export { parseSummaryFields } from "./summary-parser.js";
 
 const execFileAsync = promisify(execFile);
 
 export interface RuleContext {
   monitorId: string;
   useCaseId: string;
-  event: string;
-  severity: string;
-  payload: Record<string, unknown>;
+  taskId: number;
+  summaryText: string;              // full VLM output — rule engine extracts what it needs
+  payload: Record<string, unknown>; // TODO: use-case adapter fills custom fields here
 }
 
 export interface RuleResult {
   shouldAlert: boolean;
+  alertType?: string;    // written to alerts.alert_type
   alertMessage?: string;
 }
 
@@ -25,27 +29,42 @@ const SEVERITY_LEVELS: Record<string, number> = {
   medium: 2,
   high: 3,
   critical: 4,
+  warn: 2,
+  info: 1,
 };
 
 /**
- * Default rule engine: triggers alert when severity >= threshold
- * and event is not in the exclusion list.
+ * Default rule engine: parses summaryText for a SEVERITY field and triggers
+ * an alert when severity level >= threshold (medium/warn = 2).
+ * Field names (SEVERITY/EVENT/DESC) are the default schema convention, not
+ * a hard contract — use-case adapters or Python overrides can use any fields.
  */
 export async function defaultRuleEvaluator(context: RuleContext): Promise<RuleResult> {
-  const level = SEVERITY_LEVELS[context.severity.toLowerCase()] ?? 0;
+  const fields = parseSummaryFields(context.summaryText);
+  const severity = fields["severity"] ?? "info";
+  const level = SEVERITY_LEVELS[severity.toLowerCase()] ?? 0;
   const threshold = 2;
 
+  if (level < threshold) {
+    return { shouldAlert: false };
+  }
+
+  const eventField = fields["event"] ?? fields["alert_type"] ?? "alert";
+  const desc = fields["desc"] ?? fields["description"] ?? context.summaryText.slice(0, 200);
+
   return {
-    shouldAlert: level >= threshold,
-    alertMessage: level >= threshold
-      ? `[${context.useCaseId}] ${context.event}: ${context.severity}`
-      : undefined,
+    shouldAlert: true,
+    alertType: eventField,
+    alertMessage: `[${context.useCaseId}] ${eventField}: ${severity} — ${desc}`,
   };
 }
 
 /**
- * Attempts to load a Python callback override for the given use case.
- * Looks for use-cases/{useCaseId}/evaluate_rules.py
+ * TODO: use-case adapter hook — load a Python override for the given use case.
+ * Looks for use-cases/{useCaseId}/evaluate_rules.py.
+ * Falls back to defaultRuleEvaluator when the file doesn't exist.
+ *
+ * This is a stub. Use-case-specific adapters are implemented in a later phase.
  */
 export async function evaluateWithOverride(
   context: RuleContext,
@@ -65,6 +84,7 @@ export async function evaluateWithOverride(
     const result = JSON.parse(stdout.trim());
     return {
       shouldAlert: Boolean(result.should_alert),
+      alertType: result.alert_type,
       alertMessage: result.alert_message,
     };
   } catch (err: any) {

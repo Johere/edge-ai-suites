@@ -11,14 +11,15 @@ export interface Monitor {
 export interface Event {
   id: number;
   monitorId: string;
-  motionType: string;        // "motion" | "static"
+  motionType: string;          // "motion" | "static"
   startTime: string;
   endTime?: string;
   durationSeconds?: number;
-  prefilterPassed?: number;  // 0 | 1
-  prefilterClasses?: string; // JSON array: ["person","knife"]
+  eventFilePath?: string;      // original video segment (*.mp4)
+  prefilterPassed?: number;    // 0 | 1
+  prefilterClasses?: string;   // JSON array: ["person","knife"]
   prefilterConfidence?: number;
-  trajectoryRegion?: string; // "x0,y0,x1,y1"
+  trajectoryRegion?: string;   // "x0,y0,x1,y1"
   createdAt: string;
 }
 
@@ -40,9 +41,9 @@ export interface VideoSummaryTask {
   clipStartTime?: string;
   clipEndTime?: string;
   clipDuration?: number;
-  clipFilePath?: string;
+  summaryClipInput?: string;   // cropped/prepared clip sent to video summary service (*_input.mp4)
   summaryText?: string;
-  status: "pending" | "processing" | "completed" | "failed";
+  status: "pending" | "processing" | "completed" | "failed" | "ignored";
   errorMessage?: string;
   latencySeconds?: number;
   promptTokens?: number;
@@ -91,7 +92,7 @@ export interface Report {
 export interface AlertWithTask extends Alert {
   taskDetails?: {
     id: number;
-    clipFilePath?: string;
+    summaryClipInput?: string;
     summaryText?: string;
     status: string;
     // User-defined extension fields from video_summary_tasks (e.g. event, severity, desc)
