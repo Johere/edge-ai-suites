@@ -21,11 +21,12 @@ Output is pure ASCII, no matplotlib dependency.
 Usage
 -----
   # Use status JSON as anchor (most accurate; matches eval_prefilter_from_webhook --anchor-mode wallclock)
-  python tools/render_eval_timeline.py \\
-      --srt ../videos/phase2/child-care/composed/child_safety_demo_groundtruth.srt \\
-      --events-json /tmp/child_events_92627.json \\
-      --status-json /tmp/child_status_92627.json \\
-      --source-id cam_child --ss 40
+  python tools/render_eval_timeline.py \
+    --srt ../videos/phase2/child-care/composed/child_safety_demo_groundtruth.srt \
+    --events-json /tmp/child_events_92627.json \
+    --status-json /tmp/child_status_92627.json \
+    --source-id cam_child \
+    --ss 40
 
   # First-event anchor (drifts; use only if no status dump available)
   python tools/render_eval_timeline.py \\
