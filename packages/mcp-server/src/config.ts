@@ -1,19 +1,27 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { SchemaDefinition } from "@smartbuilding-video/db";
 
 export interface ServerConfig {
-  db: {
-    path: string;
-  };
+  // Derived from SMARTBUILDING_DATA_DIR — not settable in config.yaml
+  dataDir: string;        // root: ~/.mcp-smartbuilding (or $SMARTBUILDING_DATA_DIR)
+  dbPath: string;         // dataDir/smartbuilding.db
+  segmentsDir: string;    // dataDir/segments/<monitor_id>/  (latest.jpg, queries/)
+  logsDir: string;        // dataDir/logs/reports/  (SRT debug artifacts)
+
   summaryService: {
     url: string;
+  };
+  vlmService: {
+    url: string;
+    model: string;
+    maxEdgePx: number;
   };
   videostreamAnalytics: {
     url: string;
   };
-  segmentsDir: string;
   schema?: SchemaDefinition;
   pollIntervalMs: number;
   videoSummaryMaxConcurrent: number;
@@ -25,39 +33,36 @@ export interface ServerConfig {
   };
 }
 
-const DEFAULT_CONFIG: ServerConfig = {
-  db: { path: "./data/smartbuilding.db" },
-  summaryService: { url: "http://localhost:8192" },
-  videostreamAnalytics: { url: "http://localhost:8999" },
-  segmentsDir: "./segments",
-  pollIntervalMs: 5000,
-  videoSummaryMaxConcurrent: 2,
-  mcp: { port: 3100 },
-  eventsWebhook: { port: 3101 },
-};
+function resolveDataDir(): string {
+  const env = process.env.SMARTBUILDING_DATA_DIR;
+  if (env) return resolve(env);
+  return join(homedir(), ".mcp-smartbuilding");
+}
 
 export function loadConfig(configPath?: string): ServerConfig {
-  if (!configPath) {
-    return DEFAULT_CONFIG;
-  }
+  const dataDir = resolveDataDir();
 
-  const resolved = resolve(configPath);
-  const raw = readFileSync(resolved, "utf-8");
-  const parsed = parseYaml(raw);
+  const parsed = configPath
+    ? parseYaml(readFileSync(resolve(configPath), "utf-8"))
+    : {};
 
   return {
-    db: { path: parsed?.db?.path ?? DEFAULT_CONFIG.db.path },
-    summaryService: { url: parsed?.summary_service?.url ?? DEFAULT_CONFIG.summaryService.url },
-    videostreamAnalytics: { url: parsed?.videostream_analytics?.url ?? DEFAULT_CONFIG.videostreamAnalytics.url },
-    segmentsDir: parsed?.segments_dir ?? DEFAULT_CONFIG.segmentsDir,
-    pollIntervalMs: parsed?.poll_interval_ms ?? DEFAULT_CONFIG.pollIntervalMs,
-    videoSummaryMaxConcurrent: parsed?.video_summary_max_concurrent ?? DEFAULT_CONFIG.videoSummaryMaxConcurrent,
+    dataDir,
+    dbPath: join(dataDir, "smartbuilding.db"),
+    segmentsDir: join(dataDir, "segments"),
+    logsDir: join(dataDir, "logs", "reports"),
+
+    summaryService: { url: parsed?.summary_service?.url ?? "http://localhost:8192" },
+    vlmService: {
+      url: parsed?.vlm_service?.url ?? "http://localhost:41091/v1",
+      model: parsed?.vlm_service?.model ?? "default",
+      maxEdgePx: parsed?.vlm_service?.max_edge_px ?? 720,
+    },
+    videostreamAnalytics: { url: parsed?.videostream_analytics?.url ?? "http://localhost:8999" },
+    pollIntervalMs: parsed?.poll_interval_ms ?? 5000,
+    videoSummaryMaxConcurrent: parsed?.video_summary_max_concurrent ?? 2,
     schema: parsed?.schema,
-    mcp: {
-      port: parsed?.mcp?.port ?? DEFAULT_CONFIG.mcp!.port,
-    },
-    eventsWebhook: {
-      port: parsed?.events_webhook?.port ?? DEFAULT_CONFIG.eventsWebhook!.port,
-    },
+    mcp: { port: parsed?.mcp?.port ?? 3100 },
+    eventsWebhook: { port: parsed?.events_webhook?.port ?? 3101 },
   };
 }

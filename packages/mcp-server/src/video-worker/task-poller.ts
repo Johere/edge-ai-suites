@@ -3,14 +3,18 @@ import type { SmartBuildingDB } from "@smartbuilding-video/db";
 import type { VideoSummaryClient } from "./video-summary-client.js";
 import type { VideoSummaryYield } from "./video-summary-yield.js";
 import type { AlertCallback } from "./index.js";
+import { defaultRuleEvaluator, type RuleEvaluator } from "@smartbuilding-video/rule-engine";
 
 export class TaskPoller {
   private intervals: Map<string, ReturnType<typeof setInterval>> = new Map();
+  // Tracks the currently in-flight poll promise per monitor for graceful stop
+  private activePoll: Map<string, Promise<void>> = new Map();
   private config: ServerConfig;
   private db: SmartBuildingDB;
   private videoSummaryClient: VideoSummaryClient;
   private yieldManager: VideoSummaryYield;
   private onAlert?: AlertCallback;
+  private ruleEvaluator: RuleEvaluator;
 
   constructor(
     config: ServerConfig,
@@ -18,29 +22,40 @@ export class TaskPoller {
     videoSummaryClient: VideoSummaryClient,
     yieldManager: VideoSummaryYield,
     onAlert?: AlertCallback,
+    ruleEvaluator?: RuleEvaluator,
   ) {
     this.config = config;
     this.db = db;
     this.videoSummaryClient = videoSummaryClient;
     this.yieldManager = yieldManager;
     this.onAlert = onAlert;
+    this.ruleEvaluator = ruleEvaluator ?? defaultRuleEvaluator;
   }
 
   startPolling(monitorId: string): void {
     if (this.intervals.has(monitorId)) return;
 
     const interval = setInterval(() => {
-      this.poll(monitorId);
+      const promise = this.poll(monitorId).then(() => {
+        this.activePoll.delete(monitorId);
+      });
+      this.activePoll.set(monitorId, promise);
     }, this.config.pollIntervalMs);
 
     this.intervals.set(monitorId, interval);
   }
 
-  stopPolling(monitorId: string): void {
+  async stopPolling(monitorId: string): Promise<void> {
     const interval = this.intervals.get(monitorId);
     if (interval) {
       clearInterval(interval);
       this.intervals.delete(monitorId);
+    }
+    // Wait for any in-flight poll to finish before returning
+    const inflight = this.activePoll.get(monitorId);
+    if (inflight) {
+      await inflight;
+      this.activePoll.delete(monitorId);
     }
   }
 
@@ -54,28 +69,33 @@ export class TaskPoller {
       await this.yieldManager.acquire();
       this.db.updateTaskStatus(task.id, "processing");
 
-      const videoPath = `${this.config.segmentsDir}/${task.videoPath}`;
+      const videoPath = task.summaryClipInput ?? "";
       const result = await this.videoSummaryClient.summarize({ videoUrl: videoPath, taskId: String(task.id) });
 
       this.db.updateTaskStatus(task.id, "completed", result.summary);
 
-      if (result.events) {
-        for (const event of result.events) {
-          const severity = String(event.severity ?? "medium");
-          const eventName = String(event.event ?? "unknown");
-          const desc = String(event.desc ?? "");
+      // Evaluate rules via rule engine (defaultRuleEvaluator or injected override)
+      const monitor = this.db.getMonitor(monitorId);
+      const ruleCtx = {
+        monitorId,
+        useCaseId: monitor?.useCaseId ?? "",
+        taskId: task.id,
+        summaryText: result.summary ?? "",
+        payload: {},
+      };
+      const ruleResult = await this.ruleEvaluator(ruleCtx);
 
-          this.db.createAlert({
-            sourceId: monitorId,
-            event: eventName,
-            severity,
-            description: desc,
-            acked: false,
-          });
-
-          if (this.onAlert) {
-            this.onAlert(monitorId, eventName, severity, desc);
-          }
+      if (ruleResult.shouldAlert) {
+        this.db.createAlert({
+          monitorId,
+          taskId: task.id,
+          eventId: task.eventId,
+          useCase: monitor?.useCaseId ?? "",
+          alertType: ruleResult.alertType ?? "alert",
+          description: ruleResult.alertMessage,
+        });
+        if (this.onAlert) {
+          this.onAlert(monitorId);
         }
       }
     } catch (err: any) {

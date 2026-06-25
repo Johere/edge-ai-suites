@@ -55,7 +55,7 @@ export function registerResources(server: McpServer, config: ServerConfig, db: S
     { description: "Recent alerts for a monitor" },
     async (uri, variables) => {
       const id = variables.id as string;
-      const alerts = db.queryAlerts({ sourceId: id, limit: 20 });
+      const alerts = db.queryAlerts({ monitorId: id, limit: 20 });
       return {
         contents: [{
           uri: uri.href,

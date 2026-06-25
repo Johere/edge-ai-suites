@@ -95,7 +95,11 @@
 
 ### Next Steps (WW25)
 
-- [ ] 本地 MCP Inspector smoke test：启动完整 MCP Server（stdio），验证 tools/resources 列表 + 交互
+- [x] 本地 MCP Inspector smoke test：启动完整 MCP Server（stdio），验证 tools/resources 列表 + 交互
+
+### Next Steps (WW26)
+
+- [ ] MCP tools 对照 finalized design 实现
 - [ ] 集成 rule-engine 到 video-worker（task 完成后自动触发 evaluateWithOverride）
 - [ ] 补充 use-cases/ 示例：child_safety/evaluate_rules.py、elder_wakeup/evaluate_rules.py
 - [ ] 端到端集成测试：events webhook → pending task → VLM mock → rule eval → alert → MCP notification
