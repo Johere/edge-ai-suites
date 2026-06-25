@@ -307,7 +307,10 @@ class StreamPipeline(BaseMonitor):
             if not ret:
                 consecutive_failures += 1
                 if consecutive_failures >= self._health_cfg.max_failures:
-                    self._failure_count += consecutive_failures
+                    # Count one connection-level failure; outer loop owns the
+                    # retry/unhealthy decision (counting per-frame failures
+                    # would skip retries entirely on a single bad reconnect).
+                    self._failure_count += 1
                     self._last_failure_time = datetime.now().isoformat(timespec="seconds")
                     logger.warning(
                         "[%s] %d consecutive read failures, reconnecting",
@@ -374,8 +377,10 @@ class StreamPipeline(BaseMonitor):
         if self._prefilter:
             pf_result = self._prefilter.result()
             if not pf_result.passed:
-                if os.path.exists(result.path):
+                try:
                     os.remove(result.path)
+                except FileNotFoundError:
+                    pass
                 logger.debug("[%s] Segment discarded by prefilter: %s", self.source_id, result.path)
                 return
         self._emit_segment(result)
