@@ -1,0 +1,149 @@
+"""Manages registered video sources and their pipelines."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from shared.config import AppConfig, SourceConfig, WebhookConfig, MotionConfig, SegmentConfig, PrefilterConfig, HealthConfig
+from stream_monitor.rtsp_monitor import StreamPipeline
+from sinks import EventSink, WebhookSink
+
+logger = logging.getLogger(__name__)
+
+
+class SourceManager:
+    def __init__(self, config: AppConfig):
+        self.config = config
+        self._default_sink: EventSink = WebhookSink(config.webhook)
+        self._pipelines: dict[str, StreamPipeline] = {}
+
+    def register_source(self, source: SourceConfig) -> dict[str, Any]:
+        """Register and start a new video source pipeline."""
+        if source.source_id in self._pipelines:
+            existing = self._pipelines[source.source_id]
+            if existing.is_running:
+                return {
+                    "status": "already_running",
+                    "source_id": source.source_id,
+                }
+            # Re-register: stop old and create new
+            existing.stop()
+
+        if source.webhook_url:
+            sink = WebhookSink(WebhookConfig(url=source.webhook_url))
+        else:
+            sink = self._default_sink
+
+        pipeline = StreamPipeline(
+            source=source,
+            defaults=self.config.defaults,
+            data_dir=self.config.data_dir,
+            sink=sink,
+            on_remove_callback=self._handle_source_removed,
+        )
+        self._pipelines[source.source_id] = pipeline
+        pipeline.start()
+
+        logger.info("Registered source: %s (%s)", source.source_id, source.rtsp_url)
+        return {
+            "status": "started",
+            "source_id": source.source_id,
+            "rtsp_url": source.rtsp_url,
+        }
+
+    def unregister_source(self, source_id: str) -> dict[str, Any]:
+        """Stop and remove a source pipeline."""
+        pipeline = self._pipelines.pop(source_id, None)
+        if pipeline is None:
+            return {"status": "not_found", "source_id": source_id}
+
+        pipeline.stop()
+        logger.info("Unregistered source: %s", source_id)
+        return {"status": "stopped", "source_id": source_id}
+
+    def _handle_source_removed(self, source_id: str):
+        """Callback: pipeline triggered 'remove' recovery strategy."""
+        self._pipelines.pop(source_id, None)
+        logger.info("Source auto-removed by health policy: %s", source_id)
+
+    def update_pipeline_config(
+        self,
+        source_id: str,
+        motion: MotionConfig | None = None,
+        segment: SegmentConfig | None = None,
+        prefilter: PrefilterConfig | None = None,
+        health: HealthConfig | None = None,
+    ) -> dict[str, Any]:
+        """Hot-update pipeline config (stop + update + restart)."""
+        pipeline = self._pipelines.get(source_id)
+        if pipeline is None:
+            return {"status": "not_found", "source_id": source_id}
+
+        pipeline.stop()
+        pipeline.update_pipeline_config(
+            motion=motion,
+            segment=segment,
+            prefilter=prefilter,
+            health=health,
+        )
+        pipeline.start()
+
+        logger.info("Pipeline config updated: %s", source_id)
+        return {"status": "updated", "source_id": source_id}
+
+    def pause_source(self, source_id: str) -> dict[str, Any]:
+        """Pause a running source pipeline."""
+        pipeline = self._pipelines.get(source_id)
+        if pipeline is None:
+            return {"status": "not_found", "source_id": source_id}
+        if not pipeline.is_running:
+            return {"status": "not_running", "source_id": source_id}
+        pipeline.pause()
+        return {"status": "paused", "source_id": source_id}
+
+    def resume_source(self, source_id: str) -> dict[str, Any]:
+        """Resume a paused source pipeline."""
+        pipeline = self._pipelines.get(source_id)
+        if pipeline is None:
+            return {"status": "not_found", "source_id": source_id}
+        if not pipeline.is_running:
+            return {"status": "not_running", "source_id": source_id}
+        pipeline.resume()
+        return {"status": "online", "source_id": source_id}
+
+    def get_sources(self) -> list[dict[str, Any]]:
+        """List all registered sources with their status."""
+        return [
+            {
+                "source_id": sid,
+                "rtsp_url": p.rtsp_url,
+                "use_case": p.source.use_case,
+                "status": p.status,
+                "running": p.is_running,
+                "health": p.health_info,
+            }
+            for sid, p in self._pipelines.items()
+        ]
+
+    def get_source_status(self, source_id: str) -> dict[str, Any] | None:
+        """Get status of a specific source."""
+        pipeline = self._pipelines.get(source_id)
+        if not pipeline:
+            return None
+        return {
+            "source_id": source_id,
+            "rtsp_url": pipeline.rtsp_url,
+            "use_case": pipeline.source.use_case,
+            "status": pipeline.status,
+            "running": pipeline.is_running,
+            "health": pipeline.health_info,
+        }
+
+    def stop_all(self):
+        """Stop all pipelines gracefully."""
+        for pipeline in self._pipelines.values():
+            pipeline.stop()
+        self._pipelines.clear()
+        self._default_sink.close()
+        logger.info("All sources stopped")
