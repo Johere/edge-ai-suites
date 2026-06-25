@@ -123,18 +123,27 @@ def main():
         prog="videostream-analytics",
         description="Smart Building video stream analytics",
     )
-    parser.add_argument("--config", "-c", default=None, help="Path to config.yaml")
-    parser.add_argument("--host", default=None, help="Listen host (serve mode)")
-    parser.add_argument("--port", type=int, default=None, help="Listen port (serve mode)")
+    # Defaults are set on the main parser only; subparsers use SUPPRESS so
+    # omitting a flag after the subcommand doesn't overwrite a value the user
+    # passed before the subcommand.
+    parser.set_defaults(config=None, host=None, port=None)
+    parser.add_argument("--config", "-c", default=argparse.SUPPRESS,
+                        help="Path to config.yaml")
+    parser.add_argument("--host", default=argparse.SUPPRESS,
+                        help="Listen host (serve mode)")
+    parser.add_argument("--port", type=int, default=argparse.SUPPRESS,
+                        help="Listen port (serve mode)")
     subparsers = parser.add_subparsers(dest="command")
 
     # serve
     p_serve = subparsers.add_parser("serve", help="Start HTTP API server")
-    p_serve.add_argument("--host", default=None, help="Listen host")
-    p_serve.add_argument("--port", type=int, default=None, help="Listen port")
+    p_serve.add_argument("--config", "-c", default=argparse.SUPPRESS, help="Path to config.yaml")
+    p_serve.add_argument("--host", default=argparse.SUPPRESS, help="Listen host")
+    p_serve.add_argument("--port", type=int, default=argparse.SUPPRESS, help="Listen port")
 
     # stream
     p_stream = subparsers.add_parser("stream", help="Single-source mode (dev/debug)")
+    p_stream.add_argument("--config", "-c", default=argparse.SUPPRESS, help="Path to config.yaml")
     p_stream.add_argument("--source-id", required=True, help="Source identifier")
     p_stream.add_argument("--rtsp-url", required=True, help="RTSP stream URL")
     p_stream.add_argument("--use-case", default="default", help="Use case label")
