@@ -42,6 +42,9 @@ markers = [
 addopts = "-m 'not integration'"
 timeout = 60
 
+[tool.setuptools]
+py-modules = ["cli", "service", "source_worker", "__main__"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["shared*", "sinks*", "stream_monitor*"]
