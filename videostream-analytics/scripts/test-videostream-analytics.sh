@@ -19,6 +19,10 @@
 #   HTTP_PROXY / HTTPS_PROXY  — Docker build 代理
 #   MODEL_DIR                 — YOLO 模型目录 (默认 ~/models)
 #   DATA_DIR                  — clip 输出目录 (默认 /tmp/smartbuilding-clips)
+#   VIDEOS_DIR                — 测试视频根目录 (默认 <repo>/videos)
+#   MEDIAMTX_BIN              — MediaMTX 可执行文件 (默认 ~/.local/bin/mediamtx)
+#   MEDIAMTX_CONFIG           — MediaMTX 配置 (默认 tools/mediamtx.yml)
+#   DOCKER_IMAGE              — VSA 容器镜像名 (默认 videostream-analytics:latest)
 # =============================================================================
 set -euo pipefail
 
@@ -34,9 +38,9 @@ if [[ ! -x "$PYTHON" ]]; then
 fi
 
 # --- Configuration ---
-MEDIAMTX_BIN="/home/lijie/.local/bin/mediamtx"
-MEDIAMTX_CONFIG="${REPO_DIR}/openclaw-smarthome-demo/smarthome-monitor/mediamtx.yml"
-DOCKER_IMAGE="agent-aismarthome-videostream-analytics:latest"
+MEDIAMTX_BIN="${MEDIAMTX_BIN:-$HOME/.local/bin/mediamtx}"
+MEDIAMTX_CONFIG="${MEDIAMTX_CONFIG:-${PROJECT_DIR}/tools/mediamtx.yml}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-videostream-analytics:latest}"
 RTSP_PORT=8554
 WEBHOOK_PORT=9999
 ANALYTICS_PORT=8999
@@ -44,10 +48,11 @@ DATA_DIR="${DATA_DIR:-/tmp/smartbuilding-clips}"
 MODEL_DIR="${MODEL_DIR:-$HOME/models}"
 
 # --- Test Videos ---
-VIDEO_CHILD="${REPO_DIR}/videos/phase2/child-care/composed/child_safety_demo.mp4"
-VIDEO_FRIDGE="${REPO_DIR}/videos/demo006-2_expanded.mp4"
-VIDEO_ELDER_DAY1="${REPO_DIR}/videos/phase2/elder_wakeup/composed/day1_elder_wakeup.mp4"
-VIDEO_ELDER_DAY2="${REPO_DIR}/videos/phase2/elder_wakeup/composed/day2_elder_wakeup.mp4"
+VIDEOS_DIR="${VIDEOS_DIR:-${REPO_DIR}/videos}"
+VIDEO_CHILD="${VIDEOS_DIR}/phase2/child-care/composed/child_safety_demo.mp4"
+VIDEO_FRIDGE="${VIDEOS_DIR}/demo006-2_expanded.mp4"
+VIDEO_ELDER_DAY1="${VIDEOS_DIR}/phase2/elder_wakeup/composed/day1_elder_wakeup.mp4"
+VIDEO_ELDER_DAY2="${VIDEOS_DIR}/phase2/elder_wakeup/composed/day2_elder_wakeup.mp4"
 
 # --- Parse Arguments ---
 RUN_UNIT=true
