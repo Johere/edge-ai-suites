@@ -10,6 +10,7 @@ Adapted from openclaw-smarthome-demo/stream_monitor/pipeline/prefilter_yolo.py.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -128,6 +129,9 @@ class YoloPrefilter:
 
         logger.info("Loading OpenVINO model: %s (device=%s)", model_path, device)
         core = ov.Core()
+        cache_dir = os.environ.get("OV_CACHE_DIR", "/tmp/ov_cache")
+        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        core.set_property({"CACHE_DIR": cache_dir})
         ov_model = core.read_model(model_path)
 
         try:

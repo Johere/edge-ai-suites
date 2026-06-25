@@ -29,7 +29,7 @@ defaults:
     min_confidence: 0.4
     min_frames_hit: 1
     detect_fps: 2.0
-    device: "CPU"
+    device: "NPU"
   health:
     max_failures: 30
     recovery_strategy: "retry"
