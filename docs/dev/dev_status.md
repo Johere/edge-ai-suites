@@ -4,10 +4,10 @@
 
 | # | Task | Effort | Schedule | Status |
 |---|------|--------|----------|--------|
-| 1 | MCP Server structure dev | 2W | WW24–WW25 | In progress |
-| 2 | TypeScript library (tools) | 1W | WW26 | Not started |
-| 3 | MCP resource subscription | 1W | WW27 | Not started |
-| 4 | Support DB schema customization | 1W | WW28 | Not started |
+| 1 | MCP Server structure dev | 2W | WW24–WW25 | Done |
+| 2 | TypeScript library (tools) | 1W | WW26 | Done |
+| 3 | MCP resource subscription | 1W | WW27 | In progress (alert subscription pending) |
+| 4 | Support DB schema customization | 1W | WW28 | Done (delivered together with WW26 use_case_dict refactor) |
 
 ## Agent Framework Adapter
 
@@ -97,9 +97,68 @@
 
 - [x] 本地 MCP Inspector smoke test：启动完整 MCP Server（stdio），验证 tools/resources 列表 + 交互
 
-### Next Steps (WW26)
+### Done (WW26)
 
-- [ ] MCP tools 对照 finalized design 实现
-- [ ] 集成 rule-engine 到 video-worker（task 完成后自动触发 evaluateWithOverride）
-- [ ] 补充 use-cases/ 示例：child_safety/evaluate_rules.py、elder_wakeup/evaluate_rules.py
-- [ ] 端到端集成测试：events webhook → pending task → VLM mock → rule eval → alert → MCP notification
+**Tools & Pipeline 重构 — 对齐 finalized design + use-case-agnostic 原则**
+
+- [x] MCP tools 对照 finalized design 重写（alert_query / plan_ctl / scene_query / generate_report / monitor_ctl / monitors_compose / video_db / use_case_validate）
+  - `alert_query`：action 枚举（latest/by_date/ack/stats），LEFT JOIN 返回 task+event 详情，stats 聚合避免拉全表
+  - `plan_ctl`：per-monitor 任意 JSON plan（list/upsert/delete），按 name 唯一
+  - `scene_query`：vllm-serving-ipex 集成，ffmpeg `scale` resize（无额外依赖），帧归档至 `queries/<date>/`
+  - `generate_report`：SRT 时间线构建 + multilevel-video-understanding caption-only；dataSource / filter / defaultType 从 `useCaseDict.reports` 派生
+  - `monitor_ctl`：原子化三层协调（DB + videostream-analytics + video-worker），8 场景幂等矩阵；register_source 内联调 use_case_validate 做前置校验
+  - `monitors_compose`：docker-compose 风格（validate/up/down/restart/ps），管理一份 monitors.yaml；启动时 autoRegisterMonitors 走同一逻辑
+  - `use_case_validate`：三步检查（use_case 存在 / summary service + task 存在 / prompt ↔ schema 一致性）；既被 register_source 前置调用，也支持独立 dry-check
+- [x] **rule-engine 集成 task-poller**：task 完成后自动 `parseSummaryFields` → `evaluateWithOverride`，shouldAlert → `db.createAlert`
+- [x] **schema-aware summary parser**：parser 只解析 `config.schema.video_summary_tasks.extensions` 声明的字段，required 缺失 → logger.warn；解析结果直接落 video_summary_tasks 扩展列
+- [x] **alerts 表瘦身**：删除 `severity` / `alert_type` 列（属于扩展字段，alerts 表保持 use-case-agnostic 最小固定结构）；severity 通过 task_id JOIN video_summary_tasks 追溯
+- [x] **DB updateTaskStatus 写扩展列**：PRAGMA table_info 过滤 + SQL identifier 校验，动态 UPDATE 实际存在的扩展列
+- [x] **SchemaManager.validatePromptSchema 复用**：use_case_validate 真正调用此静态方法，不再各自手写校验
+
+**配置文件重构 — 职责分离 + use_case 复用**
+
+- [x] `config.yaml`：新增顶层 `use_case_dict`（video_summary_task / evaluate_rules_path / reports 集中声明），一个 use_case 可被多 monitor 引用
+- [x] `monitors.yaml`：独立配置文件，通过 `--monitors <path>` CLI 加载；monitor 用 `use_case` 字段引用 use_case_dict key
+- [x] 启动时引用一致性校验：monitor.use_case 必须存在于 use_case_dict，否则启动报错退出
+- [x] use_case agnostic 收尾：`rtsp_url` → `source_url`（任意 analytics 支持协议）、`use_case_id` / `use_case_name` 统一为 `use_case`
+
+**运行时基础设施**
+
+- [x] 自动注册管线：`autoRegisterMonitors` 在 `reconcileOnStartup` 后自动执行；videostream-analytics 不可达只 warn 不阻塞 server 启动
+- [x] `--config` / `--monitors` CLI 参数解耦；`SMARTBUILDING_DATA_DIR` 环境变量统一数据根目录
+- [x] 数据目录约定：`<data_dir>/{smartbuilding.db, segments/<id>/{latest.jpg,recordings/<date>/,motion_events/<date>/,queries/<date>/}, logs/{reports,monitors/<id>/<date>.log}}`
+- [x] `monitor_ctl register_source` payload 加 `data_dir` 字段（`[TODO: analytics-side]` 等 analytics 端实现）
+- [x] Per-monitor 日志：`logger.ts` 加 `monitorLogger(id, dir, maxFileMb)` 工厂，按天 rotate + 单文件大小防护
+- [x] 自动清理：`storage-cleaner.ts` 启动 + 每 24h 清理过期日志和 segments 子目录（按 `logging.retention_days` / `storage.retention_days`）
+- [x] 删除 EventsEndpoint 的 onEvent 通知路径（噪音大，alert subscription 应走 task-poller onAlert）
+
+**Schema/DB 完整对齐 db-schema-design.md**
+
+- [x] 加 `events` + `recordings` 表（webhook 写入）
+- [x] `video_summary_tasks` 补全所有字段（`event_id`, `clip_*`, `summary_clip_input`, `summary_text`, latency, tokens）
+- [x] `reports` 表加 use_case / motion_count / image_tokens 等完整字段
+- [x] `monitor_state` 加 use_case 列
+- [x] migrateSchema 函数（一次性已对齐，后续按需新增）
+
+**Docs**
+
+- [x] `docs/implements/tools_list.md` — 全 8 工具清单（参数、actions、返回值）
+- [x] `docs/implements/monitor-ctl-analytics-integration.md` — analytics 服务端集成契约（含 `data_dir` 字段 TODO）
+- [x] `docs/implements/schema-usecase-parser-alerts-pipeline.md` — schema → use_case → parser → alerts → DB 端到端链路说明
+
+### Next Steps (WW27)
+
+**MCP resource subscription — alert 推送**
+
+- [ ] `resources.ts` 暴露 `smartbuilding://monitor/<id>/alerts` 资源（订阅入口）
+- [ ] `task-poller.ts` 的 `onAlert` callback 实际推送 `notifications/resources/updated`（当前只 logger.debug）
+- [ ] 联调 agent（Claude Desktop / OpenClaw）的 resource subscribe 流程
+
+**Use case adapter wrapper（与 Jie 联调）**
+
+- [ ] use-cases/ 示例：child_safety/evaluate_rules.py、elder_wakeup/evaluate_rules.py
+- [ ] 端到端集成测试：webhook → pending task → VLM → rule eval (含 Python override) → alert → MCP notification
+
+**Default rule engine 进化（持续）**
+
+- [ ] TODO from rule-engine/index.ts: more elegant alerts rule, may configurable per-monitor

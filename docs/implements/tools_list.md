@@ -149,8 +149,8 @@
 **功能**：原子化管理 monitor 生命周期，三层协调（DB + videostream-analytics + video-worker）在一次调用中完成。
 
 **前置校验（register_source）**：
-1. `use_case` / `video_summary_task` / `source_url` 必填
-2. 向 multilevel-video-understanding 服务验证 `video_summary_task` 存在（`GET /v1/tasks/{name}`），不存在则抛出异常并提示注册方法
+1. `use_case` / `source_url` 必填；`use_case` 必须是 `config.yaml` 中 `use_case_dict` 的 key
+2. 内部调用 `smartbuilding_use_case_validate`：检查 use_case 存在、`video_summary_task` 在 multilevel-video-understanding 中注册、LOCAL_PROMPT 覆盖所有 required schema 字段。任一失败 → 拒绝注册（不写 DB / 不调 analytics / 不启 worker）
 
 **状态矩阵（register_source）**：根据 DB / analytics / worker 三列当前状态自动选择处理路径，无需调用方判断。
 
@@ -160,10 +160,11 @@
 | `monitor_id` | string | — | Monitor ID（除 `list` 外均必填） |
 | `source_url` | string | — | 视频源 URL（任意 videostream-analytics 支持的协议：rtsp / http / onvif / file / ...）（for `register_source`，必填） |
 | `name` | string | — | 显示名（for `register_source`，可选） |
-| `use_case` | string | — | 用例 ID（for `register_source`，**必填**） |
-| `video_summary_task` | string | — | multilevel-video-understanding 服务中已注册的 task 名称（for `register_source`，**必填**，调用前自动验证存在） |
+| `use_case` | string | — | `config.yaml` `use_case_dict` 中的 key（for `register_source`，**必填**） |
 | `pipeline_config` | object | — | Analytics pipeline 配置（for `register_source`，默认启用 motion + recording） |
 | `webhook_url` | string | — | 事件 Webhook URL（for `register_source`，默认从 `config.eventsWebhook.port` 派生） |
+
+**注意**：`video_summary_task` 不再作为 tool 参数 — 由 use_case 派生（从 `config.useCaseDict[use_case].video_summary_task`）。
 
 **Actions**：
 
@@ -196,7 +197,7 @@
 
 | action | 类比 docker compose | 行为 |
 |--------|----|------|
-| `validate` | `compose config` | 仅校验字段合法性（source_url / use_case / video_summary_task），不修改任何状态 |
+| `validate` | `compose config` | 仅校验字段合法性（source_url / use_case 必填；use_case 必须存在于 `config.useCaseDict`），不修改任何状态 |
 | `up` | `compose up -d` | 对每个 `enabled !== false` 的 monitor：若 DB+analytics+worker 三层状态全一致 → 跳过（`already_running`）；否则调 `monitor_ctl register_source` |
 | `down` | `compose down` | 对 yaml 内每个 monitor：调 `monitor_ctl unregister`（DB + analytics + worker 全清理） |
 | `restart` | `compose restart` | 等价于 `down` → `up` |
@@ -257,23 +258,39 @@
 
 ## 7. `smartbuilding_use_case_validate` ✅
 
-**功能**：验证 video summary prompt 是否覆盖了 schema 中所有必需字段（大小写不敏感子串匹配）。
+**功能**：一站式校验 use_case 与 multilevel-video-understanding 服务的连通性、存在性、合法性。任何想验证 use_case 是否可用的代码路径都走它（已被 `monitor_ctl register_source` 内联为前置 step）。
+
+**三步检查**（顺序，任一失败即整体失败）：
+
+1. **use_case 存在性**：`use_case` 是否在 `config.yaml` 的 `use_case_dict` 中
+2. **summary service + task 存在性**：GET `<summaryService.url>/v1/tasks/<video_summary_task>`（task 名从 `use_case_dict[use_case].video_summary_task` 取）
+3. **schema 一致性**：`config.schema.video_summary_tasks.extensions` 中所有 `required:true` 字段必须出现在 task 的 LOCAL_PROMPT 中（大小写不敏感子串）
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `use_case` | string | ✅ | 用例标识符（仅用于标注，不影响逻辑） |
-| `prompt` | string | ✅ | 待验证的 video summary prompt 文本 |
-| `required_fields` | string[] | ✅ | schema 中标记为 required 的字段名列表 |
+| `use_case` | string | ✅ | use_case_dict 中的 key |
 
 **返回值**：
 ```json
 {
   "valid": true | false,
   "use_case": "child_safety",
-  "missing_fields": ["severity"],
-  "checked_fields": ["event", "severity", "desc"]
+  "video_summary_task": "child_safety_monitor",
+  "checks": {
+    "use_case_known": true,
+    "task_registered": true,
+    "schema_consistent": false
+  },
+  "required_fields": ["event", "severity", "desc"],
+  "optional_fields": ["confidence"],
+  "missing_required_in_prompt": ["desc"],
+  "missing_optional_in_prompt": ["confidence"],
+  "prompt_tail": "...output format: EVENT: <type>\nSEVERITY: critical|warn|info",
+  "suggestion": "Append the following required fields to LOCAL_PROMPT of `child_safety_monitor`: desc"
 }
 ```
+
+`valid` 仅由 required 字段决定；optional 字段缺失只作信息提示。失败时 `prompt_tail` 给 LOCAL_PROMPT 的末尾 200 字符（输出格式约定通常在 prompt 末尾），方便用户定位修改位置。
 
 ---
 

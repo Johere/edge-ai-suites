@@ -58,14 +58,18 @@ export async function applyMonitorConfig(
           results.push({ monitor_id: monitorId, status: "already_running" });
           continue;
         }
-        mLog.info(`up: register_source + start worker (source=${cfg.source_url} task=${cfg.video_summary_task})`);
+        const ucCfg = config.useCaseDict[cfg.use_case];
+        if (!ucCfg) {
+          throw new Error(`unknown use_case "${cfg.use_case}". Known: [${Object.keys(config.useCaseDict).join(", ")}]`);
+        }
+        mLog.info(`up: register_source + start worker (source=${cfg.source_url} use_case=${cfg.use_case} task=${ucCfg.video_summary_task})`);
         await monitorCtl(db, config.videostreamAnalytics.url, workerService, {
           action: "register_source",
           monitor_id: monitorId,
           source_url: cfg.source_url,
           name: cfg.name ?? monitorId,
           use_case: cfg.use_case,
-          video_summary_task: cfg.video_summary_task,
+          video_summary_task: ucCfg.video_summary_task,
           pipeline_config: cfg.pipeline_config,
           webhook_url: `http://localhost:${config.eventsWebhook!.port}/events`,
           data_dir: join(config.segmentsDir, monitorId),

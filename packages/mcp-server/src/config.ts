@@ -8,9 +8,27 @@ export interface MonitorConfig {
   enabled?: boolean;
   name?: string;
   source_url: string;
-  use_case: string;
-  video_summary_task: string;
+  use_case: string;                          // references a key in config.yaml's use_case_dict
   pipeline_config?: Record<string, unknown>;
+}
+
+/**
+ * Use case definition. Lives in config.yaml under `use_case_dict.<key>` —
+ * one entry per use case, referenced by monitors via `use_case` field.
+ */
+export interface UseCaseConfig {
+  description?: string;
+  /** Task name registered in multilevel-video-understanding service. */
+  video_summary_task: string;
+  /** Optional path to Python override script for rule evaluation. */
+  evaluate_rules_path?: string;
+  /** Optional default report configuration consumed by smartbuilding_generate_report. */
+  reports?: {
+    data_source: "events" | "alerts" | "video_summary_tasks";
+    default_type?: "daily" | "weekly" | "monthly";
+    filter?: Record<string, unknown>;
+    include_live_snapshot?: boolean;
+  };
 }
 
 export interface ServerConfig {
@@ -41,6 +59,8 @@ export interface ServerConfig {
   eventsWebhook?: {
     port?: number;
   };
+  /** Use case library — loaded from config.yaml top-level `use_case_dict` block. */
+  useCaseDict: Record<string, UseCaseConfig>;
   // Loaded separately via loadMonitorsConfig(--monitors <path>); not from config.yaml
   monitors?: Record<string, MonitorConfig>;
   logging: {
@@ -100,6 +120,7 @@ export function loadConfig(configPath?: string): ServerConfig {
       retentionDays: parsed?.storage?.retention_days ?? 7,
       cleanupSubdirs: parsed?.storage?.cleanup_subdirs ?? ["motion_events", "recordings", "queries"],
     },
+    useCaseDict: parseUseCaseDict(parsed?.use_case_dict),
   };
 }
 
@@ -115,6 +136,30 @@ export function loadMonitorsConfig(monitorsPath: string): Record<string, Monitor
     throw new Error(`monitors file ${resolved} must contain a top-level \`monitors:\` block`);
   }
   return expandEnvVars(parsed.monitors) as Record<string, MonitorConfig>;
+}
+
+/**
+ * Parse and validate the `use_case_dict` block from config.yaml.
+ * Each entry must have `video_summary_task` (no default — caller must declare it).
+ * Returns an empty dict when the block is absent (legal: server can run with no monitors).
+ */
+function parseUseCaseDict(raw: unknown): Record<string, UseCaseConfig> {
+  if (!raw) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("config: use_case_dict must be a mapping of <name>: <UseCaseConfig>");
+  }
+  const expanded = expandEnvVars(raw) as Record<string, any>;
+  const out: Record<string, UseCaseConfig> = {};
+  for (const [name, entry] of Object.entries(expanded)) {
+    if (!entry || typeof entry !== "object") {
+      throw new Error(`config: use_case_dict.${name} must be an object`);
+    }
+    if (!entry.video_summary_task) {
+      throw new Error(`config: use_case_dict.${name} must declare video_summary_task`);
+    }
+    out[name] = entry as UseCaseConfig;
+  }
+  return out;
 }
 
 function expandEnvVars(value: unknown): unknown {

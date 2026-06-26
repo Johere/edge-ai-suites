@@ -8,7 +8,6 @@ function rowToAlert(row: any): Alert {
     taskId: row.task_id ?? undefined,
     eventId: row.event_id ?? undefined,
     useCase: row.use_case ?? "",
-    alertType: row.alert_type,
     description: row.description ?? undefined,
     createdAt: row.created_at,
     ackAt: row.ack_at ?? undefined,
@@ -136,7 +135,6 @@ CREATE TABLE IF NOT EXISTS alerts (
   task_id INTEGER REFERENCES video_summary_tasks(id),
   event_id INTEGER REFERENCES events(id),
   use_case TEXT NOT NULL DEFAULT '',
-  alert_type TEXT NOT NULL,
   description TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   ack_at TEXT,
@@ -285,14 +283,13 @@ export class SmartBuildingDB {
 
   createAlert(alert: Omit<Alert, "id" | "createdAt" | "ackAt" | "ackBy">): Alert {
     const result = this.db.prepare(`
-      INSERT INTO alerts (monitor_id, task_id, event_id, use_case, alert_type, severity, description)
-      VALUES (@monitorId, @taskId, @eventId, @useCase, @alertType, @description)
+      INSERT INTO alerts (monitor_id, task_id, event_id, use_case, description)
+      VALUES (@monitorId, @taskId, @eventId, @useCase, @description)
     `).run({
       monitorId: alert.monitorId,
       taskId: alert.taskId ?? null,
       eventId: alert.eventId ?? null,
       useCase: alert.useCase,
-      alertType: alert.alertType,
       description: alert.description ?? null,
     });
     return this.getAlert(result.lastInsertRowid as number)!;
@@ -352,7 +349,7 @@ export class SmartBuildingDB {
     const query = `
       SELECT
         a.id as alert_id, a.monitor_id, a.task_id, a.event_id,
-        a.use_case, a.alert_type, a.description,
+        a.use_case, a.description,
         a.created_at, a.ack_at, a.ack_by,
         t.id as t_id, t.summary_clip_input as t_summary_clip_input,
         t.summary_text as t_summary_text, t.status as t_status,
@@ -369,7 +366,7 @@ export class SmartBuildingDB {
     return (this.db.prepare(query).all(...bindings) as any[]).map((row): AlertWithTask => ({
       ...rowToAlert({
         id: row.alert_id, monitor_id: row.monitor_id, task_id: row.task_id,
-        event_id: row.event_id, use_case: row.use_case, alert_type: row.alert_type,
+        event_id: row.event_id, use_case: row.use_case,
         description: row.description,
         created_at: row.created_at, ack_at: row.ack_at, ack_by: row.ack_by,
       }),
@@ -525,24 +522,53 @@ export class SmartBuildingDB {
     id: number,
     status: VideoSummaryTask["status"],
     summaryText?: string,
-    meta?: { latencySeconds?: number; promptTokens?: number; imageTokens?: number; completionTokens?: number; errorMessage?: string }
+    meta?: { latencySeconds?: number; promptTokens?: number; imageTokens?: number; completionTokens?: number; errorMessage?: string },
+    /**
+     * User-defined schema extension fields (e.g. event/severity/desc) parsed from summaryText.
+     * Only keys that actually exist as columns in video_summary_tasks are written;
+     * unknown keys are silently dropped to avoid SQL errors when schema hasn't been applied.
+     */
+    extensionFields?: Record<string, string | number | null>,
   ): void {
-    if (status === "completed" || status === "failed") {
-      this.db.prepare(`
-        UPDATE video_summary_tasks
-        SET status = ?, summary_text = ?, completed_at = datetime('now'),
-            latency_seconds = ?, prompt_tokens = ?, image_tokens = ?,
-            completion_tokens = ?, error_message = ?
-        WHERE id = ?
-      `).run(
-        status, summaryText ?? null,
-        meta?.latencySeconds ?? null, meta?.promptTokens ?? null,
-        meta?.imageTokens ?? null, meta?.completionTokens ?? null,
-        meta?.errorMessage ?? null, id
-      );
-    } else {
+    if (status !== "completed" && status !== "failed") {
       this.db.prepare("UPDATE video_summary_tasks SET status = ? WHERE id = ?").run(status, id);
+      return;
     }
+
+    // Base columns always updated on completion
+    const sets: string[] = [
+      "status = ?",
+      "summary_text = ?",
+      "completed_at = datetime('now')",
+      "latency_seconds = ?",
+      "prompt_tokens = ?",
+      "image_tokens = ?",
+      "completion_tokens = ?",
+      "error_message = ?",
+    ];
+    const values: any[] = [
+      status, summaryText ?? null,
+      meta?.latencySeconds ?? null, meta?.promptTokens ?? null,
+      meta?.imageTokens ?? null, meta?.completionTokens ?? null,
+      meta?.errorMessage ?? null,
+    ];
+
+    // Filter extensionFields to columns that actually exist (SchemaManager may not have run yet)
+    if (extensionFields && Object.keys(extensionFields).length > 0) {
+      const existingCols = new Set(
+        (this.db.prepare(`PRAGMA table_info(video_summary_tasks)`).all() as any[])
+          .map((r) => r.name)
+      );
+      for (const [col, val] of Object.entries(extensionFields)) {
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(col)) continue;  // safety: SQL identifier check
+        if (!existingCols.has(col)) continue;
+        sets.push(`${col} = ?`);
+        values.push(val ?? null);
+      }
+    }
+
+    values.push(id);
+    this.db.prepare(`UPDATE video_summary_tasks SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   }
 
   // --- Stats ---

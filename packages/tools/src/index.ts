@@ -18,4 +18,8 @@ export type {
 } from "./monitors-compose.js";
 export { dbManager } from "./db-manager.js";
 export { useCaseValidate } from "./use-case-validate.js";
-export type { UseCaseValidateParams, ValidationResult } from "./use-case-validate.js";
+export type {
+  UseCaseValidateParams,
+  UseCaseValidateDeps,
+  UseCaseValidateResult,
+} from "./use-case-validate.js";

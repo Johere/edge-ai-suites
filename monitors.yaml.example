@@ -7,6 +7,9 @@
 # warning and continues (use the smartbuilding_monitors_compose tool
 # to retry later: action=up).
 #
+# `use_case` must reference a key in config.yaml's `use_case_dict` —
+# that's where video_summary_task / evaluate_rules_path / reports live.
+#
 # `source_url` accepts any URL scheme supported by videostream-analytics
 # (rtsp / http / onvif / file / ...). `pipeline_config` is forwarded
 # verbatim to videostream-analytics /register_source.
@@ -18,7 +21,6 @@ monitors:
     name: "Fridge Camera"
     source_url: rtsp://localhost:8554/live/fridge
     use_case: fridge
-    video_summary_task: refrigerator_monitor_en
     pipeline_config:
       motion: { enabled: true, diff_threshold: 25, area_ratio: 1.5, stable_frames: 30 }
       prefilter: { enabled: false }
@@ -30,7 +32,6 @@ monitors:
     name: "Child Safety Camera"
     source_url: rtsp://localhost:8554/live/child
     use_case: child_safety
-    video_summary_task: child_safety_monitor
     pipeline_config:
       motion: { enabled: true, diff_threshold: 25 }
       # Hazard prefilter: NPU YOLO11s gates summary requests on target classes.
@@ -56,7 +57,6 @@ monitors:
     name: "Elder Bedroom Camera"
     source_url: rtsp://localhost:8554/live/elder
     use_case: elder_wakeup
-    video_summary_task: elder_wakeup_monitor
     pipeline_config:
       motion: { enabled: true, diff_threshold: 25 }
       recording: { enabled: true, interval_seconds: 60 }
@@ -67,7 +67,6 @@ monitors:
     name: "Elder Bedroom Camera 2"
     source_url: rtsp://localhost:8554/live/elder2
     use_case: elder_wakeup
-    video_summary_task: elder_wakeup_monitor
     pipeline_config:
       motion: { enabled: true, diff_threshold: 25 }
       recording: { enabled: true, interval_seconds: 60 }

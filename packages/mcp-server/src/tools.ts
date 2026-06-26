@@ -80,26 +80,32 @@ export function registerTools(
 
   // --- smartbuilding_generate_report ---
   server.registerTool("smartbuilding_generate_report", {
-    description: "Generate daily/weekly/monthly/custom report. Uses config-driven dataSource (events|alerts|tasks).",
+    description: "Generate daily/weekly/monthly/custom report. Data source / filter / default type " +
+      "are derived from config.yaml use_case_dict[monitor.use_case].reports; tool params override config.",
     inputSchema: {
       monitor_id: z.string().describe("Monitor ID"),
       type: z.enum(["daily", "weekly", "monthly", "custom"]).optional()
-        .describe("Report type (default: daily). custom requires period_start + period_end."),
+        .describe("Report type (default: from use_case_dict reports.default_type, or 'daily'). custom requires period_start + period_end."),
       period_start: z.string().optional().describe("Start of period, closed interval. YYYY-MM-DD or YYYY-MM-DD HH:MM (for type=custom)"),
       period_end: z.string().optional().describe("End of period, closed interval. YYYY-MM-DD or YYYY-MM-DD HH:MM (for type=custom)"),
-      data_source: z.enum(["events", "alerts", "tasks"]).optional()
-        .describe("Data source override (default: alerts)"),
+      data_source: z.enum(["events", "alerts", "video_summary_tasks"]).optional()
+        .describe("DB table to query (default: from use_case_dict reports.data_source, or 'alerts')"),
       filter: z.record(z.unknown()).optional()
-        .describe("Key-value filter applied to data source table (e.g. {motion_type: 'motion'})"),
+        .describe("Key-value filter on data_source table columns (default: from use_case_dict reports.filter)"),
     },
   }, async (params) => {
     try {
       const { generateReport } = await import("@smartbuilding-video/tools");
+
+      // Derive config from useCaseDict[monitor.use_case].reports; tool params override.
+      const monitor = db.getMonitor(params.monitor_id);
+      const ucReports = monitor ? config.useCaseDict[monitor.useCase]?.reports : undefined;
+
       const reportConfig = {
-        dataSource: (params.data_source ?? "alerts") as "events" | "alerts" | "tasks",
-        defaultType: "daily" as const,
+        dataSource: (params.data_source ?? ucReports?.data_source ?? "alerts") as "events" | "alerts" | "video_summary_tasks",
+        defaultType: (ucReports?.default_type ?? "daily") as "daily" | "weekly" | "monthly",
         summaryServiceUrl: config.summaryService.url,
-        filter: params.filter as Record<string, any> | undefined,
+        filter: (params.filter ?? ucReports?.filter) as Record<string, any> | undefined,
         debugDir: config.reportsLogsDir,
       };
       const result = await generateReport(db, reportConfig, {
@@ -116,40 +122,41 @@ export function registerTools(
 
   // --- smartbuilding_monitor_ctl ---
   server.registerTool("smartbuilding_monitor_ctl", {
-    description: "Manage monitor lifecycle: register_source | unregister | start | stop | status | list",
+    description: "Manage monitor lifecycle: register_source | unregister | start | stop | status | list. " +
+      "For register_source, use_case must be a key in config.yaml's use_case_dict; the tool runs " +
+      "smartbuilding_use_case_validate as a pre-check (rejecting if missing fields or summary service issues).",
     inputSchema: {
       action: z.enum(["start", "stop", "register_source", "unregister", "status", "list"])
         .describe("Control action"),
       monitor_id: z.string().optional().describe("Monitor ID (required for all except list)"),
-      source_url: z.string().optional().describe("RTSP URL (for register_source)"),
+      source_url: z.string().optional().describe("Source URL — any protocol videostream-analytics supports (for register_source)"),
       name: z.string().optional().describe("Display name (for register_source)"),
-      use_case: z.string().optional().describe("Use case ID (required for register_source)"),
-      video_summary_task: z.string().optional().describe("Task name registered in multilevel-video-understanding service (required for register_source; verified to exist before proceeding)"),
+      use_case: z.string().optional().describe("Use case key from config.yaml use_case_dict (required for register_source)"),
       pipeline_config: z.record(z.unknown()).optional().describe("Pipeline config object (for register_source)"),
       webhook_url: z.string().optional().describe("Events webhook URL (default: derived from config eventsWebhook.port)"),
     },
   }, async (params) => {
     try {
-      // Validate required fields for register_source
+      // For register_source: validate use case via use_case_validate (existence + summary service + schema)
+      let videoSummaryTask: string | undefined;
       if (params.action === "register_source") {
         if (!params.use_case) throw new Error("use_case is required for register_source");
-        if (!params.video_summary_task) throw new Error("video_summary_task is required for register_source");
-        // webhook_url defaulted from config below if caller omits
-
-        // Verify video_summary_task exists in multilevel-video-understanding service before register_source
-        const taskName = params.video_summary_task;
-        const resp = await fetch(`${config.summaryService.url}/v1/tasks/${taskName}`, {
-          signal: AbortSignal.timeout(8000),
-        }).catch((err) => { throw new Error(`multilevel-video-understanding (${config.summaryService.url}) unreachable: ${err.message}`); });
-        if (resp.status === 404) {
+        const { useCaseValidate } = await import("@smartbuilding-video/tools");
+        const v = await useCaseValidate({ use_case: params.use_case }, {
+          useCaseDict: config.useCaseDict,
+          summaryServiceUrl: config.summaryService.url,
+          schema: config.schema,
+        });
+        if (!v.valid) {
           throw new Error(
-            `video_summary_task "${taskName}" not found in multilevel-video-understanding service (${config.summaryService.url}). ` +
-            `Register the task first: POST ${config.summaryService.url}/v1/tasks`
+            v.error
+              ? `use_case_validate failed: ${v.error}`
+              : `use_case_validate failed: ${v.suggestion ?? "schema mismatch"}. ` +
+                `missing required fields: [${(v.missing_required_in_prompt ?? []).join(", ")}]. ` +
+                `prompt tail: "${v.prompt_tail ?? ""}"`,
           );
         }
-        if (!resp.ok) {
-          throw new Error(`Failed to verify video_summary_task "${taskName}": HTTP ${resp.status}`);
-        }
+        videoSummaryTask = v.video_summary_task;
       }
 
       const { monitorCtl } = await import("@smartbuilding-video/tools");
@@ -157,10 +164,12 @@ export function registerTools(
       // Inject derived fields the tool layer can compute from server config:
       // - data_dir: per-monitor segment root for analytics to write into
       // - webhook_url: this server's /events endpoint (caller may override)
+      // - video_summary_task: derived from use_case_dict[use_case]
       const enriched: any = { ...params };
       if (params.action === "register_source" && params.monitor_id) {
         enriched.data_dir ??= join(config.segmentsDir, params.monitor_id);
         enriched.webhook_url ??= `http://localhost:${config.eventsWebhook!.port}/events`;
+        enriched.video_summary_task = videoSummaryTask;
       }
       const result = await monitorCtl(db, config.videostreamAnalytics.url, workerService, enriched);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
@@ -203,7 +212,7 @@ export function registerTools(
       const filtered: Record<string, any> = params.monitor_id
         ? (params.monitor_id in monitors ? { [params.monitor_id]: monitors[params.monitor_id] } : {})
         : monitors;
-      const errors = validateMonitors(filtered);
+      const errors = validateMonitors(filtered, Object.keys(config.useCaseDict));
       const valid = errors.length === 0;
 
       const output: any = { action: params.action, file: resolvedPath, valid, errors, results: [] };
@@ -276,15 +285,27 @@ export function registerTools(
 
   // --- smartbuilding_use_case_validate ---
   server.registerTool("smartbuilding_use_case_validate", {
-    description: "Validate that a video summary prompt covers all required schema fields (case-insensitive substring check)",
+    description: "Validate a use_case end-to-end: (1) exists in config.yaml use_case_dict, " +
+      "(2) its video_summary_task is registered in multilevel-video-understanding, " +
+      "(3) the task's LOCAL_PROMPT covers every required schema field. " +
+      "Used as a pre-check inside monitor_ctl register_source; also callable standalone for dry-run.",
     inputSchema: {
-      use_case: z.string().describe("Use case identifier (for labeling only)"),
-      prompt: z.string().describe("Video summary prompt text to validate"),
-      required_fields: z.array(z.string()).describe("Field names that must appear in the prompt"),
+      use_case: z.string().describe("Use case key from config.yaml use_case_dict"),
     },
   }, async (params) => {
-    const { useCaseValidate } = await import("@smartbuilding-video/tools");
-    const result = useCaseValidate(params);
-    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    try {
+      const { useCaseValidate } = await import("@smartbuilding-video/tools");
+      const result = await useCaseValidate(params, {
+        useCaseDict: config.useCaseDict,
+        summaryServiceUrl: config.summaryService.url,
+        schema: config.schema,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        isError: !result.valid,
+      };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
   });
 }

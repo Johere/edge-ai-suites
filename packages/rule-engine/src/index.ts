@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 import { parseSummaryFields } from "./summary-parser.js";
 
 export { parseSummaryFields } from "./summary-parser.js";
+export type { ParsedSummary } from "./summary-parser.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -12,67 +12,60 @@ export interface RuleContext {
   monitorId: string;
   useCase: string;
   taskId: number;
-  summaryText: string;              // full VLM output — rule engine extracts what it needs
-  payload: Record<string, unknown>; // TODO: use-case adapter fills custom fields here
+  /** Full VLM summary text — kept for Python overrides that want raw access. */
+  summaryText: string;
+  /**
+   * Parsed schema fields injected by task-poller (already extracted via parseSummaryFields).
+   * Caller-provided so rule engine doesn't re-parse.
+   */
+  payload: { fields?: Record<string, string> } & Record<string, unknown>;
 }
 
 export interface RuleResult {
   shouldAlert: boolean;
-  alertType?: string;    // written to alerts.alert_type
+  /** Human-readable alert text. Stored in alerts.description (no separate alert_type column). */
   alertMessage?: string;
 }
 
 export type RuleEvaluator = (context: RuleContext) => Promise<RuleResult>;
 
-const SEVERITY_LEVELS: Record<string, number> = {
-  low: 1,
-  medium: 2,
-  high: 3,
-  critical: 4,
-  warn: 2,
-  info: 1,
-};
+const SEVERITY_TRIGGER = new Set(["critical", "warn"]);
 
 /**
- * Default rule engine: parses summaryText for a SEVERITY field and triggers
- * an alert when severity level >= threshold (medium/warn = 2).
- * Field names (SEVERITY/EVENT/DESC) are the default schema convention, not
- * a hard contract — use-case adapters or Python overrides can use any fields.
+ * Default rule: alert when the parsed `severity` field is "critical" or "warn".
+ *
+ * TODO: need more elegant alerts rule (may configurable per-monitor?).
+ *   Current behavior is intentionally minimal — complex use-case logic should
+ *   live in the Python override (see evaluateWithOverride).
  */
 export async function defaultRuleEvaluator(context: RuleContext): Promise<RuleResult> {
-  const fields = parseSummaryFields(context.summaryText);
-  const severity = fields["severity"] ?? "info";
-  const level = SEVERITY_LEVELS[severity.toLowerCase()] ?? 0;
-  const threshold = 2;
+  const fields = context.payload?.fields ?? {};
+  const severity = (fields["severity"] ?? "").toLowerCase();
+  if (!SEVERITY_TRIGGER.has(severity)) return { shouldAlert: false };
 
-  if (level < threshold) {
-    return { shouldAlert: false };
-  }
-
-  const eventField = fields["event"] ?? fields["alert_type"] ?? "alert";
-  const desc = fields["desc"] ?? fields["description"] ?? context.summaryText.slice(0, 200);
-
+  const eventField = fields["event"] ?? "alert";
+  const desc = fields["desc"] ?? fields["description"] ?? "";
   return {
     shouldAlert: true,
-    alertType: eventField,
     alertMessage: `[${context.useCase}] ${eventField}: ${severity} — ${desc}`,
   };
 }
 
 /**
- * TODO: use-case adapter hook — load a Python override for the given use case.
- * Looks for use-cases/{useCase}/evaluate_rules.py.
- * Falls back to defaultRuleEvaluator when the file doesn't exist.
+ * Run a Python rule override at the given path, falling back to defaultRuleEvaluator
+ * when overridePath is null or the file does not exist.
  *
- * This is a stub. Use-case-specific adapters are implemented in a later phase.
+ * The override script receives the RuleContext as JSON on argv[1] and is expected to
+ * print a JSON object: { should_alert: bool, alert_message?: string }.
+ *
+ * Path is supplied by the caller (typically derived from config.useCaseDict[useCase].evaluate_rules_path)
+ * rather than hard-coded — use case adapters live anywhere on disk.
  */
 export async function evaluateWithOverride(
   context: RuleContext,
-  useCasesDir: string,
+  overridePath: string | null,
 ): Promise<RuleResult> {
-  const overridePath = resolve(useCasesDir, context.useCase, "evaluate_rules.py");
-
-  if (!existsSync(overridePath)) {
+  if (!overridePath || !existsSync(overridePath)) {
     return defaultRuleEvaluator(context);
   }
 
@@ -84,7 +77,6 @@ export async function evaluateWithOverride(
     const result = JSON.parse(stdout.trim());
     return {
       shouldAlert: Boolean(result.should_alert),
-      alertType: result.alert_type,
       alertMessage: result.alert_message,
     };
   } catch (err: any) {
@@ -92,3 +84,6 @@ export async function evaluateWithOverride(
     return defaultRuleEvaluator(context);
   }
 }
+
+// Internal helper export to silence unused-import warning if parser is not referenced elsewhere
+void parseSummaryFields;

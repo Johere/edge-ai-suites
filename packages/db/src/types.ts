@@ -62,12 +62,12 @@ export interface Alert {
   taskId?: number;
   eventId?: number;
   useCase: string;
-  alertType: string;
   description?: string;
   createdAt: string;
   ackAt?: string;
   ackBy?: string;
-  // severity is NOT stored here — retrieve via task_id JOIN to video_summary_tasks
+  // severity / alert_type / event are NOT stored here — alerts is use-case-agnostic.
+  // To retrieve schema-extension fields, JOIN via task_id → video_summary_tasks.
 }
 
 export interface Report {

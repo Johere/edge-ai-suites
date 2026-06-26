@@ -8,8 +8,8 @@ export interface MonitorDeclaration {
   enabled?: boolean;
   name?: string;
   source_url?: string;
+  /** References a key in config.yaml's use_case_dict. */
   use_case?: string;
-  video_summary_task?: string;
   pipeline_config?: Record<string, unknown>;
 }
 
@@ -56,12 +56,22 @@ export function loadMonitorsFromYaml(filePath: string): {
   return { resolvedPath: resolved, monitors: expandEnvVars(parsed.monitors) as Record<string, MonitorDeclaration> };
 }
 
-export function validateMonitors(monitors: Record<string, MonitorDeclaration>): ValidationError[] {
+export function validateMonitors(
+  monitors: Record<string, MonitorDeclaration>,
+  knownUseCases?: string[],
+): ValidationError[] {
   const errors: ValidationError[] = [];
   for (const [id, cfg] of Object.entries(monitors)) {
     if (!cfg.source_url) errors.push({ monitor_id: id, field: "source_url", reason: "missing" });
-    if (!cfg.use_case) errors.push({ monitor_id: id, field: "use_case", reason: "missing" });
-    if (!cfg.video_summary_task) errors.push({ monitor_id: id, field: "video_summary_task", reason: "missing" });
+    if (!cfg.use_case) {
+      errors.push({ monitor_id: id, field: "use_case", reason: "missing" });
+    } else if (knownUseCases && !knownUseCases.includes(cfg.use_case)) {
+      errors.push({
+        monitor_id: id,
+        field: "use_case",
+        reason: `unknown use_case "${cfg.use_case}". Known: [${knownUseCases.join(", ")}]`,
+      });
+    }
   }
   return errors;
 }

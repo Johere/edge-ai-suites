@@ -3,7 +3,6 @@ import type { SmartBuildingDB } from "@smartbuilding-video/db";
 import { TaskPoller } from "./task-poller.js";
 import { VideoSummaryClient } from "./video-summary-client.js";
 import { VideoSummaryYield } from "./video-summary-yield.js";
-import { defaultRuleEvaluator, type RuleEvaluator } from "@smartbuilding-video/rule-engine";
 
 export interface MonitorWorker {
   monitorId: string;
@@ -21,11 +20,10 @@ export class WorkerService {
     config: ServerConfig,
     db: SmartBuildingDB,
     onAlert?: AlertCallback,
-    ruleEvaluator: RuleEvaluator = defaultRuleEvaluator,
   ) {
     const summaryClient = new VideoSummaryClient(config.summaryService.url);
     const yieldManager = new VideoSummaryYield(config.videoSummaryMaxConcurrent);
-    this.poller = new TaskPoller(config, db, summaryClient, yieldManager, onAlert, ruleEvaluator);
+    this.poller = new TaskPoller(config, db, summaryClient, yieldManager, onAlert);
   }
 
   start(monitorId: string): void {

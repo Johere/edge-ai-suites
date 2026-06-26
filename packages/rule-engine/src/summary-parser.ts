@@ -1,32 +1,48 @@
+import type { SchemaExtension } from "@smartbuilding-video/db";
+
+export interface ParsedSummary {
+  /** Fields successfully extracted from the summary text, keyed by lowercased schema field name. */
+  fields: Record<string, string>;
+  /** Names of required fields (schema.required:true) that were NOT found in the summary. */
+  missingRequired: string[];
+}
+
 /**
- * Parse structured key-value fields from a VLM summary text.
+ * Schema-aware parser for VLM summary output.
  *
- * Supports the common "KEY: value" line format (e.g. SEVERITY: critical).
- * Field names are user-defined via schema extensions — this function makes
- * no assumptions about which keys exist; it returns all key-value pairs found.
+ * Uses the schema `extensions` array as the source of truth — only field names
+ * declared there are parsed; lines starting with other keys are ignored.
  *
- * Matching is case-insensitive on keys; values are returned as-is (trimmed).
- *
- * Example input:
- *   "SEVERITY: critical\nEVENT: fall\nDESC: Person fell from chair"
- *
- * Example output:
- *   { severity: "critical", event: "fall", desc: "Person fell from chair" }
+ * Matching is case-insensitive: a schema field `event` matches `EVENT:`, `Event:`, or `event:`.
+ * First occurrence wins when duplicates appear.
  */
-export function parseSummaryFields(summaryText: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  if (!summaryText) return result;
+export function parseSummaryFields(
+  summaryText: string,
+  extensions: SchemaExtension[],
+): ParsedSummary {
+  const fields: Record<string, string> = {};
+  if (!summaryText || extensions.length === 0) {
+    return { fields, missingRequired: extensions.filter((e) => e.required).map((e) => e.name) };
+  }
+
+  // Build lookup: lowercased schema name → canonical (lowercased) name to store under
+  const wanted = new Map<string, string>();
+  for (const ext of extensions) wanted.set(ext.name.toLowerCase(), ext.name.toLowerCase());
 
   for (const line of summaryText.split("\n")) {
     const colon = line.indexOf(":");
     if (colon < 1) continue;
     const key = line.slice(0, colon).trim().toLowerCase();
+    const canonical = wanted.get(key);
+    if (!canonical) continue; // not a schema field — skip
+    if (fields[canonical]) continue; // first occurrence wins
     const value = line.slice(colon + 1).trim();
-    if (key && value && !result[key]) {
-      // First occurrence wins (consistent with design doc §7)
-      result[key] = value;
-    }
+    if (value) fields[canonical] = value;
   }
 
-  return result;
+  const missingRequired = extensions
+    .filter((e) => e.required && !fields[e.name.toLowerCase()])
+    .map((e) => e.name);
+
+  return { fields, missingRequired };
 }
