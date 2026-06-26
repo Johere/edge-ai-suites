@@ -149,7 +149,7 @@
 **功能**：原子化管理 monitor 生命周期，三层协调（DB + videostream-analytics + video-worker）在一次调用中完成。
 
 **前置校验（register_source）**：
-1. `use_case_id` / `video_summary_task` / `source_url` 必填
+1. `use_case` / `video_summary_task` / `source_url` 必填
 2. 向 multilevel-video-understanding 服务验证 `video_summary_task` 存在（`GET /v1/tasks/{name}`），不存在则抛出异常并提示注册方法
 
 **状态矩阵（register_source）**：根据 DB / analytics / worker 三列当前状态自动选择处理路径，无需调用方判断。
@@ -158,9 +158,9 @@
 |------|------|------|------|
 | `action` | enum | ✅ | 见下表 |
 | `monitor_id` | string | — | Monitor ID（除 `list` 外均必填） |
-| `source_url` | string | — | RTSP URL，必须以 `rtsp://` 开头（for `register_source`，必填） |
+| `source_url` | string | — | 视频源 URL（任意 videostream-analytics 支持的协议：rtsp / http / onvif / file / ...）（for `register_source`，必填） |
 | `name` | string | — | 显示名（for `register_source`，可选） |
-| `use_case_id` | string | — | 用例 ID（for `register_source`，**必填**） |
+| `use_case` | string | — | 用例 ID（for `register_source`，**必填**） |
 | `video_summary_task` | string | — | multilevel-video-understanding 服务中已注册的 task 名称（for `register_source`，**必填**，调用前自动验证存在） |
 | `pipeline_config` | object | — | Analytics pipeline 配置（for `register_source`，默认启用 motion + recording） |
 | `webhook_url` | string | — | 事件 Webhook URL（for `register_source`，默认从 `config.eventsWebhook.port` 派生） |
@@ -178,11 +178,71 @@
 
 ---
 
+## 5a. `smartbuilding_monitors_compose` ✅
+
+**功能**：以 docker-compose 风格批量管理一个 `monitors.yaml` 文件中声明的全部 monitor。工具**每次都直接读盘**（不依赖 MCP server 启动时加载的 `config.monitors`），可针对任意路径的 yaml 文件操作。
+
+**与 `monitor_ctl` 的区别**：
+- `monitor_ctl` 操作**单个** monitor，参数全部通过 tool 调用传入
+- `monitors_compose` 操作**一个 yaml 内的全部**（或指定 id 的）monitor，配置来自文件
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `action` | enum | ✅ | `validate` \| `up` \| `down` \| `restart` \| `ps` |
+| `file` | string | ✅ | monitors.yaml 路径（绝对或相对 cwd） |
+| `monitor_id` | string | — | 仅对单个 monitor 执行（不传 = yaml 内所有 monitor） |
+
+**Actions**：
+
+| action | 类比 docker compose | 行为 |
+|--------|----|------|
+| `validate` | `compose config` | 仅校验字段合法性（source_url / use_case / video_summary_task），不修改任何状态 |
+| `up` | `compose up -d` | 对每个 `enabled !== false` 的 monitor：若 DB+analytics+worker 三层状态全一致 → 跳过（`already_running`）；否则调 `monitor_ctl register_source` |
+| `down` | `compose down` | 对 yaml 内每个 monitor：调 `monitor_ctl unregister`（DB + analytics + worker 全清理） |
+| `restart` | `compose restart` | 等价于 `down` → `up` |
+| `ps` | `compose ps` | 列出每个 monitor 的 DB / analytics / worker 三层运行状态，不修改 |
+
+**幂等检查（up）**：三步全 true 才算 already_running：
+1. DB 存在该 monitor 且 `status=online`
+2. analytics `GET /sources/<id>/status` 返回 200
+3. workerService 内存中有该 monitor 的 poller
+
+**返回结构**：
+```typescript
+{
+  action: "validate" | "up" | "down" | "restart" | "ps";
+  file: string;                  // 解析后的绝对路径
+  valid: boolean;                // 任何 action 都会先校验
+  errors: { monitor_id, field, reason }[];
+  results: {
+    monitor_id: string;
+    status: "ok" | "already_running" | "skipped" | "failed";
+    reason?: string;
+    state?: {                    // 仅 ps 填充
+      db: { exists, status? };
+      analytics: { reachable, status?, error? };
+      worker: { running };
+    };
+  }[];
+}
+```
+
+**使用场景**：
+- `validate`：部署前 CI 检查 yaml 合法性
+- `up`：MCP server 启动时 videostream-analytics 不可达 → 修复后手动触发补救式注册
+- `down`：维护窗口暂停 yaml 内所有 monitor
+- `restart`：yaml 改了 source_url / pipeline_config 后强制重新注册
+- `ps`：快速看哪些 cam 跑着、状态对不对
+
+**Per-monitor 日志**：每次 compose 操作的详细 trace（包括 analytics 响应、错误堆栈）写入 `$SMARTBUILDING_DATA_DIR/logs/monitors/<monitor_id>/<YYYY-MM-DD>.log`。
+
+---
+
 ## 6. `smartbuilding_video_db` ✅
 
 > **实时告警架构说明**：告警由 video-worker 内部的 rule engine callback 驱动——每当 summary task 完成，立刻调用 `defaultRuleEvaluator`（或 use-case Python override）决定是否写入 alert。Agent 通过 `smartbuilding_alert_query` 查询告警，不需要专门的 rule_eval 工具。
 
-**功能**：只读 SQL 查询，直接访问 monitor 数据库。仅允许 `SELECT` 语句。
+**功能**：只读 SQL 查询，直接访问 SQLite 数据库的所有表（`monitors` / `alerts` / `video_summary_tasks` / `events` / `recordings` / `reports` / `plans` / `monitor_state`）。仅允许 `SELECT` 语句。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -201,7 +261,7 @@
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `use_case_name` | string | ✅ | 用例标识符（仅用于标注，不影响逻辑） |
+| `use_case` | string | ✅ | 用例标识符（仅用于标注，不影响逻辑） |
 | `prompt` | string | ✅ | 待验证的 video summary prompt 文本 |
 | `required_fields` | string[] | ✅ | schema 中标记为 required 的字段名列表 |
 
@@ -209,7 +269,7 @@
 ```json
 {
   "valid": true | false,
-  "use_case_name": "child_safety",
+  "use_case": "child_safety",
   "missing_fields": ["severity"],
   "checked_fields": ["event", "severity", "desc"]
 }
@@ -226,6 +286,7 @@
 | `scene_query` | ✅ | vllm-serving-ipex 集成；ffmpeg resize；帧归档；`<think>` 过滤 |
 | `generate_report` | ✅ | SRT 构建；multilevel-video-understanding caption-only；reports 表写入；debug SRT 持久化 |
 | `monitor_ctl` | ✅ | DB + videostream-analytics 两层管理；RTSP 校验 |
+| `monitors_compose` | ✅ | docker-compose 风格批量管理 monitors.yaml；validate/up/down/restart/ps；三层幂等检查 |
 | `video_db` | ✅ | 只读 SELECT；防止写操作 |
 | `use_case_validate` | ✅ | 大小写不敏感；返回 missing_fields |
 
@@ -243,14 +304,22 @@ export SMARTBUILDING_DATA_DIR=/path/to/data   # 默认: ~/.mcp-smartbuilding
 
 ```
 $SMARTBUILDING_DATA_DIR/
-├── smartbuilding.db               — SQLite 数据库
-├── segments/
+├── smartbuilding.db                       — SQLite 数据库
+├── segments/                              — videostream-analytics 写入区（由 register_source 的 data_dir 字段约定）
 │   └── <monitor_id>/
-│       ├── latest.jpg             — 最新帧（scene_query 读取）
-│       └── queries/<date>/        — scene_query 帧归档
+│       ├── latest.jpg                     — 最新帧（scene_query 读取，每帧 overwrite）
+│       ├── recordings/<YYYY-MM-DD>/       — 录像片段（按天 rotate，超过 storage.retention_days 自动清理）
+│       ├── motion_events/<YYYY-MM-DD>/    — 运动事件帧（按天 rotate，超过 storage.retention_days 自动清理）
+│       └── queries/<YYYY-MM-DD>/          — scene_query 帧归档（按天 rotate，自动清理）
 └── logs/
-    └── reports/                   — generate_report SRT 调试文件
+    ├── reports/                           — generate_report SRT 调试文件
+    └── monitors/<monitor_id>/<YYYY-MM-DD>.log  — per-monitor 详细日志（按天 rotate，超过 logging.retention_days 自动清理；单文件超过 logging.max_file_mb 暂停 append）
 ```
+
+**自动清理**：MCP server 启动时 + 每 24h 周期执行：
+- `logs/monitors/<id>/` 下日期早于 `today - logging.retention_days`（默认 14）的 `.log` 删除
+- `segments/<id>/{motion_events,recordings,queries}/` 下日期早于 `today - storage.retention_days`（默认 7）的整个日期目录删除
+- 跳过 `latest.jpg`、`pipeline.db`、非日期格式的子目录名（防止误删）
 
 ---
 

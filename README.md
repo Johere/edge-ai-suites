@@ -14,9 +14,37 @@ An AI Agent-native video analysis platform designed for MCP (Model Context Proto
 
 The platform is built around MCP, enabling AI agents (OpenClaw, Hermes, etc.) to orchestrate video analysis pipelines through standardized tool interfaces.
 
+## MCP Server Workflow
+
+The MCP server (`packages/mcp-server`) sits between AI agents and three external services:
+
+```
+   agents (OpenClaw / Claude Desktop / Hermes)
+                │  MCP tools
+                ▼
+        ┌──────────────┐  ← config.yaml + monitors.yaml
+        │  MCP Server  │  :3100
+        └──┬───────┬──┬┘
+   /events │       │  │ chat/completions (single frame)
+    :3101  │       │  │
+           ▼       ▼  ▼
+   videostream-  multilevel-      vllm-serving-ipex
+   analytics     video-under-     :41091
+   :8999         standing :8192   (scene_query)
+   (RTSP +       (caption-only
+   motion         SRT report)
+   detect)
+```
+
+### Lifecycle
+
+- **Startup** (`mcp-server --config config.yaml --monitors monitors.yaml`): load config → init DB → reconcile crash residue → auto-register each `enabled: true` monitor → start storage cleaner (24h period; purges expired logs and segments)
+- **Runtime** (per monitor): analytics `:8999` pulls RTSP → POSTs events to `:3101` → MCP worker polls pending tasks → calls `:8192` for summary → rule-engine decides alert → agents query via MCP tools
+- **Shutdown** (SIGINT/SIGTERM): stop cleaner → graceful-stop all workers → pause analytics sources → close DB
+
 ## Status
 
-Early development — stay tuned.
+Early development — see [docs/implements/](docs/implements/) for per-component status and [docs/dev/](docs/dev/) for migration plans.
 
 ## License
 

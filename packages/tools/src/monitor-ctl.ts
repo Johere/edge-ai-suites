@@ -11,10 +11,18 @@ export interface MonitorCtlParams {
   monitor_id?: string;
   source_url?: string;
   name?: string;
-  use_case_id?: string;
+  use_case?: string;
   video_summary_task?: string;
   pipeline_config?: Record<string, unknown>;
   webhook_url?: string;
+  /**
+   * Absolute path videostream-analytics should write this monitor's data to.
+   * Convention: <data_dir>/latest.jpg, <data_dir>/recordings/<YYYY-MM-DD>/,
+   *             <data_dir>/motion_events/<YYYY-MM-DD>/.
+   * MCP server's storage cleaner relies on this layout to safely purge old day-folders.
+   * Required for register_source.
+   */
+  data_dir?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +57,7 @@ async function analyticsRegister(
   monitorId: string,
   sourceUrl: string,
   webhookUrl: string,
+  dataDir: string,
   pipelineConfig?: Record<string, unknown>
 ): Promise<void> {
   const resp = await fetch(`${analyticsUrl}/register_source`, {
@@ -56,8 +65,9 @@ async function analyticsRegister(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       source_id: monitorId,
-      rtsp_url: sourceUrl,
+      source_url: sourceUrl,
       webhook_url: webhookUrl,
+      data_dir: dataDir,    // analytics writes latest.jpg + recordings/<date>/ + motion_events/<date>/ here
       pipeline: pipelineConfig ?? {
         motion: { enabled: true },
         prefilter: { enabled: false },
@@ -108,25 +118,26 @@ export async function monitorCtl(
     case "register_source": {
       if (!params.monitor_id) throw new Error("monitor_id is required for register_source");
       if (!params.source_url) throw new Error("source_url is required for register_source");
-      if (!params.source_url.startsWith("rtsp://") && !params.source_url.startsWith("rtsp:"))
-        throw new Error(`Invalid RTSP URL: ${params.source_url} — must start with rtsp://`);
       if (!params.video_summary_task)
         throw new Error("video_summary_task is required for register_source");
+      if (!params.data_dir)
+        throw new Error("data_dir is required for register_source (where analytics should write latest.jpg / recordings/ / motion_events/)");
 
       const monitorId = params.monitor_id;
       if (!params.webhook_url) throw new Error("webhook_url is required for register_source");
       const webhookUrl = params.webhook_url;
+      const dataDir = params.data_dir;
 
       const dbExists = !!db.getMonitor(monitorId);
       const analyticsExists = await analyticsSourceExists(analyticsUrl, monitorId); // throws if unreachable
       const workerRunning = workerService.workers.has(monitorId);
 
-      // use_case_id consistency check (only when DB record exists and param provided)
-      if (dbExists && params.use_case_id) {
+      // use_case consistency check (only when DB record exists and param provided)
+      if (dbExists && params.use_case) {
         const existing = db.getMonitor(monitorId)!;
-        if (existing.useCaseId !== params.use_case_id) {
+        if (existing.useCase !== params.use_case) {
           throw new Error(
-            `use_case_id mismatch: DB="${existing.useCaseId}", got="${params.use_case_id}". Unregister first to change use_case.`
+            `use_case mismatch: DB="${existing.useCase}", got="${params.use_case}". Unregister first to change use_case.`
           );
         }
       }
@@ -151,7 +162,7 @@ export async function monitorCtl(
         db.updateMonitor(monitorId, {
           sourceUrl: params.source_url,
           ...(params.name ? { name: params.name } : {}),
-          ...(params.use_case_id ? { useCaseId: params.use_case_id } : {}),
+          ...(params.use_case ? { useCase: params.use_case } : {}),
           videoSummaryTask: params.video_summary_task,
           status: "offline",
         });
@@ -161,13 +172,13 @@ export async function monitorCtl(
           name: params.name ?? monitorId,
           sourceUrl: params.source_url,
           status: "offline",
-          useCaseId: params.use_case_id ?? "default",
+          useCase: params.use_case ?? "default",
           videoSummaryTask: params.video_summary_task,
         });
       }
 
       // Register with analytics (starts stream processing immediately)
-      await analyticsRegister(analyticsUrl, monitorId, params.source_url, webhookUrl, params.pipeline_config);
+      await analyticsRegister(analyticsUrl, monitorId, params.source_url, webhookUrl, dataDir, params.pipeline_config);
       db.updateMonitorStatus(monitorId, "online");
 
       // Start video-worker task poller

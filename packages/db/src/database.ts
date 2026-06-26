@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS monitors (
   name TEXT NOT NULL,
   source_url TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'offline',
-  use_case_id TEXT NOT NULL,
+  use_case TEXT NOT NULL,
   video_summary_task TEXT NOT NULL,
   created_at TEXT DEFAULT (datetime('now'))
 );
@@ -201,15 +201,15 @@ export class SmartBuildingDB {
 
   createMonitor(monitor: Omit<Monitor, "createdAt">): Monitor {
     const stmt = this.db.prepare(`
-      INSERT INTO monitors (id, name, source_url, status, use_case_id, video_summary_task)
-      VALUES (@id, @name, @sourceUrl, @status, @useCaseId, @videoSummaryTask)
+      INSERT INTO monitors (id, name, source_url, status, use_case, video_summary_task)
+      VALUES (@id, @name, @sourceUrl, @status, @useCase, @videoSummaryTask)
     `);
     stmt.run({
       id: monitor.id,
       name: monitor.name,
       sourceUrl: monitor.sourceUrl,
       status: monitor.status,
-      useCaseId: monitor.useCaseId,
+      useCase: monitor.useCase,
       videoSummaryTask: monitor.videoSummaryTask,
     });
     return this.getMonitor(monitor.id)!;
@@ -223,7 +223,7 @@ export class SmartBuildingDB {
       name: row.name,
       sourceUrl: row.source_url,
       status: row.status,
-      useCaseId: row.use_case_id,
+      useCase: row.use_case,
       videoSummaryTask: row.video_summary_task,
       createdAt: row.created_at,
     };
@@ -236,7 +236,7 @@ export class SmartBuildingDB {
       name: row.name,
       sourceUrl: row.source_url,
       status: row.status,
-      useCaseId: row.use_case_id,
+      useCase: row.use_case,
       videoSummaryTask: row.video_summary_task,
       createdAt: row.created_at,
     }));
@@ -253,7 +253,7 @@ export class SmartBuildingDB {
   updateMonitor(id: string, updates: {
     sourceUrl?: string;
     name?: string;
-    useCaseId?: string;
+    useCase?: string;
     videoSummaryTask?: string;
     status?: Monitor["status"];
   }): void {
@@ -261,7 +261,7 @@ export class SmartBuildingDB {
     const values: any[] = [];
     if (updates.sourceUrl !== undefined) { sets.push("source_url = ?"); values.push(updates.sourceUrl); }
     if (updates.name !== undefined) { sets.push("name = ?"); values.push(updates.name); }
-    if (updates.useCaseId !== undefined) { sets.push("use_case_id = ?"); values.push(updates.useCaseId); }
+    if (updates.useCase !== undefined) { sets.push("use_case = ?"); values.push(updates.useCase); }
     if (updates.videoSummaryTask !== undefined) { sets.push("video_summary_task = ?"); values.push(updates.videoSummaryTask); }
     if (updates.status !== undefined) { sets.push("status = ?"); values.push(updates.status); }
     if (sets.length === 0) return;
@@ -275,7 +275,7 @@ export class SmartBuildingDB {
       name: row.name,
       sourceUrl: row.source_url,
       status: row.status,
-      useCaseId: row.use_case_id,
+      useCase: row.use_case,
       videoSummaryTask: row.video_summary_task,
       createdAt: row.created_at,
     }));

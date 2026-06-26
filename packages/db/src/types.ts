@@ -3,7 +3,7 @@ export interface Monitor {
   name: string;
   sourceUrl: string;
   status: "online" | "offline" | "error";
-  useCaseId: string;
+  useCase: string;
   videoSummaryTask: string; // task name registered in multilevel-video-understanding service
   createdAt: string;
 }

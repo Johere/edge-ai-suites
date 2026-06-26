@@ -8,6 +8,14 @@ export { generateReport } from "./generate-report.js";
 export type { GenerateReportParams, ReportConfig } from "./generate-report.js";
 export { monitorCtl } from "./monitor-ctl.js";
 export type { MonitorCtlParams } from "./monitor-ctl.js";
+export { loadMonitorsFromYaml, validateMonitors } from "./monitors-compose.js";
+export type {
+  ComposeAction,
+  ComposeResult,
+  ComposeOutput,
+  MonitorDeclaration,
+  ValidationError,
+} from "./monitors-compose.js";
 export { dbManager } from "./db-manager.js";
 export { useCaseValidate } from "./use-case-validate.js";
 export type { UseCaseValidateParams, ValidationResult } from "./use-case-validate.js";

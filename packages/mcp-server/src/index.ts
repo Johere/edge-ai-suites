@@ -6,10 +6,12 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { SmartBuildingDB, SchemaManager } from "@smartbuilding-video/db";
 import { registerTools } from "./tools.js";
 import { registerResources } from "./resources.js";
-import { loadConfig, type ServerConfig } from "./config.js";
+import { loadConfig, loadMonitorsConfig, type ServerConfig } from "./config.js";
 import { WorkerService } from "./video-worker/index.js";
 import { EventsEndpoint } from "./events-endpoint.js";
 import { logger } from "./logger.js";
+import { autoRegisterMonitors } from "./monitor-bootstrap.js";
+import { startStorageCleaner } from "./storage-cleaner.js";
 
 /**
  * 创建 MCP server 实例的工厂函数。
@@ -38,14 +40,29 @@ async function main() {
     ? process.argv[process.argv.indexOf("--config") + 1]
     : undefined;
 
+  const monitorsPath = process.argv.includes("--monitors")
+    ? process.argv[process.argv.indexOf("--monitors") + 1]
+    : undefined;
+
   const transportMode = process.argv.includes("--http") ? "http" : "stdio";
 
   const config: ServerConfig = loadConfig(configPath);
 
+  if (monitorsPath) {
+    try {
+      config.monitors = loadMonitorsConfig(monitorsPath);
+      logger.info(`[config] loaded ${Object.keys(config.monitors).length} monitor(s) from ${monitorsPath}`);
+    } catch (err: any) {
+      logger.error(`[config] failed to load --monitors ${monitorsPath}: ${err.message}`);
+      process.exit(1);
+    }
+  }
+
   // Ensure data directories exist
   mkdirSync(config.dataDir, { recursive: true });
   mkdirSync(config.segmentsDir, { recursive: true });
-  mkdirSync(config.logsDir, { recursive: true });
+  mkdirSync(config.reportsLogsDir, { recursive: true });
+  mkdirSync(config.monitorsLogsDir, { recursive: true });
 
   // Initialize database
   const db = new SmartBuildingDB(config.dbPath);
@@ -141,9 +158,16 @@ async function main() {
   // Startup reconciliation: clean up stale state from previous crash
   await reconcileOnStartup(db, config.videostreamAnalytics.url);
 
+  // Auto-register monitors declared in --monitors monitors.yaml
+  await autoRegisterMonitors(db, config, workerService);
+
+  // Periodic disk cleanup (logs/monitors + segments/<id>/{recordings,motion_events,queries})
+  const stopCleaner = startStorageCleaner(config);
+
   // Graceful shutdown
   const shutdown = async () => {
     logger.info("[mcp-server] Shutting down...");
+    stopCleaner();
     await workerService.stopAll();
     const onlineMonitors = db.listOnlineMonitors();
     if (onlineMonitors.length > 0) {

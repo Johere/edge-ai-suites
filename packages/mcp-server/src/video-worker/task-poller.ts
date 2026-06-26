@@ -78,7 +78,7 @@ export class TaskPoller {
       const monitor = this.db.getMonitor(monitorId);
       const ruleCtx = {
         monitorId,
-        useCaseId: monitor?.useCaseId ?? "",
+        useCase: monitor?.useCase ?? "",
         taskId: task.id,
         summaryText: result.summary ?? "",
         payload: {},
@@ -90,7 +90,7 @@ export class TaskPoller {
           monitorId,
           taskId: task.id,
           eventId: task.eventId,
-          useCase: monitor?.useCaseId ?? "",
+          useCase: monitor?.useCase ?? "",
           alertType: ruleResult.alertType ?? "alert",
           description: ruleResult.alertMessage,
         });

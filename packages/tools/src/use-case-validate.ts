@@ -1,12 +1,12 @@
 export interface UseCaseValidateParams {
-  use_case_name: string;
+  use_case: string;
   prompt: string;
   required_fields: string[];
 }
 
 export interface ValidationResult {
   valid: boolean;
-  use_case_name: string;
+  use_case: string;
   missing_fields: string[];
   checked_fields: string[];
 }
@@ -23,7 +23,7 @@ export function useCaseValidate(params: UseCaseValidateParams): ValidationResult
   );
   return {
     valid: missing.length === 0,
-    use_case_name: params.use_case_name,
+    use_case: params.use_case,
     missing_fields: missing,
     checked_fields: params.required_fields,
   };

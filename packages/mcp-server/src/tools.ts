@@ -100,7 +100,7 @@ export function registerTools(
         defaultType: "daily" as const,
         summaryServiceUrl: config.summaryService.url,
         filter: params.filter as Record<string, any> | undefined,
-        debugDir: config.logsDir,
+        debugDir: config.reportsLogsDir,
       };
       const result = await generateReport(db, reportConfig, {
         monitor_id: params.monitor_id,
@@ -123,7 +123,7 @@ export function registerTools(
       monitor_id: z.string().optional().describe("Monitor ID (required for all except list)"),
       source_url: z.string().optional().describe("RTSP URL (for register_source)"),
       name: z.string().optional().describe("Display name (for register_source)"),
-      use_case_id: z.string().optional().describe("Use case ID (required for register_source)"),
+      use_case: z.string().optional().describe("Use case ID (required for register_source)"),
       video_summary_task: z.string().optional().describe("Task name registered in multilevel-video-understanding service (required for register_source; verified to exist before proceeding)"),
       pipeline_config: z.record(z.unknown()).optional().describe("Pipeline config object (for register_source)"),
       webhook_url: z.string().optional().describe("Events webhook URL (default: derived from config eventsWebhook.port)"),
@@ -132,9 +132,9 @@ export function registerTools(
     try {
       // Validate required fields for register_source
       if (params.action === "register_source") {
-        if (!params.use_case_id) throw new Error("use_case_id is required for register_source");
+        if (!params.use_case) throw new Error("use_case is required for register_source");
         if (!params.video_summary_task) throw new Error("video_summary_task is required for register_source");
-        if (!params.webhook_url) throw new Error("webhook_url is required for register_source");
+        // webhook_url defaulted from config below if caller omits
 
         // Verify video_summary_task exists in multilevel-video-understanding service before register_source
         const taskName = params.video_summary_task;
@@ -153,8 +153,102 @@ export function registerTools(
       }
 
       const { monitorCtl } = await import("@smartbuilding-video/tools");
-      const result = await monitorCtl(db, config.videostreamAnalytics.url, workerService, params as any);
+      const { join } = await import("node:path");
+      // Inject derived fields the tool layer can compute from server config:
+      // - data_dir: per-monitor segment root for analytics to write into
+      // - webhook_url: this server's /events endpoint (caller may override)
+      const enriched: any = { ...params };
+      if (params.action === "register_source" && params.monitor_id) {
+        enriched.data_dir ??= join(config.segmentsDir, params.monitor_id);
+        enriched.webhook_url ??= `http://localhost:${config.eventsWebhook!.port}/events`;
+      }
+      const result = await monitorCtl(db, config.videostreamAnalytics.url, workerService, enriched);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  });
+
+  // --- smartbuilding_monitors_compose ---
+  server.registerTool("smartbuilding_monitors_compose", {
+    description: "Docker-compose-style management of monitors declared in a monitors.yaml file. Actions: validate | up | down | restart | ps",
+    inputSchema: {
+      action: z.enum(["validate", "up", "down", "restart", "ps"]).describe("Compose action"),
+      file: z.string().describe("Path to monitors.yaml (absolute or relative to cwd)"),
+      monitor_id: z.string().optional().describe("Apply to only this monitor (default: all in file)"),
+    },
+  }, async (params) => {
+    try {
+      const { loadMonitorsFromYaml, validateMonitors } = await import("@smartbuilding-video/tools");
+      const { applyMonitorConfig } = await import("./monitor-bootstrap.js");
+
+      // 1. Load + validate (every action validates first)
+      let resolvedPath: string;
+      let monitors: Record<string, any>;
+      try {
+        const loaded = loadMonitorsFromYaml(params.file);
+        resolvedPath = loaded.resolvedPath;
+        monitors = loaded.monitors;
+      } catch (err: any) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({
+            action: params.action, file: params.file, valid: false,
+            errors: [{ monitor_id: "*", field: "file", reason: err.message }],
+            results: [],
+          }, null, 2) }],
+          isError: true,
+        };
+      }
+
+      const filtered: Record<string, any> = params.monitor_id
+        ? (params.monitor_id in monitors ? { [params.monitor_id]: monitors[params.monitor_id] } : {})
+        : monitors;
+      const errors = validateMonitors(filtered);
+      const valid = errors.length === 0;
+
+      const output: any = { action: params.action, file: resolvedPath, valid, errors, results: [] };
+
+      // 2. Action dispatch
+      if (params.action === "validate") {
+        return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }] };
+      }
+
+      if (!valid) {
+        // Don't make changes when config is invalid
+        return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }], isError: true };
+      }
+
+      if (params.action === "ps") {
+        // Report current state of each monitor without modifying anything
+        for (const monitorId of Object.keys(filtered)) {
+          const dbRec = db.getMonitor(monitorId);
+          const workerRunning = workerService.workers.has(monitorId);
+          let analytics: any;
+          try {
+            const resp = await fetch(`${config.videostreamAnalytics.url}/sources/${monitorId}/status`, { signal: AbortSignal.timeout(5000) });
+            analytics = resp.ok ? { reachable: true, status: await resp.json() } : { reachable: false, error: `HTTP ${resp.status}` };
+          } catch (err: any) {
+            analytics = { reachable: false, error: err?.message ?? "unreachable" };
+          }
+          output.results.push({
+            monitor_id: monitorId,
+            status: "ok",
+            state: {
+              db: dbRec ? { exists: true, status: dbRec.status } : { exists: false },
+              analytics,
+              worker: { running: workerRunning },
+            },
+          });
+        }
+        return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }] };
+      }
+
+      // up / down / restart — delegate to shared bootstrap helper
+      output.results = await applyMonitorConfig(
+        db, config, workerService, filtered, params.action,
+        params.monitor_id,
+      );
+      return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
     }
@@ -162,7 +256,7 @@ export function registerTools(
 
   // --- smartbuilding_video_db ---
   server.registerTool("smartbuilding_video_db", {
-    description: "Low-level read-only SQL query against the monitor database",
+    description: "Low-level read-only SQL query against the SQLite database (all tables: monitors, alerts, video_summary_tasks, events, recordings, reports, plans, monitor_state)",
     inputSchema: {
       query: z.string().describe("SELECT SQL query to execute"),
       params: z.array(z.unknown()).optional().describe("Positional query parameters"),
@@ -184,7 +278,7 @@ export function registerTools(
   server.registerTool("smartbuilding_use_case_validate", {
     description: "Validate that a video summary prompt covers all required schema fields (case-insensitive substring check)",
     inputSchema: {
-      use_case_name: z.string().describe("Use case identifier (for labeling only)"),
+      use_case: z.string().describe("Use case identifier (for labeling only)"),
       prompt: z.string().describe("Video summary prompt text to validate"),
       required_fields: z.array(z.string()).describe("Field names that must appear in the prompt"),
     },

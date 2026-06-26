@@ -10,7 +10,7 @@ const execFileAsync = promisify(execFile);
 
 export interface RuleContext {
   monitorId: string;
-  useCaseId: string;
+  useCase: string;
   taskId: number;
   summaryText: string;              // full VLM output — rule engine extracts what it needs
   payload: Record<string, unknown>; // TODO: use-case adapter fills custom fields here
@@ -55,13 +55,13 @@ export async function defaultRuleEvaluator(context: RuleContext): Promise<RuleRe
   return {
     shouldAlert: true,
     alertType: eventField,
-    alertMessage: `[${context.useCaseId}] ${eventField}: ${severity} — ${desc}`,
+    alertMessage: `[${context.useCase}] ${eventField}: ${severity} — ${desc}`,
   };
 }
 
 /**
  * TODO: use-case adapter hook — load a Python override for the given use case.
- * Looks for use-cases/{useCaseId}/evaluate_rules.py.
+ * Looks for use-cases/{useCase}/evaluate_rules.py.
  * Falls back to defaultRuleEvaluator when the file doesn't exist.
  *
  * This is a stub. Use-case-specific adapters are implemented in a later phase.
@@ -70,7 +70,7 @@ export async function evaluateWithOverride(
   context: RuleContext,
   useCasesDir: string,
 ): Promise<RuleResult> {
-  const overridePath = resolve(useCasesDir, context.useCaseId, "evaluate_rules.py");
+  const overridePath = resolve(useCasesDir, context.useCase, "evaluate_rules.py");
 
   if (!existsSync(overridePath)) {
     return defaultRuleEvaluator(context);
@@ -88,7 +88,7 @@ export async function evaluateWithOverride(
       alertMessage: result.alert_message,
     };
   } catch (err: any) {
-    console.error(`[rule-engine] Python override failed for ${context.useCaseId}:`, err.message);
+    console.error(`[rule-engine] Python override failed for ${context.useCase}:`, err.message);
     return defaultRuleEvaluator(context);
   }
 }

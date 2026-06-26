@@ -38,6 +38,18 @@ videostream_analytics:
 poll_interval_ms: 5000
 video_summary_max_concurrent: 2
 
+# Per-monitor log rotation (write target: logs/monitors/<monitor_id>/<YYYY-MM-DD>.log)
+logging:
+  retention_days: 14   # delete .log files older than this
+  max_file_mb: 50      # stop appending to a single day's file past this size
+
+# Segment data retention. videostream-analytics writes recordings/motion_events/queries
+# under $SMARTBUILDING_DATA_DIR/segments/<monitor_id>/<subdir>/<YYYY-MM-DD>/;
+# MCP server purges day-dirs older than this.
+storage:
+  retention_days: 7
+  cleanup_subdirs: [motion_events, recordings, queries]
+
 # MCP Server HTTP port (for OpenClaw / Claude Desktop connections)
 mcp:
   port: 3100

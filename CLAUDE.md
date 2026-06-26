@@ -124,7 +124,7 @@ WorkerService (TaskPoller)
 
 Core tables (created by `SmartBuildingDB.initialize()`):
 
-- `monitors` — video source registry (`id`, `name`, `rtsp_url`, `use_case`, `status`, timestamps)
+- `monitors` — video source registry (`id`, `name`, `source_url`, `use_case`, `status`, timestamps)
 - `alerts` — triggered alerts (`id`, `source_id`, `event`, `severity`, `desc`, `acked`, `clip_path`, timestamps)
 - `video_summary_tasks` — VLM processing queue (`id`, `source_id`, `clip_path`, `status`, `summary_text`, `latency_seconds`, tokens, timestamps)
 - `monitor_state` — per-monitor key-value state (JSON blob)

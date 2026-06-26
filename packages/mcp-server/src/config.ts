@@ -4,12 +4,22 @@ import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { SchemaDefinition } from "@smartbuilding-video/db";
 
+export interface MonitorConfig {
+  enabled?: boolean;
+  name?: string;
+  source_url: string;
+  use_case: string;
+  video_summary_task: string;
+  pipeline_config?: Record<string, unknown>;
+}
+
 export interface ServerConfig {
   // Derived from SMARTBUILDING_DATA_DIR — not settable in config.yaml
   dataDir: string;        // root: ~/.mcp-smartbuilding (or $SMARTBUILDING_DATA_DIR)
   dbPath: string;         // dataDir/smartbuilding.db
   segmentsDir: string;    // dataDir/segments/<monitor_id>/  (latest.jpg, queries/)
-  logsDir: string;        // dataDir/logs/reports/  (SRT debug artifacts)
+  reportsLogsDir: string; // dataDir/logs/reports/  (SRT debug artifacts)
+  monitorsLogsDir: string; // dataDir/logs/monitors/<monitor_id>/<YYYY-MM-DD>.log
 
   summaryService: {
     url: string;
@@ -31,6 +41,16 @@ export interface ServerConfig {
   eventsWebhook?: {
     port?: number;
   };
+  // Loaded separately via loadMonitorsConfig(--monitors <path>); not from config.yaml
+  monitors?: Record<string, MonitorConfig>;
+  logging: {
+    retentionDays: number;  // default 14
+    maxFileMb: number;      // default 50
+  };
+  storage: {
+    retentionDays: number;       // default 7
+    cleanupSubdirs: string[];    // default ["motion_events", "recordings", "queries"]
+  };
 }
 
 function resolveDataDir(): string {
@@ -46,11 +66,19 @@ export function loadConfig(configPath?: string): ServerConfig {
     ? parseYaml(readFileSync(resolve(configPath), "utf-8"))
     : {};
 
+  // Reject monitors in config.yaml — they must live in a separate file passed via --monitors
+  if (parsed && typeof parsed === "object" && "monitors" in parsed) {
+    throw new Error(
+      "config.yaml must not contain a `monitors:` field. Move per-monitor declarations to a separate file and pass it via --monitors <path>.",
+    );
+  }
+
   return {
     dataDir,
     dbPath: join(dataDir, "smartbuilding.db"),
     segmentsDir: join(dataDir, "segments"),
-    logsDir: join(dataDir, "logs", "reports"),
+    reportsLogsDir: join(dataDir, "logs", "reports"),
+    monitorsLogsDir: join(dataDir, "logs", "monitors"),
 
     summaryService: { url: parsed?.summary_service?.url ?? "http://localhost:8192" },
     vlmService: {
@@ -64,5 +92,40 @@ export function loadConfig(configPath?: string): ServerConfig {
     schema: parsed?.schema,
     mcp: { port: parsed?.mcp?.port ?? 3100 },
     eventsWebhook: { port: parsed?.events_webhook?.port ?? 3101 },
+    logging: {
+      retentionDays: parsed?.logging?.retention_days ?? 14,
+      maxFileMb: parsed?.logging?.max_file_mb ?? 50,
+    },
+    storage: {
+      retentionDays: parsed?.storage?.retention_days ?? 7,
+      cleanupSubdirs: parsed?.storage?.cleanup_subdirs ?? ["motion_events", "recordings", "queries"],
+    },
   };
+}
+
+/**
+ * Load monitor declarations from a standalone monitors.yaml file passed via --monitors CLI flag.
+ * Expanding ${HOME} / ${USER} env vars in string values (e.g. for prefilter.model_path).
+ */
+export function loadMonitorsConfig(monitorsPath: string): Record<string, MonitorConfig> {
+  const resolved = resolve(monitorsPath);
+  const raw = readFileSync(resolved, "utf-8");
+  const parsed = parseYaml(raw);
+  if (!parsed || typeof parsed !== "object" || !parsed.monitors) {
+    throw new Error(`monitors file ${resolved} must contain a top-level \`monitors:\` block`);
+  }
+  return expandEnvVars(parsed.monitors) as Record<string, MonitorConfig>;
+}
+
+function expandEnvVars(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/gi, (_m, name) => process.env[name] ?? "");
+  }
+  if (Array.isArray(value)) return value.map(expandEnvVars);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = expandEnvVars(v);
+    return out;
+  }
+  return value;
 }

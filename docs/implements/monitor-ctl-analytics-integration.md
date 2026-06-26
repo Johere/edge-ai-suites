@@ -16,19 +16,54 @@ analytics 可达性判断：
 | DB | Analytics | Worker | 判断逻辑 | 处理方案 |
 |----|-----------|--------|----------|----------|
 | ❌ | ❌ | ❌ | 全新注册 | INSERT DB → analytics `/register_source` → start worker |
-| ✅ | ❌ | ❌ | 曾注册，analytics 已清除 | 校验 use_case_id → 更新 DB → analytics `/register_source` → start worker |
-| ✅ | ✅ | ❌ | MCP server 重启未 unregister | 校验 use_case_id → 更新 DB → analytics DELETE → analytics `/register_source` → start worker |
+| ✅ | ❌ | ❌ | 曾注册，analytics 已清除 | 校验 use_case → 更新 DB → analytics `/register_source` → start worker |
+| ✅ | ✅ | ❌ | MCP server 重启未 unregister | 校验 use_case → 更新 DB → analytics DELETE → analytics `/register_source` → start worker |
 | ✅ | ✅ | ✅ | 一切正常，重复调用 | 直接返回 `{ status: "already_running" }`，无变更 |
-| ✅ | ❌ | ✅ | analytics 已清除但 worker 残留 | 校验 use_case_id → graceful stop worker → 更新 DB → analytics `/register_source` → start worker |
+| ✅ | ❌ | ✅ | analytics 已清除但 worker 残留 | 校验 use_case → graceful stop worker → 更新 DB → analytics `/register_source` → start worker |
 | ❌ | ✅ | ❌ | DB 数据丢失，analytics 在跑 | analytics DELETE → INSERT DB → analytics `/register_source` → start worker |
 | ❌ | ✅ | ✅ | DB 丢失且 worker 残留 | graceful stop worker → analytics DELETE → INSERT DB → analytics `/register_source` → start worker |
 | ❌ | ❌ | ✅ | worker 孤儿 | graceful stop worker → INSERT DB → analytics `/register_source` → start worker |
 
-**use_case_id 校验**：DB 存在且传入了 `use_case_id` 参数时，若与 DB 已存值不同则抛出异常，要求先调用 `unregister`。
+**use_case 校验**：DB 存在且传入了 `use_case` 参数时，若与 DB 已存值不同则抛出异常，要求先调用 `unregister`。
 
 **DB 优先原则**：DB 更新/插入在 analytics DELETE 之前完成，确保即使 DELETE 失败 DB 也有记录。
 
 **worker graceful stop**：`WorkerService.stop()` 为 async，等待当前 in-flight 的 `poll()` 调用完成后再返回，避免 race condition。
+
+---
+
+## 1a. register_source payload 中的 `data_dir` 字段 `[TODO: analytics-side]`
+
+MCP server 在调用 analytics `POST /register_source` 时，会在 JSON body 中携带 `data_dir` 字段，指定该 monitor 的所有产出文件落盘位置：
+
+```json
+{
+  "source_id": "cam_child",
+  "source_url": "rtsp://localhost:8554/live/child",
+  "webhook_url": "http://localhost:3101/events",
+  "data_dir": "/home/user/.mcp-smartbuilding/segments/cam_child",
+  "pipeline": { ... }
+}
+```
+
+**约定 analytics 服务端落盘位置**：
+
+```
+<data_dir>/
+├── latest.jpg                          # 最新帧（每帧 overwrite）
+├── recordings/<YYYY-MM-DD>/            # 录像片段（按天分目录）
+└── motion_events/<YYYY-MM-DD>/         # 运动事件帧（按天分目录）
+```
+
+**为什么需要这个字段**：
+- MCP server 负责按 `storage.retention_days` 周期清理 `recordings/` 和 `motion_events/` 下的过期日期目录
+- 不约定数据目录的话，MCP server 无法可靠定位 analytics 写出的文件
+- 也便于 `scene_query` 工具直接读 `<data_dir>/latest.jpg`
+
+**`[TODO: analytics-side]`**：videostream-analytics 服务端需要：
+1. 在 `/register_source` 中接收 `data_dir` 字段（如缺失可使用默认值并返回 warning）
+2. 把所有产出写入 `<data_dir>/<subdir>/<YYYY-MM-DD>/`，目录由服务端按需 mkdir
+3. 在设计文档 `docs/smartbuilding-video-design-2026.2.md` §7.3 接口表中明确该字段为约定的一部分
 
 ---
 
@@ -191,7 +226,7 @@ MCP server 调用以下 analytics RESTful 端点：
 | analytics 不可达（`register_source`） | 直接抛出异常，不做任何 DB 变更 |
 | analytics DELETE 失败（注册流程中） | 抛出异常，停止注册（DB 已更新，方便排查） |
 | analytics DELETE 失败（`unregister` action） | 静默忽略，继续删除 DB 记录 |
-| use_case_id 变更 | 必须先调 `unregister` 再 `register_source` |
+| use_case 变更 | 必须先调 `unregister` 再 `register_source` |
 | 对账时 analytics 不可达 | warn log，跳过对账，不阻塞启动 |
 | 对账时孤儿 source DELETE 失败 | warn log，继续处理其他 source |
 | in-flight poll + stop race | TaskPoller graceful async stop：`stopPolling()` await 当前 in-flight poll 完成后返回 |
