@@ -6,21 +6,21 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { SmartBuildingDB, SchemaManager } from "@smartbuilding-video/db";
 import { registerTools } from "./tools.js";
 import { registerResources } from "./resources.js";
-import { loadConfig, type ServerConfig } from "./config.js";
+import { loadConfig, loadMonitorsConfig, type ServerConfig } from "./config.js";
 import { WorkerService } from "./video-worker/index.js";
 import { EventsEndpoint } from "./events-endpoint.js";
 import { logger } from "./logger.js";
+import { autoRegisterMonitors } from "./monitor-bootstrap.js";
+import { startStorageCleaner } from "./storage-cleaner.js";
 
 /**
- * 创建 MCP server 实例的工厂函数。
- * HTTP 无状态模式下，每个请求需要新的 server 实例。
- * 但 DB、config、workerService 等基础设施在所有请求间共享。
+ * Build a per-request McpServer. HTTP stateless mode calls this for every request;
+ * stdio mode calls it once. DB / config / workerService are shared across instances.
  */
 function createMcpServer(
   config: ServerConfig,
   db: SmartBuildingDB,
   workerService: WorkerService,
-  onAlert: (monitorId: string) => void
 ): McpServer {
   const server = new McpServer({
     name: "smartbuilding-video",
@@ -38,20 +38,47 @@ async function main() {
     ? process.argv[process.argv.indexOf("--config") + 1]
     : undefined;
 
+  const monitorsPath = process.argv.includes("--monitors")
+    ? process.argv[process.argv.indexOf("--monitors") + 1]
+    : undefined;
+
   const transportMode = process.argv.includes("--http") ? "http" : "stdio";
 
   const config: ServerConfig = loadConfig(configPath);
 
-  // Ensure data directories exist
+  if (monitorsPath) {
+    try {
+      config.monitors = loadMonitorsConfig(monitorsPath);
+      logger.info(`[config] loaded ${Object.keys(config.monitors).length} monitor(s) from ${monitorsPath}`);
+
+      // Reference integrity: every monitor.use_case must exist in config.useCaseDict
+      const knownUseCases = Object.keys(config.useCaseDict);
+      const badRefs: string[] = [];
+      for (const [id, m] of Object.entries(config.monitors)) {
+        if (!knownUseCases.includes(m.use_case)) {
+          badRefs.push(`${id} → "${m.use_case}"`);
+        }
+      }
+      if (badRefs.length > 0) {
+        throw new Error(
+          `monitors reference unknown use_case keys: [${badRefs.join(", ")}]. ` +
+          `Declared in config.yaml use_case_dict: [${knownUseCases.join(", ")}]`,
+        );
+      }
+    } catch (err: any) {
+      logger.error(`[config] failed to load --monitors ${monitorsPath}: ${err.message}`);
+      process.exit(1);
+    }
+  }
+
   mkdirSync(config.dataDir, { recursive: true });
   mkdirSync(config.segmentsDir, { recursive: true });
-  mkdirSync(config.logsDir, { recursive: true });
+  mkdirSync(config.reportsLogsDir, { recursive: true });
+  mkdirSync(config.monitorsLogsDir, { recursive: true });
 
-  // Initialize database
   const db = new SmartBuildingDB(config.dbPath);
   db.initialize();
 
-  // Apply schema customization if defined
   if (config.schema) {
     const schemaManager = new SchemaManager((db as any).db);
     const result = schemaManager.applySchema(config.schema);
@@ -67,31 +94,26 @@ async function main() {
     logger.debug(`[worker] Alert triggered for monitor ${monitorId}`);
   };
 
-  // Initialize worker service
   const workerService = new WorkerService(config, db, onAlert);
 
-  // Connect transport
   let mcpServer: McpServer | null = null;
 
   if (transportMode === "http") {
-    // ⚠️ 使用 SDK 提供的 Express app，自动配置了必要的中间件
     const app = createMcpExpressApp();
 
-    // ⚠️ 关键：每个请求创建新的 server + transport（无状态模式）
+    // Stateless HTTP: new server + transport per request.
     app.all("/mcp", async (req, res) => {
       logger.debug(`[mcp] ${req.method} /mcp`);
 
-      // 为每个请求创建独立的 server 实例
-      const server = createMcpServer(config, db, workerService, onAlert);
+      const server = createMcpServer(config, db, workerService);
 
       try {
         const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: undefined,  // 无状态模式
+          sessionIdGenerator: undefined,  // stateless
         });
         await server.connect(transport);
         await transport.handleRequest(req, res, req.body);
 
-        // 请求结束时清理资源
         res.on("close", () => {
           logger.debug("[mcp] Request closed");
           transport.close();
@@ -114,36 +136,27 @@ async function main() {
       logger.info(`[mcp-server] Streamable HTTP on http://localhost:${port}/mcp`);
     });
 
-    // HTTP 无状态模式下，无法跨请求发送 notification
-    // eventsEndpoint 的回调只记录日志
   } else {
-    // stdio 模式：可以使用单一 server 实例（有状态）
-    mcpServer = createMcpServer(config, db, workerService, onAlert);
+    // stdio: single stateful server instance
+    mcpServer = createMcpServer(config, db, workerService);
     const transport = new StdioServerTransport();
     await mcpServer.connect(transport);
   }
 
-  // Start events webhook endpoint
-  const eventsEndpoint = new EventsEndpoint(config, db, (event) => {
-    // 只在 stdio 模式下发送 notification（有状态连接）
-    if (mcpServer) {
-      mcpServer.server.notification({
-        method: "notifications/resources/updated",
-        params: { uri: `smartbuilding://monitor/${event.sourceId}/stats` },
-      });
-    } else {
-      // HTTP 无状态模式：无法主动推送，客户端需轮询 resources
-      logger.debug(`[webhook] Stats updated for ${event.sourceId} (notification skipped in HTTP mode)`);
-    }
-  });
+  const eventsEndpoint = new EventsEndpoint(db);
   await eventsEndpoint.start(config.eventsWebhook!.port);
 
-  // Startup reconciliation: clean up stale state from previous crash
+  // Clean up state from previous crash (analytics sources that DB doesn't know about, etc.)
   await reconcileOnStartup(db, config.videostreamAnalytics.url);
 
-  // Graceful shutdown
+  await autoRegisterMonitors(db, config, workerService);
+
+  // Periodic disk cleanup: logs/monitors + segments/<id>/{recordings,motion_events,queries}
+  const stopCleaner = startStorageCleaner(config);
+
   const shutdown = async () => {
     logger.info("[mcp-server] Shutting down...");
+    stopCleaner();
     await workerService.stopAll();
     const onlineMonitors = db.listOnlineMonitors();
     if (onlineMonitors.length > 0) {
@@ -185,11 +198,10 @@ async function reconcileOnStartup(
   let offlined = 0;
   let deleted = 0;
 
-  // DB online monitors: clean up stale state
+  // DB-marked-online monitors are crash remnants: mark offline so register_source restarts them.
   const onlineMonitors = db.listOnlineMonitors();
   for (const m of onlineMonitors) {
     if (analyticsSources.has(m.id)) {
-      // analytics still has it — delete and mark offline (don't auto re-register)
       await fetch(`${analyticsUrl}/sources/${m.id}`, { method: "DELETE", signal: AbortSignal.timeout(5000) }).catch(() => {});
       logger.warn(`[reconcile] monitor ${m.id} found in videostream-analytics (${analyticsUrl}) on startup, deleted and marked offline — call register_source to restart`);
     } else {
@@ -199,7 +211,7 @@ async function reconcileOnStartup(
     offlined++;
   }
 
-  // Orphan sources in analytics not in DB: delete them (DB is source of truth)
+  // Orphans (in analytics but not DB): DB is source of truth.
   const dbIds = new Set(db.listMonitors().map((m) => m.id));
   for (const sourceId of analyticsSources.keys()) {
     if (!dbIds.has(sourceId)) {

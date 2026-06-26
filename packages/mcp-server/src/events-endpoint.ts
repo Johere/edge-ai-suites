@@ -1,5 +1,4 @@
 import { createServer, type Server } from "node:http";
-import type { ServerConfig } from "./config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
 import { logger } from "./logger.js";
 
@@ -23,16 +22,33 @@ export type EventCallback = (event: VideoEvent) => void;
  */
 export class EventsEndpoint {
   private server: Server | null = null;
-  private config: ServerConfig;
   private db: SmartBuildingDB;
   private onEvent?: EventCallback;
 
-  constructor(config: ServerConfig, db: SmartBuildingDB, onEvent?: EventCallback) {
-    this.config = config;
+  /**
+   * @param db DB the handler writes events / video_summary_tasks / recordings into.
+   * @param onEvent Optional hook fired after every successfully handled webhook.
+   *   Reserved as an extension point — currently no production caller passes one
+   *   (alert subscription pushes happen in the task-poller alert path, not here).
+   */
+  constructor(db: SmartBuildingDB, onEvent?: EventCallback) {
     this.db = db;
     this.onEvent = onEvent;
   }
 
+  /**
+   * Bind the webhook HTTP server.
+   *
+   * Resolves once the listener is ready or the port was already in use (in which case
+   * a warning is logged and the endpoint silently runs in disabled state — analytics
+   * won't be able to push events but the rest of MCP server keeps working).
+   * Rejects only on non-EADDRINUSE errors (permission denied, invalid host, etc.).
+   *
+   * Exposes:
+   *   POST /events  → handleEvent
+   *   GET  /health  → 200 OK
+   *   *             → 404
+   */
   start(port: number = 3101): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((req, res) => {
@@ -76,11 +92,32 @@ export class EventsEndpoint {
     });
   }
 
+  /**
+   * Close the HTTP listener. Existing in-flight requests finish on their own;
+   * this does not await them. Safe to call multiple times.
+   */
   stop(): void {
     this.server?.close();
     this.server = null;
   }
 
+  /**
+   * Dispatch a parsed VideoEvent into DB writes based on `event.type`.
+   *
+   * Per-type contract — payload fields the analytics service must send:
+   *   motion    → event_file_path, summary_clip_input, start_time, duration_seconds
+   *               (prefilter_* optional; if prefilter_passed=0 the created task is
+   *                marked `ignored` so video-worker skips the VLM call)
+   *   static    → start_time, duration_seconds
+   *   recording → recording_path, recording_start, recording_end
+   *
+   * Missing required fields → log a warning and skip this event (no DB writes),
+   * but always returns 200 to the analytics caller so a single bad payload won't
+   * back-pressure the upstream pipeline.
+   *
+   * `onEvent` (if provided to the constructor) is invoked after a successful dispatch
+   * regardless of type — reserved extension point, no production caller wires it today.
+   */
   private handleEvent(event: VideoEvent): void {
     const p = event.payload;
     const monitorId = event.sourceId;

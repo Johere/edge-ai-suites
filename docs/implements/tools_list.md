@@ -149,8 +149,8 @@
 **功能**：原子化管理 monitor 生命周期，三层协调（DB + videostream-analytics + video-worker）在一次调用中完成。
 
 **前置校验（register_source）**：
-1. `use_case_id` / `video_summary_task` / `source_url` 必填
-2. 向 multilevel-video-understanding 服务验证 `video_summary_task` 存在（`GET /v1/tasks/{name}`），不存在则抛出异常并提示注册方法
+1. `use_case` / `source_url` 必填；`use_case` 必须是 `config.yaml` 中 `use_case_dict` 的 key
+2. 内部调用 `smartbuilding_use_case_validate`：检查 use_case 存在、`video_summary_task` 在 multilevel-video-understanding 中注册、LOCAL_PROMPT 覆盖所有 required schema 字段。任一失败 → 拒绝注册（不写 DB / 不调 analytics / 不启 worker）
 
 **状态矩阵（register_source）**：根据 DB / analytics / worker 三列当前状态自动选择处理路径，无需调用方判断。
 
@@ -158,12 +158,13 @@
 |------|------|------|------|
 | `action` | enum | ✅ | 见下表 |
 | `monitor_id` | string | — | Monitor ID（除 `list` 外均必填） |
-| `source_url` | string | — | RTSP URL，必须以 `rtsp://` 开头（for `register_source`，必填） |
+| `source_url` | string | — | 视频源 URL（任意 videostream-analytics 支持的协议：rtsp / http / onvif / file / ...）（for `register_source`，必填） |
 | `name` | string | — | 显示名（for `register_source`，可选） |
-| `use_case_id` | string | — | 用例 ID（for `register_source`，**必填**） |
-| `video_summary_task` | string | — | multilevel-video-understanding 服务中已注册的 task 名称（for `register_source`，**必填**，调用前自动验证存在） |
+| `use_case` | string | — | `config.yaml` `use_case_dict` 中的 key（for `register_source`，**必填**） |
 | `pipeline_config` | object | — | Analytics pipeline 配置（for `register_source`，默认启用 motion + recording） |
 | `webhook_url` | string | — | 事件 Webhook URL（for `register_source`，默认从 `config.eventsWebhook.port` 派生） |
+
+**注意**：`video_summary_task` 不再作为 tool 参数 — 由 use_case 派生（从 `config.useCaseDict[use_case].video_summary_task`）。
 
 **Actions**：
 
@@ -178,11 +179,71 @@
 
 ---
 
+## 5a. `smartbuilding_monitors_compose` ✅
+
+**功能**：以 docker-compose 风格批量管理一个 `monitors.yaml` 文件中声明的全部 monitor。工具**每次都直接读盘**（不依赖 MCP server 启动时加载的 `config.monitors`），可针对任意路径的 yaml 文件操作。
+
+**与 `monitor_ctl` 的区别**：
+- `monitor_ctl` 操作**单个** monitor，参数全部通过 tool 调用传入
+- `monitors_compose` 操作**一个 yaml 内的全部**（或指定 id 的）monitor，配置来自文件
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `action` | enum | ✅ | `validate` \| `up` \| `down` \| `restart` \| `ps` |
+| `file` | string | ✅ | monitors.yaml 路径（绝对或相对 cwd） |
+| `monitor_id` | string | — | 仅对单个 monitor 执行（不传 = yaml 内所有 monitor） |
+
+**Actions**：
+
+| action | 类比 docker compose | 行为 |
+|--------|----|------|
+| `validate` | `compose config` | 仅校验字段合法性（source_url / use_case 必填；use_case 必须存在于 `config.useCaseDict`），不修改任何状态 |
+| `up` | `compose up -d` | 对每个 `enabled !== false` 的 monitor：若 DB+analytics+worker 三层状态全一致 → 跳过（`already_running`）；否则调 `monitor_ctl register_source` |
+| `down` | `compose down` | 对 yaml 内每个 monitor：调 `monitor_ctl unregister`（DB + analytics + worker 全清理） |
+| `restart` | `compose restart` | 等价于 `down` → `up` |
+| `ps` | `compose ps` | 列出每个 monitor 的 DB / analytics / worker 三层运行状态，不修改 |
+
+**幂等检查（up）**：三步全 true 才算 already_running：
+1. DB 存在该 monitor 且 `status=online`
+2. analytics `GET /sources/<id>/status` 返回 200
+3. workerService 内存中有该 monitor 的 poller
+
+**返回结构**：
+```typescript
+{
+  action: "validate" | "up" | "down" | "restart" | "ps";
+  file: string;                  // 解析后的绝对路径
+  valid: boolean;                // 任何 action 都会先校验
+  errors: { monitor_id, field, reason }[];
+  results: {
+    monitor_id: string;
+    status: "ok" | "already_running" | "skipped" | "failed";
+    reason?: string;
+    state?: {                    // 仅 ps 填充
+      db: { exists, status? };
+      analytics: { reachable, status?, error? };
+      worker: { running };
+    };
+  }[];
+}
+```
+
+**使用场景**：
+- `validate`：部署前 CI 检查 yaml 合法性
+- `up`：MCP server 启动时 videostream-analytics 不可达 → 修复后手动触发补救式注册
+- `down`：维护窗口暂停 yaml 内所有 monitor
+- `restart`：yaml 改了 source_url / pipeline_config 后强制重新注册
+- `ps`：快速看哪些 cam 跑着、状态对不对
+
+**Per-monitor 日志**：每次 compose 操作的详细 trace（包括 analytics 响应、错误堆栈）写入 `$SMARTBUILDING_DATA_DIR/logs/monitors/<monitor_id>/<YYYY-MM-DD>.log`。
+
+---
+
 ## 6. `smartbuilding_video_db` ✅
 
 > **实时告警架构说明**：告警由 video-worker 内部的 rule engine callback 驱动——每当 summary task 完成，立刻调用 `defaultRuleEvaluator`（或 use-case Python override）决定是否写入 alert。Agent 通过 `smartbuilding_alert_query` 查询告警，不需要专门的 rule_eval 工具。
 
-**功能**：只读 SQL 查询，直接访问 monitor 数据库。仅允许 `SELECT` 语句。
+**功能**：只读 SQL 查询，直接访问 SQLite 数据库的所有表（`monitors` / `alerts` / `video_summary_tasks` / `events` / `recordings` / `reports` / `plans` / `monitor_state`）。仅允许 `SELECT` 语句。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -197,23 +258,39 @@
 
 ## 7. `smartbuilding_use_case_validate` ✅
 
-**功能**：验证 video summary prompt 是否覆盖了 schema 中所有必需字段（大小写不敏感子串匹配）。
+**功能**：一站式校验 use_case 与 multilevel-video-understanding 服务的连通性、存在性、合法性。任何想验证 use_case 是否可用的代码路径都走它（已被 `monitor_ctl register_source` 内联为前置 step）。
+
+**三步检查**（顺序，任一失败即整体失败）：
+
+1. **use_case 存在性**：`use_case` 是否在 `config.yaml` 的 `use_case_dict` 中
+2. **summary service + task 存在性**：GET `<summaryService.url>/v1/tasks/<video_summary_task>`（task 名从 `use_case_dict[use_case].video_summary_task` 取）
+3. **schema 一致性**：`config.schema.video_summary_tasks.extensions` 中所有 `required:true` 字段必须出现在 task 的 LOCAL_PROMPT 中（大小写不敏感子串）
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `use_case_name` | string | ✅ | 用例标识符（仅用于标注，不影响逻辑） |
-| `prompt` | string | ✅ | 待验证的 video summary prompt 文本 |
-| `required_fields` | string[] | ✅ | schema 中标记为 required 的字段名列表 |
+| `use_case` | string | ✅ | use_case_dict 中的 key |
 
 **返回值**：
 ```json
 {
   "valid": true | false,
-  "use_case_name": "child_safety",
-  "missing_fields": ["severity"],
-  "checked_fields": ["event", "severity", "desc"]
+  "use_case": "child_safety",
+  "video_summary_task": "child_safety_monitor",
+  "checks": {
+    "use_case_known": true,
+    "task_registered": true,
+    "schema_consistent": false
+  },
+  "required_fields": ["event", "severity", "desc"],
+  "optional_fields": ["confidence"],
+  "missing_required_in_prompt": ["desc"],
+  "missing_optional_in_prompt": ["confidence"],
+  "prompt_tail": "...output format: EVENT: <type>\nSEVERITY: critical|warn|info",
+  "suggestion": "Append the following required fields to LOCAL_PROMPT of `child_safety_monitor`: desc"
 }
 ```
+
+`valid` 仅由 required 字段决定；optional 字段缺失只作信息提示。失败时 `prompt_tail` 给 LOCAL_PROMPT 的末尾 200 字符（输出格式约定通常在 prompt 末尾），方便用户定位修改位置。
 
 ---
 
@@ -226,6 +303,7 @@
 | `scene_query` | ✅ | vllm-serving-ipex 集成；ffmpeg resize；帧归档；`<think>` 过滤 |
 | `generate_report` | ✅ | SRT 构建；multilevel-video-understanding caption-only；reports 表写入；debug SRT 持久化 |
 | `monitor_ctl` | ✅ | DB + videostream-analytics 两层管理；RTSP 校验 |
+| `monitors_compose` | ✅ | docker-compose 风格批量管理 monitors.yaml；validate/up/down/restart/ps；三层幂等检查 |
 | `video_db` | ✅ | 只读 SELECT；防止写操作 |
 | `use_case_validate` | ✅ | 大小写不敏感；返回 missing_fields |
 
@@ -243,14 +321,22 @@ export SMARTBUILDING_DATA_DIR=/path/to/data   # 默认: ~/.mcp-smartbuilding
 
 ```
 $SMARTBUILDING_DATA_DIR/
-├── smartbuilding.db               — SQLite 数据库
-├── segments/
+├── smartbuilding.db                       — SQLite 数据库
+├── segments/                              — videostream-analytics 写入区（由 register_source 的 data_dir 字段约定）
 │   └── <monitor_id>/
-│       ├── latest.jpg             — 最新帧（scene_query 读取）
-│       └── queries/<date>/        — scene_query 帧归档
+│       ├── latest.jpg                     — 最新帧（scene_query 读取，每帧 overwrite）
+│       ├── recordings/<YYYY-MM-DD>/       — 录像片段（按天 rotate，超过 storage.retention_days 自动清理）
+│       ├── motion_events/<YYYY-MM-DD>/    — 运动事件帧（按天 rotate，超过 storage.retention_days 自动清理）
+│       └── queries/<YYYY-MM-DD>/          — scene_query 帧归档（按天 rotate，自动清理）
 └── logs/
-    └── reports/                   — generate_report SRT 调试文件
+    ├── reports/                           — generate_report SRT 调试文件
+    └── monitors/<monitor_id>/<YYYY-MM-DD>.log  — per-monitor 详细日志（按天 rotate，超过 logging.retention_days 自动清理；单文件超过 logging.max_file_mb 暂停 append）
 ```
+
+**自动清理**：MCP server 启动时 + 每 24h 周期执行：
+- `logs/monitors/<id>/` 下日期早于 `today - logging.retention_days`（默认 14）的 `.log` 删除
+- `segments/<id>/{motion_events,recordings,queries}/` 下日期早于 `today - storage.retention_days`（默认 7）的整个日期目录删除
+- 跳过 `latest.jpg`、`pipeline.db`、非日期格式的子目录名（防止误删）
 
 ---
 

@@ -9,7 +9,7 @@ export interface GenerateReportParams {
 }
 
 export interface ReportConfig {
-  dataSource: "events" | "alerts" | "tasks";
+  dataSource: "events" | "alerts" | "video_summary_tasks";
   defaultType: "daily" | "weekly" | "monthly";
   summaryServiceUrl: string; // multilevel-video-understanding base URL
   filter?: Record<string, any>;
@@ -182,7 +182,7 @@ async function callSummaryService(opts: {
 
 function queryData(
   db: SmartBuildingDB,
-  dataSource: "events" | "alerts" | "tasks",
+  dataSource: "events" | "alerts" | "video_summary_tasks",
   monitorId: string,
   periodStart: string,
   periodEnd: string,
@@ -193,7 +193,7 @@ function queryData(
     : "video_summary_tasks";
 
   const timeCol = dataSource === "events" ? "start_time" : "created_at";
-  const idCol = dataSource === "tasks" ? "monitor_id" : "monitor_id";
+  const idCol = dataSource === "video_summary_tasks" ? "monitor_id" : "monitor_id";
 
   const whereClauses = [
     `${idCol} = ?`,
