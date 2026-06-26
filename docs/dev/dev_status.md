@@ -154,11 +154,7 @@
 - [ ] `task-poller.ts` 的 `onAlert` callback 实际推送 `notifications/resources/updated`（当前只 logger.debug）
 - [ ] 联调 agent（Claude Desktop / OpenClaw）的 resource subscribe 流程
 
-**Use case adapter wrapper（与 Jie 联调）**
+**Monitor ctl integration with videostream-analytics wrapper（与 Jie 联调）**
 
-- [ ] use-cases/ 示例：child_safety/evaluate_rules.py、elder_wakeup/evaluate_rules.py
-- [ ] 端到端集成测试：webhook → pending task → VLM → rule eval (含 Python override) → alert → MCP notification
-
-**Default rule engine 进化（持续）**
-
-- [ ] TODO from rule-engine/index.ts: more elegant alerts rule, may configurable per-monitor
+- [ ] 接口清单核对: docs/implements/monitor-ctl-analytics-integration.md
+- [ ] 端到端集成测试：webhook → pending task → multilevel-video-understanding → rule eval (含 Python override) → alert → MCP notification
