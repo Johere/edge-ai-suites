@@ -38,6 +38,18 @@ videostream_analytics:
 poll_interval_ms: 5000
 video_summary_max_concurrent: 2
 
+# Per-monitor log rotation (write target: logs/monitors/<monitor_id>/<YYYY-MM-DD>.log)
+logging:
+  retention_days: 14   # delete .log files older than this
+  max_file_mb: 50      # stop appending to a single day's file past this size
+
+# Segment data retention. videostream-analytics writes recordings/motion_events/queries
+# under $SMARTBUILDING_DATA_DIR/segments/<monitor_id>/<subdir>/<YYYY-MM-DD>/;
+# MCP server purges day-dirs older than this.
+storage:
+  retention_days: 7
+  cleanup_subdirs: [motion_events, recordings, queries]
+
 # MCP Server HTTP port (for OpenClaw / Claude Desktop connections)
 mcp:
   port: 3100
@@ -46,8 +58,10 @@ mcp:
 events_webhook:
   port: 3101
 
-# DB schema extensions: declare custom columns for video_summary_tasks and alerts.
+# DB schema extensions for video_summary_tasks.
 # MCP server auto-applies ALTER TABLE on startup if columns are missing.
+# The parser writes the parsed VLM output into these columns.
+# `alerts` table is intentionally kept use-case-agnostic — no extensions.
 schema:
   video_summary_tasks:
     extensions:
@@ -55,6 +69,35 @@ schema:
       - { name: "severity",   type: "text", required: true }   # critical / warn / info
       - { name: "desc",       type: "text", required: true }   # one-sentence description
       - { name: "confidence", type: "real", required: false }  # optional VLM confidence
-  alerts:
-    extensions: []
   custom_tables: []
+
+# Use case library. Each entry is referenced by monitors via `use_case`.
+# A single use case may be referenced by multiple monitors.
+use_case_dict:
+  fridge:
+    description: "Fridge content tracking"
+    video_summary_task: refrigerator_monitor_en
+    # No evaluate_rules_path → defaultRuleEvaluator handles it
+    reports:
+      data_source: events
+      default_type: daily
+      filter: { motion_type: motion }
+
+  child_safety:
+    description: "Child safety monitoring"
+    video_summary_task: child_safety_monitor
+    evaluate_rules_path: ${HOME}/use-cases/child_safety/evaluate_rules.py  # optional Python override
+    reports:
+      data_source: alerts
+      default_type: daily
+      filter: {}
+
+  elder_wakeup:
+    description: "Elder wakeup monitoring"
+    video_summary_task: elder_wakeup_monitor
+    evaluate_rules_path: ${HOME}/use-cases/elder_wakeup/evaluate_rules.py
+    reports:
+      data_source: video_summary_tasks
+      default_type: daily
+      filter:
+        event: wakeup    # filter on video_summary_tasks.event extension column

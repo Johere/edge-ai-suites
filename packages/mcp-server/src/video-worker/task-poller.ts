@@ -3,7 +3,8 @@ import type { SmartBuildingDB } from "@smartbuilding-video/db";
 import type { VideoSummaryClient } from "./video-summary-client.js";
 import type { VideoSummaryYield } from "./video-summary-yield.js";
 import type { AlertCallback } from "./index.js";
-import { defaultRuleEvaluator, type RuleEvaluator } from "@smartbuilding-video/rule-engine";
+import { evaluateWithOverride, parseSummaryFields } from "@smartbuilding-video/rule-engine";
+import { logger } from "../logger.js";
 
 export class TaskPoller {
   private intervals: Map<string, ReturnType<typeof setInterval>> = new Map();
@@ -14,7 +15,6 @@ export class TaskPoller {
   private videoSummaryClient: VideoSummaryClient;
   private yieldManager: VideoSummaryYield;
   private onAlert?: AlertCallback;
-  private ruleEvaluator: RuleEvaluator;
 
   constructor(
     config: ServerConfig,
@@ -22,14 +22,12 @@ export class TaskPoller {
     videoSummaryClient: VideoSummaryClient,
     yieldManager: VideoSummaryYield,
     onAlert?: AlertCallback,
-    ruleEvaluator?: RuleEvaluator,
   ) {
     this.config = config;
     this.db = db;
     this.videoSummaryClient = videoSummaryClient;
     this.yieldManager = yieldManager;
     this.onAlert = onAlert;
-    this.ruleEvaluator = ruleEvaluator ?? defaultRuleEvaluator;
   }
 
   startPolling(monitorId: string): void {
@@ -72,26 +70,37 @@ export class TaskPoller {
       const videoPath = task.summaryClipInput ?? "";
       const result = await this.videoSummaryClient.summarize({ videoUrl: videoPath, taskId: String(task.id) });
 
-      this.db.updateTaskStatus(task.id, "completed", result.summary);
+      // Schema-aware parse of VLM output: only fields declared in
+      // config.schema.video_summary_tasks.extensions are extracted.
+      const extensions = this.config.schema?.video_summary_tasks?.extensions ?? [];
+      const parsed = parseSummaryFields(result.summary ?? "", extensions);
+      if (parsed.missingRequired.length > 0) {
+        logger.warn(`[task-poller] task ${task.id} (${monitorId}) missing required schema fields: ${parsed.missingRequired.join(", ")}`);
+      }
 
-      // Evaluate rules via rule engine (defaultRuleEvaluator or injected override)
+      // Persist summary text + parsed extension fields in one UPDATE
+      this.db.updateTaskStatus(task.id, "completed", result.summary, undefined, parsed.fields);
+
+      // Evaluate rules via rule engine. Override path (Python script) is derived
+      // from config.useCaseDict[monitor.useCase].evaluate_rules_path; absent → defaultRuleEvaluator.
       const monitor = this.db.getMonitor(monitorId);
+      const useCase = monitor?.useCase ?? "";
+      const overridePath = this.config.useCaseDict[useCase]?.evaluate_rules_path ?? null;
       const ruleCtx = {
         monitorId,
-        useCaseId: monitor?.useCaseId ?? "",
+        useCase,
         taskId: task.id,
         summaryText: result.summary ?? "",
-        payload: {},
+        payload: { fields: parsed.fields },
       };
-      const ruleResult = await this.ruleEvaluator(ruleCtx);
+      const ruleResult = await evaluateWithOverride(ruleCtx, overridePath);
 
       if (ruleResult.shouldAlert) {
         this.db.createAlert({
           monitorId,
           taskId: task.id,
           eventId: task.eventId,
-          useCase: monitor?.useCaseId ?? "",
-          alertType: ruleResult.alertType ?? "alert",
+          useCase: monitor?.useCase ?? "",
           description: ruleResult.alertMessage,
         });
         if (this.onAlert) {

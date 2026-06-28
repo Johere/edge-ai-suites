@@ -365,7 +365,7 @@ smartbuilding_use_case_validate task_name=pet_safety_monitor schema=pet_safety
 
 # Step 4: Register source (optional)
 smartbuilding_monitor_ctl action=register_source monitor_id=cam_pet \
-  rtsp_url=rtsp://localhost:8554/live/pet
+  source_url=rtsp://localhost:8554/live/pet
 ```
 
 ### 5.3 Customize Post-proc (Summary-Parser / Rule Engine)
@@ -649,7 +649,7 @@ class YoloPrefilter:
 ```json
 {
   "source_id": "cam_pet",
-  "rtsp_url": "rtsp://localhost:8554/live/pet",
+  "source_url": "rtsp://localhost:8554/live/pet",
   "webhook_url": "http://localhost:3100/events",
   "pipeline": {
     "motion": { "enabled": true, "diff_threshold": 25, "area_ratio": 1.5, "stable_frames": 30 },
@@ -671,7 +671,7 @@ class VideoStreamService:
     def register_source(self, req: RegisterRequest) -> None:
         worker = SourceWorker(
             source_id=req.source_id,
-            rtsp_url=req.rtsp_url,
+            source_url=req.source_url,
             pipeline_config=req.pipeline,
             sink=WebhookSink(req.webhook_url or self.default_webhook_url),
         )
@@ -1026,7 +1026,7 @@ npx @smartbuilding-video/mcp-server --config smartbuilding-video.yaml
 ```bash
 # Register new use case via wizard → verify data flows end-to-end
 smartbuilding_monitor_ctl action=register_source monitor_id=cam_pet \
-  rtsp_url=rtsp://localhost:8554/live/pet
+  source_url=rtsp://localhost:8554/live/pet
 # → Verify: motion events → clips → VLM → alerts → subscription broadcast
 ```
 

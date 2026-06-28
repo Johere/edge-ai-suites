@@ -49,14 +49,35 @@ export class SchemaManager {
     return { added, warnings };
   }
 
-  validatePromptSchema(
-    requiredFields: string[],
+  /**
+   * Check whether a prompt contains every schema field name as a case-insensitive substring.
+   * Required fields decide validity; optional fields are reported separately for completeness.
+   *
+   * Stateless — uses only the extensions list it's given. Static (no `this.db` access),
+   * so callers can use it without instantiating SchemaManager.
+   */
+  static validatePromptSchema(
+    extensions: SchemaExtension[],
     prompt: string,
-  ): { valid: boolean; missing: string[] } {
-    const missing = requiredFields.filter(
-      (field) => !prompt.toLowerCase().includes(field.toLowerCase()),
-    );
-    return { valid: missing.length === 0, missing };
+  ): {
+    valid: boolean;
+    requiredFields: string[];
+    optionalFields: string[];
+    missingRequired: string[];
+    missingOptional: string[];
+  } {
+    const promptLower = prompt.toLowerCase();
+    const requiredFields = extensions.filter((e) => e.required).map((e) => e.name);
+    const optionalFields = extensions.filter((e) => !e.required).map((e) => e.name);
+    const missingRequired = requiredFields.filter((f) => !promptLower.includes(f.toLowerCase()));
+    const missingOptional = optionalFields.filter((f) => !promptLower.includes(f.toLowerCase()));
+    return {
+      valid: missingRequired.length === 0,
+      requiredFields,
+      optionalFields,
+      missingRequired,
+      missingOptional,
+    };
   }
 
   private getExistingColumns(table: string): Map<string, string> {
