@@ -1,4 +1,18 @@
-# Development Status — Jiaojiao's Tasks
+# Development Status
+
+## Global Project Status
+
+| # | Module | Owner | Schedule | Status | Notes |
+|---|---|---|---|---|---|
+| 1 | SmartBuilding Video MCP Server | Jiaojiao | WW24–WW28 | In progress | WW24 完成 monorepo + 8 tools + 4 resources + DB + 测试框架 (82/82 pass)；WW25 推 MCP Server 主链路 |
+| 2 | Agent Framework Adapter | Jiaojiao | WW29–WW30 | Not started | 含 wrapper + OpenClaw plugin |
+| 3 | Use Case Adapter | Jie | WW28–WW31 | Not started | wrapper + register new use case + 自定义 post-proc |
+| 4 | SmartBuilding Video Skills & Workspace | Jiaojiao | WW31–WW32 | Not started | smartbuilding-toolkit / video-understanding skill 调优 + 3 个 assistant workspace |
+| 5 | Video Stream Analytics Microservice | Jie | WW24–WW27 | In progress | 微服务结构、motion + NPU prefilter 已迁移完成；动态视频源管理 WW27 收尾 |
+| 6 | Multi-level Video Understanding Microservice | Jiaojiao | WW25, WW27 | Not started | Caption only + Dynamic Task |
+| 7 | Integration & Documents | Jiaojiao + Jie + Zhonghua | WW31–WW32 | Not started | 联调 + bug fix + E2E validation + 用户文档 |
+
+---
 
 ## SmartBuilding Video MCP Server
 
@@ -36,6 +50,24 @@
 |---|------|--------|----------|--------|
 | 11 | Integration and bug fix | 1W | WW31 | Not started |
 | 12 | User guide, Get-started-guide, Developer's guide | 2W | WW31–WW32 | Not started |
+
+---
+
+## Jie's Tasks — Video Stream Analytics Microservice
+
+| # | Task | Effort | Schedule | Status |
+|---|------|--------|----------|--------|
+| 1 | Microservice structure dev | 2W | WW24–WW25 | Done |
+| 2 | Motion detection + NPU Prefilter (migrate from demo) | 1W | WW26 | Done |
+| 3 | Dynamic video source management | 1W | WW27 | In progress |
+
+## Jie's Tasks — Use Case Adapter
+
+| # | Task | Effort | Schedule | Status |
+|---|------|--------|----------|--------|
+| 4 | Register new use case | 2W | WW28–WW29 | Not started |
+| 5 | Use case adapter wrapper | 1W | WW30 | Not started |
+| 6 | Customize post-proc (summary-parser / rule engine) | 1W | WW31 | Not started |
 
 ---
 
@@ -158,3 +190,49 @@
 
 - [ ] 接口清单核对: docs/implements/monitor-ctl-analytics-integration.md
 - [ ] 端到端集成测试：webhook → pending task → multilevel-video-understanding → rule eval (含 Python override) → alert → MCP notification
+
+---
+
+## Development Tracing — Jie
+
+### Done (WW24)
+
+- [x] `videostream-analytics/` 仓库骨架 + `pyproject.toml`（FastAPI + Uvicorn + Pydantic + OpenCV + httpx，可选 `[npu]` extras）
+- [x] FastAPI 服务 `service.py` + Uvicorn 入口，监听 `:8999`
+- [x] `SourceManager` (`source_worker.py`)：维护 `{source_id: StreamPipeline}` 映射，生命周期管理
+- [x] `StreamPipeline` (`stream_monitor/rtsp_monitor.py`)：RTSP → MotionDetector → SegmentExtractor → ContinuousRecorder
+- [x] `EventSink` 抽象 (`sinks/`)：WebhookSink / StdoutSink / NullSink
+- [x] CLI 三模式 (`cli.py`)：`serve` / `stream` / `health`，pyproject `[project.scripts]` 注册入口
+- [x] Docker 化 (`docker/Dockerfile` + `docker/docker-compose.yaml`)：Python 3.11-slim + OpenCV deps，端口 8999，host 网络模式
+- [x] 单元测试套件 `tests/unit/`：97 cases，覆盖 motion / prefilter / pipeline / config / health / pause-resume / sinks
+- [x] 集成测试套件 `tests/integration/`：mock webhook server、容器健康、源生命周期、动作到 webhook 投递
+- [x] 多场景测试脚本 `scripts/test-videostream-analytics.sh`：unit / integration / multi-video 三层测试
+
+### Done (WW25 cont.)
+
+- [x] `BaseMonitor` ABC 抽象，准备多源类型扩展
+- [x] `ContinuousRecorder` (`stream_monitor/continuous_recorder.py`)：固定 interval (60s) MP4 录制、retention 管理
+- [x] motion `MotionState` + ROI 支持 (`stream_monitor/pipeline/{motion_state.py,roi.py}`)
+- [x] 共享 utils：`shared/{logger.py,time_utils.py,webhook_client.py}`
+- [x] 重构包结构 + `EventSink` 拆分到独立 `sinks/` 模块
+
+### Done (WW26)
+
+- [x] YOLO 预过滤模块 `stream_monitor/pipeline/prefilter_yolo.py`：OpenVINO 推理、target_classes 过滤、置信度阈值、NPU 优先
+- [x] config 中开启 prefilter 默认值（NPU + yolo11s FP16）
+- [x] NPU 设备模型 cache，避免重复编译
+- [x] Prefilter 评估工具 `tools/`：`eval_prefilter_from_webhook.py` (recall/precision)、`run_eval.sh` (4 场景一键跑)、`render_eval_timeline.py` (ASCII 时间线)
+- [x] Prefilter 配置契约测试 `tests/unit/test_prefilter_config_contract.py` (9 cases)：source override 全量替换、坏 model_path 优雅降级
+- [x] phase2 dashboard baseline 验证：child 100/100、elder_day1+2 100/100、fridge 75（边界对齐，--tolerance 2.0 后 100）
+
+### In progress (WW27)
+
+- [ ] Dynamic video source management：register/unregister/pause/resume/pipeline hot-update API 已实现并联通 `SourceManager`，剩余 health monitoring + recovery_strategy (retry/pause/remove) 自动恢复路径联调
+- [ ] `recovery_strategy: remove` 自动注销 + unhealthy 事件投递（`sources/{id}` 状态变更广播）
+
+### Next Steps (WW28+)
+
+- [ ] WW28–WW29：Use Case Adapter — register new use case 主流程（schema 校验、prompt autogen 入口、持久化到配置）
+- [ ] WW30：Use Case Adapter wrapper（统一对外 API，对接 MCP Server `use_case_register` tool）
+- [ ] WW31：Customize post-proc — summary parser + rule engine override 路径
+- [ ] 与 Jiaojiao 联调 MCP Server 的 events webhook → pending task → VLM → rule eval → alert 链路

@@ -31,6 +31,11 @@ Thumbs.db
 segments/
 data/
 
+# Test video corpus (heavy MP4s; SRT ground-truth files stay tracked)
+videos/**/*.mp4
+videos/**/*.mkv
+videos/**/*.mov
+
 # Logs
 *.log
 logs/
