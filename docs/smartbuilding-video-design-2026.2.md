@@ -650,7 +650,7 @@ class YoloPrefilter:
 {
   "source_id": "cam_pet",
   "source_url": "rtsp://localhost:8554/live/pet",
-  "webhook_url": "http://localhost:3100/events",
+  "webhook_url": "http://localhost:3101/events",
   "pipeline": {
     "motion": { "enabled": true, "diff_threshold": 25, "area_ratio": 1.5, "stable_frames": 30 },
     "prefilter": { "enabled": true, "model_path": "/models/yolo11s.xml", "target_classes": ["person", "cat"], "min_confidence": 0.4, "detect_fps": 2 },
