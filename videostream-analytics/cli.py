@@ -45,7 +45,8 @@ def cmd_serve(args):
 
 def cmd_stream(args):
     """Single-source streaming mode — output events to stdout."""
-    from shared.config import load_config, SourceConfig, DefaultsConfig
+    import os
+    from shared.config import load_config, SourceConfig, expand_path
     from stream_monitor.rtsp_monitor import StreamPipeline
     from sinks import StdoutSink, NullSink, WebhookSink
 
@@ -66,14 +67,16 @@ def cmd_stream(args):
 
     source = SourceConfig(
         source_id=args.source_id,
-        rtsp_url=args.rtsp_url,
-        use_case=args.use_case,
+        source_url=args.rtsp_url,
     )
+
+    data_dir = os.path.join(expand_path(config.data_dir), args.source_id)
+    os.makedirs(data_dir, exist_ok=True)
 
     pipeline = StreamPipeline(
         source=source,
         defaults=config.defaults,
-        data_dir=config.data_dir,
+        data_dir=data_dir,
         sink=sink,
     )
 
