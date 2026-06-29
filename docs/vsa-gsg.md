@@ -74,10 +74,14 @@ webhook:
   retry_attempts: 3
   retry_delay: 2
 
+# `data_dir` 是所有 per-source 输出的根目录。
+# 每个注册的 source 会写到 `<data_dir>/<source_id>/`，除非注册体里显式传入
+# 绝对路径的 `data_dir`（MCP 默认就是传绝对路径）。
 data_dir: "~/.smartbuilding/data"
 
 defaults:
   motion:
+    enabled: true
     diff_threshold: 15      # 帧差阈值
     area_ratio: 0.005       # 触发动作的最小面积占比
     stable_frames: 45       # 静止判定帧数
@@ -85,7 +89,8 @@ defaults:
     interval: 10            # 切片检查间隔（秒）
     min_duration: 1.0       # 最短 clip 时长（秒）
   recording:
-    interval: 60            # 连续录制单文件时长（秒）
+    enabled: true           # 启动后台固定时长录制（与 motion 支路并行）
+    interval_seconds: 60    # 单个固定时长片段时长（秒）
     fps: 15
     retention_days: 5
   prefilter:
@@ -136,33 +141,54 @@ videostream-analytics stream \
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | GET | `/health` | 探活 |
-| GET | `/sources` | 列出所有已注册源 |
+| GET | `/sources` | 列出所有已注册源（**返回裸数组**） |
 | GET | `/sources/{source_id}` | 单源详情（含 health 字段） |
-| POST | `/register_source` | 注册源 |
+| GET | `/sources/{source_id}/status` | 单源详情（MCP `analyticsSourceExists` 使用） |
+| POST | `/register_source` | 注册源（嵌套 `pipeline` 包装） |
 | DELETE | `/unregister_source` | 注销源（body 形式） |
 | POST | `/sources/{source_id}/stop` | 停止并注销 |
 | POST | `/sources/{source_id}/restart` | 重启 |
 | POST | `/sources/{source_id}/pause` | 暂停（不删除） |
 | POST | `/sources/{source_id}/resume` | 恢复 |
-| PUT | `/sources/{source_id}/pipeline` | 热更新 motion / segment / prefilter / health 配置 |
+| PUT | `/sources/{source_id}/pipeline` | 热更新 motion / segment / prefilter / recording / health 配置（嵌套 `pipeline` 包装） |
 | DELETE | `/sources/{source_id}` | RESTful 删除（同 stop） |
 
-`POST /register_source` 完整 body 示例：
+`POST /register_source` 完整 body 示例（嵌套形态，与 MCP `monitor-ctl.ts` 发出的一致）：
 
 ```json
 {
-  "source_id": "cam_demo",
-  "rtsp_url": "rtsp://localhost:8554/live/child",
-  "use_case": "child_safety",
+  "source_id":   "cam_demo",
+  "source_url":  "rtsp://localhost:8554/live/child",
   "webhook_url": "http://host.docker.internal:9999/events",
-  "motion":     { "diff_threshold": 15, "area_ratio": 0.005, "stable_frames": 45 },
-  "segment":    { "interval": 10, "min_duration": 1.0 },
-  "prefilter":  { "enabled": false },
-  "health":     { "max_failures": 30, "recovery_strategy": "retry" }
+  "data_dir":    "/data/cam_demo",
+  "pipeline": {
+    "motion":    { "enabled": true, "diff_threshold": 15, "area_ratio": 0.005, "stable_frames": 45 },
+    "segment":   { "interval": 10, "min_duration": 1.0 },
+    "prefilter": { "enabled": false },
+    "recording": { "enabled": true, "interval_seconds": 60, "retention_days": 5 },
+    "health":    { "max_failures": 30, "recovery_strategy": "retry" }
+  }
 }
 ```
 
-仅 `source_id` 和 `rtsp_url` 必填，其余字段省略时使用 `config.yaml` 的 `defaults`。
+必填：`source_id`、`source_url`。其他字段省略时使用 `config.yaml` 的 `defaults`。`data_dir` 省略时落到 `<config.data_dir>/<source_id>/`。
+
+**注意**：旧的"平铺"格式（`rtsp_url` / 顶层 `motion/segment/...` / `use_case`）在 Phase 7 硬切换后**不再接受**，会返回 422。
+
+Webhook 事件（VSA → 下游 `/events`）envelope（嵌套）：
+
+```json
+{ "sourceId": "cam_demo", "type": "motion|recording|status",
+  "timestamp": "2026-06-29T10:30:15", "payload": { ... } }
+```
+
+每种 `type` 的 `payload`：
+
+| type | 必填 | 可选 |
+|---|---|---|
+| `motion` | `event_file_path`, `summary_clip_input`, `start_time`, `duration_seconds` | `end_time`, `prefilter_passed` (0/1), `prefilter_classes` (JSON str), `prefilter_confidence`, `trajectory_region` |
+| `recording` | `recording_path`, `recording_start`, `recording_end` | `duration_seconds`, `file_size_bytes` |
+| `status` | `status` | `reason` |
 
 ## 6. 单元测试
 
@@ -242,20 +268,23 @@ curl -sf http://localhost:8999/health | python3 -m json.tool
 curl -s -X POST http://localhost:8999/register_source \
   -H "Content-Type: application/json" \
   -d '{
-    "source_id": "cam_demo",
-    "rtsp_url": "rtsp://localhost:8554/live/child",
-    "use_case": "child_safety",
-    "prefilter": {"enabled": false}
+    "source_id":   "cam_demo",
+    "source_url":  "rtsp://localhost:8554/live/child",
+    "data_dir":    "/tmp/vsa-test/cam_demo",
+    "pipeline": {
+      "prefilter": {"enabled": false}
+    }
   }' | python3 -m json.tool
 ```
 
-期望：`{"status": "started", "source_id": "cam_demo", ...}`
+期望：`{"status": "started", "source_id": "cam_demo", "data_dir": "/tmp/vsa-test/cam_demo", ...}`
 
-### V3. `GET /sources` + `GET /sources/{id}`
+### V3. `GET /sources` + `GET /sources/{id}/status`
 
 ```bash
+# /sources 返回**裸数组**（注意：不是 {"sources":[...]} 包装）
 curl -sf http://localhost:8999/sources | python3 -m json.tool
-curl -sf http://localhost:8999/sources/cam_demo | python3 -m json.tool
+curl -sf http://localhost:8999/sources/cam_demo/status | python3 -m json.tool
 ```
 
 期望单源响应包含：
@@ -263,8 +292,11 @@ curl -sf http://localhost:8999/sources/cam_demo | python3 -m json.tool
 ```json
 {
   "source_id": "cam_demo",
+  "source_url": "rtsp://localhost:8554/live/child",
+  "data_dir": "/tmp/vsa-test/cam_demo",
   "status": "online",
   "running": true,
+  "recording_enabled": true,
   "health": {
     "failure_count": 0,
     "reconnect_count": 0,
@@ -275,24 +307,32 @@ curl -sf http://localhost:8999/sources/cam_demo | python3 -m json.tool
 }
 ```
 
-### V4. Motion → clip → webhook
+### V4. Motion → clip → webhook（含 recording 支路）
 
-等 30 ~ 60 秒让动作触发。clip 写盘路径由 `config.yaml` 的 `data_dir` 决定（本地模式默认 `~/.smartbuilding/data`，Docker 模式挂载到 `/data`）：
+等 30 ~ 60 秒让动作触发。clip 写盘路径由注册体 `data_dir` 决定（V2 注册时传入；省略则落到 `<config.data_dir>/<source_id>/`）：
 
 ```bash
-curl -sf http://localhost:9999/recorded_events/motion | python3 -m json.tool | head -40
+# motion 事件 — envelope: {sourceId, type:"motion", timestamp, payload:{event_file_path, summary_clip_input, ...}}
+curl -sf http://localhost:9999/recorded_events/motion | python3 -m json.tool | head -60
 
-CLIPS_DIR=$HOME/.smartbuilding/data/cam_demo/motion_events/$(date +%Y-%m-%d)   # 本地模式
-# Docker 模式下：CLIPS_DIR=${DATA_DIR:-/tmp/smartbuilding-clips}/cam_demo/motion_events/$(date +%Y-%m-%d)
-ls -la "$CLIPS_DIR"
+# recording 事件 — envelope: {sourceId, type:"recording", timestamp, payload:{recording_path, recording_start, ...}}
+curl -sf http://localhost:9999/recorded_events/recording | python3 -m json.tool | head -40
 
-CLIP=$(ls "$CLIPS_DIR"/*.mp4 | head -1)
+DATA_DIR=/tmp/vsa-test/cam_demo   # 与 V2 register body 中的 data_dir 一致
+ls -la "$DATA_DIR/latest.jpg"
+ls -la "$DATA_DIR/motion_events/$(date +%Y-%m-%d)/"
+ls -la "$DATA_DIR/recordings/$(date +%Y-%m-%d)/"
+
+CLIP=$(ls "$DATA_DIR/motion_events/$(date +%Y-%m-%d)/"*.mp4 | head -1)
 ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$CLIP"
 ```
 
 期望：
-- mock webhook 至少收到 1 条 `event_type: motion`，payload 含 `clip_path` / `duration_seconds` / `start_time` / `end_time` / `clip_size_bytes`
-- 磁盘有对应 mp4，时长 1 ~ 10 秒
+- mock webhook 至少收到 1 条 `type: motion`，`payload` 含 `event_file_path` / `summary_clip_input` / `start_time` / `end_time` / `duration_seconds`
+- recording 事件按 `interval_seconds` 周期出现，`payload` 含 `recording_path` / `recording_start` / `recording_end` / `file_size_bytes`
+- `latest.jpg` mtime 在最近 2 秒内
+- `motion_events/<today>/*.mp4` 至少 1 个，时长 1 ~ 10 秒
+- `recordings/<today>/*.mp4` 与运行时长匹配（60s 间隔 ≈ 每分钟 1 个）
 
 ### V5. `PUT /sources/{id}/pipeline` 热更新
 
@@ -300,12 +340,14 @@ ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$CLIP"
 curl -s -X PUT http://localhost:8999/sources/cam_demo/pipeline \
   -H "Content-Type: application/json" \
   -d '{
-    "motion": {"diff_threshold": 30, "stable_frames": 60},
-    "health": {"max_failures": 10, "recovery_strategy": "pause"}
+    "pipeline": {
+      "motion": {"diff_threshold": 30, "stable_frames": 60},
+      "health": {"max_failures": 10, "recovery_strategy": "pause"}
+    }
   }' | python3 -m json.tool
 
 sleep 3
-curl -sf http://localhost:8999/sources/cam_demo | python3 -m json.tool
+curl -sf http://localhost:8999/sources/cam_demo/status | python3 -m json.tool
 ```
 
 期望 PUT 返回 `{"status": "updated"}`；后续 GET 看到 `health.max_failures: 10`、`recovery_strategy: "pause"`。
@@ -339,14 +381,18 @@ curl -s -X DELETE http://localhost:9999/recorded_events > /dev/null
 curl -s -X POST http://localhost:8999/register_source \
   -H "Content-Type: application/json" \
   -d '{
-    "source_id": "cam_bad",
-    "rtsp_url": "rtsp://localhost:8554/live/__nonexistent__",
-    "prefilter": {"enabled": false},
-    "health": {
-      "max_failures": 3,
-      "recovery_strategy": "remove",
-      "backoff_base": 1.0,
-      "backoff_max": 2.0
+    "source_id":   "cam_bad",
+    "source_url":  "rtsp://localhost:8554/live/__nonexistent__",
+    "data_dir":    "/tmp/vsa-test/cam_bad",
+    "pipeline": {
+      "prefilter": {"enabled": false},
+      "recording": {"enabled": false},
+      "health": {
+        "max_failures": 3,
+        "recovery_strategy": "remove",
+        "backoff_base": 1.0,
+        "backoff_max": 2.0
+      }
     }
   }' | python3 -m json.tool
 
@@ -355,7 +401,7 @@ curl -sf http://localhost:8999/sources                | python3 -m json.tool
 curl -sf http://localhost:9999/recorded_events/status | python3 -m json.tool | head -30
 ```
 
-期望：`cam_bad` 不在 `/sources` 列表中；`recorded_events/status` 含 `{"event_type": "status", "status": "unhealthy", "reason": "rtsp_timeout"}` 和 `{"event_type": "status", "status": "stopped"}`。
+期望：`cam_bad` 不在 `/sources` 列表中；`recorded_events/status` 含 envelope `{"sourceId": "cam_bad", "type": "status", "payload": {"status": "unhealthy", "reason": "rtsp_timeout"}}` 和 `{"sourceId": "cam_bad", "type": "status", "payload": {"status": "stopped"}}`。
 
 ### V9. CLI 三模式
 
@@ -379,7 +425,7 @@ docker exec vsa-test timeout 60 videostream-analytics stream \
 期望：
 - `--help` 列出 `serve` / `stream` / `health` 三个子命令
 - `health` 输出 `{"status": "ok", ...}`，exit 0
-- `stream --sink stdout` stdout 先输出 `{"... "event_type": "status", "status": "online"}`，等 30 秒以上动作累积后输出 `{"... "event_type": "motion", "clip_path": "...", ...}`
+- `stream --sink stdout` stdout 先输出 `{"sourceId":"...","type":"status","payload":{"status":"online"}}`，等 30 秒以上动作累积后输出 `{"sourceId":"...","type":"motion","payload":{"event_file_path":"...",...}}`
 
 ### 验收清单
 

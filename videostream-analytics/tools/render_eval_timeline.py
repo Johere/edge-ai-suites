@@ -134,11 +134,31 @@ def parse_srt(path: str, exclude_pattern: Optional[str]) -> List[GTCue]:
     return cues
 
 
+def _normalize_event(e: dict) -> dict:
+    """Phase 7: webhook envelope is nested. Flatten so downstream stays simple.
+
+    Returns a dict with keys: event_type, source_id, start_time, end_time,
+    clip_path — regardless of which schema the input file used.
+    """
+    if "payload" in e and isinstance(e["payload"], dict):
+        p = e["payload"]
+        return {
+            "event_type": e.get("type"),
+            "source_id": e.get("sourceId"),
+            "start_time": p.get("start_time"),
+            "end_time": p.get("end_time"),
+            "clip_path": p.get("event_file_path") or p.get("recording_path", ""),
+        }
+    # Legacy flat schema fallthrough.
+    return e
+
+
 def load_events(events_json: str, source_id: Optional[str]) -> List[dict]:
     payload = json.loads(Path(events_json).read_text(encoding="utf-8"))
     raw = payload.get("events", payload) if isinstance(payload, dict) else payload
     out = []
-    for e in raw:
+    for raw_event in raw:
+        e = _normalize_event(raw_event)
         if e.get("event_type") != "motion":
             continue
         if source_id and e.get("source_id") != source_id:

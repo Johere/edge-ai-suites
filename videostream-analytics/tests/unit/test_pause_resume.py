@@ -28,7 +28,7 @@ class TestStreamPipelinePauseResume:
     @pytest.fixture
     def pipeline(self, tmp_path, mock_sink):
         source = SourceConfig(
-            source_id="test_pause", rtsp_url="rtsp://localhost:8554/live/test"
+            source_id="test_pause", source_url="rtsp://localhost:8554/live/test"
         )
         defaults = DefaultsConfig(
             motion=MotionConfig(),
@@ -74,22 +74,22 @@ class TestStreamPipelinePauseResume:
         pipeline._running = True
         pipeline._status = "online"
         pipeline.pause()
-        mock_sink.emit.assert_called_with({
-            "source_id": "test_pause",
-            "event_type": "status",
-            "status": "paused",
-        })
+        # Phase 7: nested envelope {sourceId, type, timestamp, payload}
+        event = mock_sink.emit.call_args.args[0]
+        assert event["sourceId"] == "test_pause"
+        assert event["type"] == "status"
+        assert event["payload"] == {"status": "paused"}
+        assert "timestamp" in event
 
     def test_resume_emits_status_event(self, pipeline, mock_sink):
         pipeline._running = True
         pipeline._status = "paused"
         pipeline._paused.clear()
         pipeline.resume()
-        mock_sink.emit.assert_called_with({
-            "source_id": "test_pause",
-            "event_type": "status",
-            "status": "online",
-        })
+        event = mock_sink.emit.call_args.args[0]
+        assert event["sourceId"] == "test_pause"
+        assert event["type"] == "status"
+        assert event["payload"] == {"status": "online"}
 
     def test_stop_unblocks_paused_pipeline(self, pipeline):
         pipeline._running = True
@@ -112,7 +112,7 @@ class TestSourceManagerPauseResume:
             instance.status = "online"
             instance.rtsp_url = "rtsp://localhost:8554/live/test"
             instance.source = SourceConfig(
-                source_id="cam_test", rtsp_url="rtsp://localhost:8554/live/test"
+                source_id="cam_test", source_url="rtsp://localhost:8554/live/test"
             )
             mock_cls.return_value = instance
             yield mock_cls, instance
@@ -126,7 +126,7 @@ class TestSourceManagerPauseResume:
     def test_pause_existing_source(self, manager, mock_pipeline_class):
         _, instance = mock_pipeline_class
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         result = manager.pause_source("cam1")
@@ -140,7 +140,7 @@ class TestSourceManagerPauseResume:
     def test_pause_stopped_source(self, manager, mock_pipeline_class):
         _, instance = mock_pipeline_class
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         instance.is_running = False
@@ -150,7 +150,7 @@ class TestSourceManagerPauseResume:
     def test_resume_existing_source(self, manager, mock_pipeline_class):
         _, instance = mock_pipeline_class
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         result = manager.resume_source("cam1")

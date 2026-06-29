@@ -1,4 +1,9 @@
-"""Integration tests: full pipeline — RTSP → motion detect → webhook events."""
+"""Integration tests: full pipeline — RTSP → motion detect → webhook events.
+
+Phase 7: webhooks now use the nested envelope:
+  { sourceId, type, timestamp, payload: {...} }
+Motion payload fields: event_file_path, summary_clip_input, start_time, ...
+"""
 
 import time
 
@@ -15,8 +20,11 @@ class TestMotionToWebhook:
         """Register a test source before each test, unregister after."""
         http_client.post(f"{analytics_url}/register_source", json={
             "source_id": "test_motion",
-            "rtsp_url": rtsp_url,
-            "use_case": "child_safety",
+            "source_url": rtsp_url,
+            "pipeline": {
+                "prefilter": {"enabled": False},
+                "recording": {"enabled": False},  # tests focus on motion path
+            },
         })
         time.sleep(2)
         yield
@@ -31,9 +39,9 @@ class TestMotionToWebhook:
             http_client, webhook_url, event_type="status", min_count=1, timeout=15
         )
         assert len(events) >= 1
-        online_events = [e for e in events if e.get("status") == "online"]
+        online_events = [e for e in events if e.get("payload", {}).get("status") == "online"]
         assert len(online_events) >= 1
-        assert online_events[0]["source_id"] == "test_motion"
+        assert online_events[0]["sourceId"] == "test_motion"
 
     def test_motion_events_received(self, http_client, webhook_url):
         """After pipeline runs, motion events should arrive (video has motion after ~40s)."""
@@ -43,20 +51,23 @@ class TestMotionToWebhook:
         assert len(events) >= 1, "No motion events received within 60s"
 
     def test_motion_event_payload_complete(self, http_client, webhook_url):
-        """Motion event payload should have all required fields."""
+        """Motion event envelope + payload should have all required fields."""
         events = wait_for_events(
             http_client, webhook_url, event_type="motion", min_count=1, timeout=60
         )
         assert len(events) >= 1
         event = events[0]
-        assert event["source_id"] == "test_motion"
-        assert event["event_type"] == "motion"
-        assert "start_time" in event
-        assert "end_time" in event
-        assert "duration_seconds" in event
-        assert "clip_path" in event
-        assert event["duration_seconds"] > 0
-        assert event["clip_path"].endswith(".mp4")
+        assert event["sourceId"] == "test_motion"
+        assert event["type"] == "motion"
+        assert "timestamp" in event
+        payload = event["payload"]
+        assert "start_time" in payload
+        assert "end_time" in payload
+        assert "duration_seconds" in payload
+        assert "event_file_path" in payload
+        assert "summary_clip_input" in payload
+        assert payload["duration_seconds"] > 0
+        assert payload["event_file_path"].endswith(".mp4")
 
     def test_motion_event_duration_within_range(self, http_client, webhook_url):
         """Motion event duration should be within min_duration to interval range."""
@@ -65,7 +76,7 @@ class TestMotionToWebhook:
         )
         assert len(events) >= 1
         for event in events:
-            duration = event["duration_seconds"]
+            duration = event["payload"]["duration_seconds"]
             # Fixed interval cutting: each segment is at most interval (10s) + tolerance
             assert 1.0 <= duration <= 11.0, f"Duration {duration}s out of range"
 

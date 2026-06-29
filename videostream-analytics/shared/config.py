@@ -7,10 +7,11 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MotionConfig(BaseModel):
+    enabled: bool = True
     diff_threshold: int = 25
     area_ratio: float = 0.015
     stable_frames: int = 30
@@ -22,7 +23,16 @@ class SegmentConfig(BaseModel):
 
 
 class RecordingConfig(BaseModel):
-    interval: int = 60
+    """Fixed-duration continuous recording config.
+
+    `interval_seconds` is the canonical field MCP sends. `interval` is kept as
+    a legacy alias accepted on input but written as `interval_seconds`.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool = True
+    interval_seconds: int = Field(default=60, alias="interval")
     fps: int = 15
     retention_days: int = 5
 
@@ -66,17 +76,26 @@ class DefaultsConfig(BaseModel):
 
 
 class SourceConfig(BaseModel):
-    """Per-source configuration provided at registration time."""
+    """Per-source configuration provided at registration time.
+
+    Renamed `rtsp_url` → `source_url` and dropped `use_case` as part of the
+    Phase 7 hard cutover to match MCP's `analyticsRegister` body.
+    """
 
     source_id: str
-    rtsp_url: str
-    use_case: str = "default"
+    source_url: str
     webhook_url: Optional[str] = None
+    data_dir: Optional[str] = None
     motion: Optional[MotionConfig] = None
     segment: Optional[SegmentConfig] = None
     recording: Optional[RecordingConfig] = None
     prefilter: Optional[PrefilterConfig] = None
     health: Optional[HealthConfig] = None
+
+    @property
+    def rtsp_url(self) -> str:
+        """Backwards-compatible accessor — internals still call this."""
+        return self.source_url
 
 
 class AppConfig(BaseModel):

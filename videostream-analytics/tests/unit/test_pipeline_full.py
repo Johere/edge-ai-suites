@@ -35,7 +35,7 @@ class TestFullPipeline:
     def pipeline(self, test_video_path, data_dir, mock_sink):
         source = SourceConfig(
             source_id="test_child",
-            rtsp_url=test_video_path,  # OpenCV can open file paths directly
+            source_url=test_video_path,  # OpenCV can open file paths directly
         )
         defaults = DefaultsConfig(
             motion=MotionConfig(diff_threshold=25, area_ratio=0.015, stable_frames=30),
@@ -57,7 +57,8 @@ class TestFullPipeline:
         pipeline.stop()
 
         # Check clip files were produced
-        motion_dir = os.path.join(data_dir, "test_child", "motion_events")
+        # Phase 7: data_dir is already the per-source root (no source_id nesting).
+        motion_dir = os.path.join(data_dir, "motion_events")
         clip_files = []
         if os.path.exists(motion_dir):
             for root, dirs, files in os.walk(motion_dir):
@@ -75,7 +76,8 @@ class TestFullPipeline:
         time.sleep(20)
         pipeline.stop()
 
-        motion_dir = os.path.join(data_dir, "test_child", "motion_events")
+        # Phase 7: data_dir is already the per-source root (no source_id nesting).
+        motion_dir = os.path.join(data_dir, "motion_events")
         clip_files = []
         if os.path.exists(motion_dir):
             for root, dirs, files in os.walk(motion_dir):
@@ -100,7 +102,8 @@ class TestFullPipeline:
         time.sleep(20)
         pipeline.stop()
 
-        motion_dir = os.path.join(data_dir, "test_child", "motion_events")
+        # Phase 7: data_dir is already the per-source root (no source_id nesting).
+        motion_dir = os.path.join(data_dir, "motion_events")
         clip_files = []
         if os.path.exists(motion_dir):
             for root, dirs, files in os.walk(motion_dir):
@@ -126,11 +129,14 @@ class TestFullPipeline:
         time.sleep(3)
         pipeline.stop()
 
+        # Phase 7: nested envelope — type/sourceId at top, business fields in payload.
         status_events = [
             call.args[0] for call in mock_sink.emit.call_args_list
-            if call.args[0].get("event_type") == "status"
+            if call.args[0].get("type") == "status"
         ]
-        online_events = [e for e in status_events if e.get("status") == "online"]
+        online_events = [
+            e for e in status_events if e.get("payload", {}).get("status") == "online"
+        ]
         assert len(online_events) >= 1, f"Expected online status event, got: {status_events}"
 
     def test_sink_receives_motion_events(self, pipeline, data_dir, mock_sink):
@@ -141,16 +147,18 @@ class TestFullPipeline:
 
         motion_events = [
             call.args[0] for call in mock_sink.emit.call_args_list
-            if call.args[0].get("event_type") == "motion"
+            if call.args[0].get("type") == "motion"
         ]
         assert len(motion_events) >= 1, "Expected at least 1 motion event"
 
         event = motion_events[0]
-        assert event["source_id"] == "test_child"
-        assert event["duration_seconds"] > 0
-        assert event["clip_path"].endswith(".mp4")
-        assert isinstance(event["start_time"], str)
-        assert isinstance(event["end_time"], str)
+        assert event["sourceId"] == "test_child"
+        payload = event["payload"]
+        assert payload["duration_seconds"] > 0
+        assert payload["event_file_path"].endswith(".mp4")
+        assert payload["summary_clip_input"].endswith(".mp4")
+        assert isinstance(payload["start_time"], str)
+        assert isinstance(payload["end_time"], str)
 
     def test_pipeline_stops_cleanly(self, pipeline, mock_sink):
         """Pipeline should stop without errors and report stopped status."""

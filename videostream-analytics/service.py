@@ -6,10 +6,20 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
-from shared.config import AppConfig, SourceConfig, MotionConfig, SegmentConfig, PrefilterConfig, HealthConfig
+from shared.config import (
+    AppConfig,
+    SourceConfig,
+    MotionConfig,
+    SegmentConfig,
+    PrefilterConfig,
+    RecordingConfig,
+    HealthConfig,
+)
 from source_worker import SourceManager
 
 logger = logging.getLogger(__name__)
@@ -19,26 +29,51 @@ _manager: SourceManager | None = None
 
 # --- Request Models (module-level for FastAPI schema resolution) ---
 
-class RegisterSourceRequest(BaseModel):
-    source_id: str
-    rtsp_url: str
-    use_case: str = "default"
-    webhook_url: str | None = None
+
+class PipelineConfig(BaseModel):
+    """Nested pipeline configuration sent by MCP server.
+
+    All sub-blocks optional — per-source defaults fill the gaps.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     motion: MotionConfig | None = None
     segment: SegmentConfig | None = None
     prefilter: PrefilterConfig | None = None
+    recording: RecordingConfig | None = None
     health: HealthConfig | None = None
 
 
+class RegisterSourceRequest(BaseModel):
+    """`POST /register_source` body — must match MCP `analyticsRegister` exactly.
+
+    Hard cutover from the old flat schema: `rtsp_url`, top-level `motion/...`,
+    and `use_case` are no longer accepted. `extra="forbid"` makes drift fail
+    loudly with 422 instead of silently dropping fields.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str
+    source_url: str
+    webhook_url: str | None = None
+    data_dir: str | None = None
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+
+
 class UnregisterSourceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     source_id: str
 
 
 class UpdatePipelineRequest(BaseModel):
-    motion: MotionConfig | None = None
-    segment: SegmentConfig | None = None
-    prefilter: PrefilterConfig | None = None
-    health: HealthConfig | None = None
+    """`PUT /sources/{id}/pipeline` body — nested form, no flat fallback."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
 
 def get_manager() -> SourceManager:
@@ -67,6 +102,29 @@ def create_app(config: AppConfig) -> FastAPI:
     )
     app.state.config = config
 
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(
+        request: Request, exc: RequestValidationError
+    ):
+        """Surface pydantic ValidationError as 422 with the offending fields."""
+        errors = exc.errors()
+        unknown_fields = [
+            ".".join(str(p) for p in e.get("loc", []) if p != "body")
+            for e in errors
+            if e.get("type") == "extra_forbidden"
+        ]
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": errors,
+                "unknown_fields": unknown_fields,
+                "hint": (
+                    "request body must match the nested-pipeline schema "
+                    "(source_id/source_url/webhook_url/data_dir/pipeline.{motion,segment,prefilter,recording,health})"
+                ),
+            },
+        )
+
     # --- Endpoints ---
 
     @app.get("/health")
@@ -74,33 +132,42 @@ def create_app(config: AppConfig) -> FastAPI:
         return {"status": "ok", "service": "videostream-analytics"}
 
     @app.get("/sources")
-    async def list_sources() -> dict[str, Any]:
+    async def list_sources() -> list[dict[str, Any]]:
+        """Return a bare array — MCP `monitor-ctl.ts` indexes by `s.source_id`."""
         mgr = get_manager()
-        return {"sources": mgr.get_sources()}
+        return mgr.get_sources()
 
-    @app.get("/sources/{source_id}")
-    async def get_source(source_id: str) -> dict[str, Any]:
+    def _source_status(source_id: str) -> dict[str, Any]:
         mgr = get_manager()
         status = mgr.get_source_status(source_id)
         if status is None:
             raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
         return status
 
+    @app.get("/sources/{source_id}")
+    async def get_source(source_id: str) -> dict[str, Any]:
+        return _source_status(source_id)
+
+    @app.get("/sources/{source_id}/status")
+    async def get_source_status(source_id: str) -> dict[str, Any]:
+        """MCP's `analyticsSourceExists` calls this path."""
+        return _source_status(source_id)
+
     @app.post("/register_source")
     async def register_source(req: RegisterSourceRequest) -> dict[str, Any]:
         mgr = get_manager()
         source = SourceConfig(
             source_id=req.source_id,
-            rtsp_url=req.rtsp_url,
-            use_case=req.use_case,
+            source_url=req.source_url,
             webhook_url=req.webhook_url,
-            motion=req.motion,
-            segment=req.segment,
-            prefilter=req.prefilter,
-            health=req.health,
+            data_dir=req.data_dir,
+            motion=req.pipeline.motion,
+            segment=req.pipeline.segment,
+            prefilter=req.pipeline.prefilter,
+            recording=req.pipeline.recording,
+            health=req.pipeline.health,
         )
-        result = mgr.register_source(source)
-        return result
+        return mgr.register_source(source)
 
     @app.delete("/unregister_source")
     async def unregister_source(req: UnregisterSourceRequest) -> dict[str, Any]:
@@ -126,13 +193,15 @@ def create_app(config: AppConfig) -> FastAPI:
         status = mgr.get_source_status(source_id)
         if status is None:
             raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
-        # Stop and re-register
-        pipeline = mgr._pipelines.get(source_id)
-        if pipeline:
-            pipeline.stop()
-            pipeline.start()
-            return {"status": "restarted", "source_id": source_id}
-        raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
+        bundle = mgr._bundles.get(source_id)
+        if bundle is None:
+            raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
+        bundle.pipeline.stop()
+        bundle.pipeline.start()
+        if bundle.recorder is not None:
+            bundle.recorder.stop()
+            bundle.recorder.start()
+        return {"status": "restarted", "source_id": source_id}
 
     @app.post("/sources/{source_id}/pause")
     async def pause_source(source_id: str) -> dict[str, Any]:
@@ -155,10 +224,11 @@ def create_app(config: AppConfig) -> FastAPI:
         mgr = get_manager()
         result = mgr.update_pipeline_config(
             source_id=source_id,
-            motion=req.motion,
-            segment=req.segment,
-            prefilter=req.prefilter,
-            health=req.health,
+            motion=req.pipeline.motion,
+            segment=req.pipeline.segment,
+            prefilter=req.pipeline.prefilter,
+            recording=req.pipeline.recording,
+            health=req.pipeline.health,
         )
         if result["status"] == "not_found":
             raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")

@@ -43,6 +43,7 @@ class PrefilterResult:
     passed: bool
     hit_classes: list[str] = field(default_factory=list)
     frame_hits: int = 0
+    max_confidence: float = 0.0
 
 
 def _preprocess(frame: np.ndarray) -> np.ndarray:
@@ -201,6 +202,7 @@ class FramePrefilter:
         self._hit_classes: set = set()
         self._pass_decided = False
         self._consecutive_misses = 0
+        self._max_conf = 0.0
 
     def reset_for_next_segment(self):
         """Partial reset — call on interval cut within same motion event.
@@ -213,6 +215,7 @@ class FramePrefilter:
         self._frame_hits = 0
         self._samples_taken = 0
         self._hit_classes: set = set()
+        self._max_conf = 0.0
 
     @property
     def pass_decided(self) -> bool:
@@ -246,6 +249,8 @@ class FramePrefilter:
                     self._frame_hits += 1
                 for d in dets:
                     self._hit_classes.add(d["name"])
+                    if d["conf"] > self._max_conf:
+                        self._max_conf = d["conf"]
                 if not self._pass_decided and self._frame_hits >= self.min_frames_hit:
                     self._pass_decided = True
             else:
@@ -278,4 +283,5 @@ class FramePrefilter:
             passed=passed,
             hit_classes=sorted(self._hit_classes),
             frame_hits=self._frame_hits,
+            max_confidence=self._max_conf,
         )

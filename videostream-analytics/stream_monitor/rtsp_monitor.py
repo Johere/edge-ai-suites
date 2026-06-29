@@ -11,23 +11,23 @@ Exit logic (cascaded):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
 import time
 from datetime import datetime
+from typing import Any
 
 import cv2
 
 from shared.config import (
     MotionConfig,
     SegmentConfig,
-    RecordingConfig,
     PrefilterConfig,
     HealthConfig,
     SourceConfig,
     DefaultsConfig,
-    expand_path,
 )
 from sinks import EventSink
 from stream_monitor.base_monitor import BaseMonitor
@@ -51,7 +51,7 @@ class StreamPipeline(BaseMonitor):
     ):
         self.source = source
         self.source_id = source.source_id
-        self.rtsp_url = source.rtsp_url
+        self.rtsp_url = source.source_url
         self._sink = sink
         self._on_remove_callback = on_remove_callback
 
@@ -62,8 +62,13 @@ class StreamPipeline(BaseMonitor):
         self._prefilter_cfg = source.prefilter or defaults.prefilter
         self._health_cfg = source.health or defaults.health
 
-        self._data_dir = os.path.join(expand_path(data_dir), self.source_id)
+        # `data_dir` is already the per-source root (resolved by SourceManager).
+        self._data_dir = data_dir
         os.makedirs(self._data_dir, exist_ok=True)
+        self._latest_jpg_path = os.path.join(self._data_dir, "latest.jpg")
+        # 1 Hz snapshot rate; actual cadence = max(1, _fps // _snapshot_hz)
+        self._snapshot_hz = 1.0
+        self._snapshot_next_idx = 0
 
         # Initialize prefilter if enabled
         self._prefilter: FramePrefilter | None = None
@@ -190,12 +195,7 @@ class StreamPipeline(BaseMonitor):
         strategy = self._health_cfg.recovery_strategy
 
         self._status = "unhealthy"
-        self._sink.emit({
-            "source_id": self.source_id,
-            "event_type": "status",
-            "status": "unhealthy",
-            "reason": "rtsp_timeout",
-        })
+        self._emit_envelope("status", {"status": "unhealthy", "reason": "rtsp_timeout"})
         logger.warning("[%s] Source unhealthy (%d failures), strategy=%s",
                        self.source_id, self._failure_count, strategy)
 
@@ -323,6 +323,7 @@ class StreamPipeline(BaseMonitor):
 
             consecutive_failures = 0
             self._frame_count += 1
+            self._maybe_write_snapshot(frame)
 
             if not self._paused.is_set():
                 # Paused: keep reading frames (maintain RTSP connection) but skip processing
@@ -374,6 +375,7 @@ class StreamPipeline(BaseMonitor):
 
     def _maybe_emit(self, result):
         """Check prefilter and emit or discard segment."""
+        pf_result = None
         if self._prefilter:
             pf_result = self._prefilter.result()
             if not pf_result.passed:
@@ -383,34 +385,81 @@ class StreamPipeline(BaseMonitor):
                     pass
                 logger.debug("[%s] Segment discarded by prefilter: %s", self.source_id, result.path)
                 return
-        self._emit_segment(result)
+        self._emit_segment(result, pf_result)
 
-    def _emit_segment(self, result):
-        """Post segment as motion event via sink."""
-        event = {
-            "source_id": self.source_id,
-            "event_type": "motion",
+    def _emit_envelope(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Wrap payload in the nested envelope MCP expects.
+
+        Envelope shape:
+            { sourceId, type, timestamp, payload }
+        """
+        self._sink.emit({
+            "sourceId": self.source_id,
+            "type": event_type,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "payload": payload,
+        })
+
+    def _emit_segment(self, result, pf_result=None) -> None:
+        """Post segment as motion event via sink, in MCP's nested envelope."""
+        # summary_clip_input: prefer a pre-cropped sibling clip if present.
+        clip_path = result.path
+        crop_path = clip_path.rsplit(".", 1)[0] + "_input.mp4"
+        summary_clip_input = crop_path if os.path.exists(crop_path) else clip_path
+
+        payload: dict[str, Any] = {
+            "event_file_path": clip_path,
+            "summary_clip_input": summary_clip_input,
             "start_time": result.start_time,
             "end_time": result.end_time,
             "duration_seconds": result.duration_s,
-            "clip_path": result.path,
-            "clip_size_bytes": result.file_size,
         }
-        self._sink.emit(event)
+        if pf_result is not None:
+            payload["prefilter_passed"] = int(bool(pf_result.passed))
+            payload["prefilter_classes"] = json.dumps(list(pf_result.hit_classes))
+            payload["prefilter_confidence"] = float(pf_result.max_confidence)
+
+        self._emit_envelope("motion", payload)
         logger.debug(
-            "[%s] Emitted segment: %.1fs, %s",
+            "[%s] Emitted motion: %.1fs %s prefilter=%s",
             self.source_id,
             result.duration_s,
-            result.path,
+            clip_path,
+            "n/a" if pf_result is None else ("pass" if pf_result.passed else "skip"),
         )
 
     def _emit_status(self, status: str):
-        """Emit a status event via sink."""
-        self._sink.emit({
-            "source_id": self.source_id,
-            "event_type": "status",
-            "status": status,
-        })
+        """Emit a status event via sink (MCP currently ignores unknown types)."""
+        self._emit_envelope("status", {"status": status})
+
+    def _maybe_write_snapshot(self, frame) -> None:
+        """Write latest.jpg at ~_snapshot_hz Hz (atomic via tmp+rename).
+
+        MCP's latest-frame resource reads this file directly off the shared volume.
+        Errors are swallowed — snapshot is best-effort and must not stall pipeline.
+
+        Note: cv2.imwrite dispatches by file extension, so the tmp filename must
+        still end in `.jpg` — using `.tmp` suffix breaks with
+        "could not find a writer for the specified extension".
+        """
+        if frame is None:
+            return
+        if self._frame_count < self._snapshot_next_idx:
+            return
+        step = max(1, int(round(max(self._fps, 1.0) / max(self._snapshot_hz, 0.1))))
+        self._snapshot_next_idx = self._frame_count + step
+        tmp_path = os.path.join(
+            os.path.dirname(self._latest_jpg_path), ".latest.tmp.jpg"
+        )
+        try:
+            ok = cv2.imwrite(tmp_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if ok:
+                os.replace(tmp_path, self._latest_jpg_path)
+            else:
+                logger.warning("[%s] cv2.imwrite returned False for %s",
+                               self.source_id, tmp_path)
+        except Exception as e:
+            logger.warning("[%s] snapshot write failed: %s", self.source_id, e)
 
     def _get_frame_size(self) -> tuple[int, int]:
         if self._cap:

@@ -16,7 +16,9 @@ from pathlib import Path
 
 import cv2
 
-from shared.config import RecordingConfig, SourceConfig, expand_path
+from typing import Any
+
+from shared.config import RecordingConfig, SourceConfig
 from sinks import EventSink
 from stream_monitor.base_monitor import BaseMonitor
 
@@ -35,11 +37,12 @@ class ContinuousRecorder(BaseMonitor):
     ):
         self.source = source
         self.source_id = source.source_id
-        self.rtsp_url = source.rtsp_url
+        self.rtsp_url = source.source_url
         self._cfg = recording_cfg
         self._sink = sink
 
-        self._output_dir = os.path.join(expand_path(data_dir), self.source_id, "recordings")
+        # `data_dir` is the per-source root resolved by SourceManager.
+        self._output_dir = os.path.join(data_dir, "recordings")
         os.makedirs(self._output_dir, exist_ok=True)
 
         self._thread: threading.Thread | None = None
@@ -132,7 +135,7 @@ class ContinuousRecorder(BaseMonitor):
 
             start_time = datetime.now()
             frame_count = 0
-            target_frames = int(self._cfg.interval * fps)
+            target_frames = int(self._cfg.interval_seconds * fps)
 
             while self._running and frame_count < target_frames:
                 if not self._paused.is_set():
@@ -151,14 +154,18 @@ class ContinuousRecorder(BaseMonitor):
 
             if frame_count > 0:
                 file_size = os.path.getsize(segment_path) if os.path.exists(segment_path) else 0
-                self._sink.emit({
-                    "source_id": self.source_id,
-                    "event_type": "recording",
-                    "start_time": start_time.isoformat(),
-                    "end_time": end_time.isoformat(),
+                payload: dict[str, Any] = {
+                    "recording_path": segment_path,
+                    "recording_start": start_time.isoformat(timespec="seconds"),
+                    "recording_end": end_time.isoformat(timespec="seconds"),
                     "duration_seconds": round(duration, 1),
-                    "clip_path": segment_path,
-                    "clip_size_bytes": file_size,
+                    "file_size_bytes": file_size,
+                }
+                self._sink.emit({
+                    "sourceId": self.source_id,
+                    "type": "recording",
+                    "timestamp": end_time.isoformat(timespec="seconds"),
+                    "payload": payload,
                 })
                 logger.debug("[%s] Segment: %.1fs, %s", self.source_id, duration, segment_path)
             else:

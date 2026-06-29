@@ -60,8 +60,7 @@ class TestPrefilterOverride:
         )
         source = SourceConfig(
             source_id="cam_pet",
-            rtsp_url="rtsp://x/y",
-            use_case="pet_safety",
+            source_url="rtsp://x/y",
             prefilter=PrefilterConfig(enabled=False),
         )
         pipeline = _make_pipeline(source, defaults)
@@ -75,7 +74,7 @@ class TestPrefilterOverride:
         )
         source = SourceConfig(
             source_id="cam_pet",
-            rtsp_url="rtsp://x/y",
+            source_url="rtsp://x/y",
             prefilter=PrefilterConfig(
                 enabled=False, target_classes=["cat", "dog"]
             ),
@@ -95,8 +94,7 @@ class TestPrefilterOverride:
         )
         source = SourceConfig(
             source_id="cam_x",
-            rtsp_url="rtsp://x/y",
-            use_case="child_safety",
+            source_url="rtsp://x/y",
             prefilter=None,
         )
         pipeline = _make_pipeline(source, defaults)
@@ -112,7 +110,7 @@ class TestPrefilterGracefulDegrade:
         """Per current implementation: empty model_path silently skips."""
         source = SourceConfig(
             source_id="cam_x",
-            rtsp_url="rtsp://x/y",
+            source_url="rtsp://x/y",
             prefilter=PrefilterConfig(enabled=True, model_path=""),
         )
         pipeline = _make_pipeline(source)
@@ -121,7 +119,7 @@ class TestPrefilterGracefulDegrade:
     def test_enabled_with_missing_model_file_degrades(self, caplog):
         source = SourceConfig(
             source_id="cam_x",
-            rtsp_url="rtsp://x/y",
+            source_url="rtsp://x/y",
             prefilter=PrefilterConfig(
                 enabled=True,
                 model_path="/does/not/exist.xml",
@@ -139,7 +137,7 @@ class TestPrefilterGracefulDegrade:
     def test_yolopfilter_exception_does_not_crash(self):
         source = SourceConfig(
             source_id="cam_x",
-            rtsp_url="rtsp://x/y",
+            source_url="rtsp://x/y",
             prefilter=PrefilterConfig(
                 enabled=True,
                 model_path="/anything.xml",
@@ -162,18 +160,22 @@ class TestPrefilterFromHTTPRegister:
     """
 
     def _resolve(self, payload: dict, defaults_prefilter: PrefilterConfig):
-        """Simulate what FastAPI + SourceManager do, without starting threads."""
+        """Simulate what FastAPI + SourceManager do, without starting threads.
+
+        Payload is the new nested-pipeline format (Phase 7 hard cutover).
+        """
         from service import RegisterSourceRequest
         req = RegisterSourceRequest(**payload)
         source = SourceConfig(
             source_id=req.source_id,
-            rtsp_url=req.rtsp_url,
-            use_case=req.use_case,
+            source_url=req.source_url,
             webhook_url=req.webhook_url,
-            motion=req.motion,
-            segment=req.segment,
-            prefilter=req.prefilter,
-            health=req.health,
+            data_dir=req.data_dir,
+            motion=req.pipeline.motion,
+            segment=req.pipeline.segment,
+            prefilter=req.pipeline.prefilter,
+            recording=req.pipeline.recording,
+            health=req.pipeline.health,
         )
         defaults = DefaultsConfig(prefilter=defaults_prefilter)
         return _make_pipeline(source, defaults)._prefilter_cfg
@@ -183,9 +185,8 @@ class TestPrefilterFromHTTPRegister:
         cfg = self._resolve(
             payload={
                 "source_id": "cam_pet",
-                "rtsp_url": "rtsp://x/y",
-                "use_case": "pet_safety",
-                "prefilter": {"enabled": False},
+                "source_url": "rtsp://x/y",
+                "pipeline": {"prefilter": {"enabled": False}},
             },
             defaults_prefilter=PrefilterConfig(
                 enabled=True,
@@ -196,7 +197,7 @@ class TestPrefilterFromHTTPRegister:
         assert cfg.enabled is False
 
     def test_child_safety_omits_prefilter_uses_defaults(self):
-        """When MCP Server omits prefilter for person-class use cases."""
+        """When MCP Server omits prefilter, defaults must take effect verbatim."""
         defaults = PrefilterConfig(
             enabled=False,
             model_path="/models/yolo.xml",
@@ -206,19 +207,22 @@ class TestPrefilterFromHTTPRegister:
         cfg = self._resolve(
             payload={
                 "source_id": "cam_child",
-                "rtsp_url": "rtsp://x/y",
-                "use_case": "child_safety",
+                "source_url": "rtsp://x/y",
             },
             defaults_prefilter=defaults,
         )
         assert cfg is defaults
 
-    def test_use_case_field_does_not_alter_prefilter(self):
-        """use_case is a free-form tag at this layer — only `prefilter` controls behaviour."""
+    def test_empty_pipeline_block_uses_defaults(self):
+        """Empty `pipeline` block must inherit prefilter defaults wholesale."""
         defaults = PrefilterConfig(enabled=False, target_classes=["person"])
-        for uc in ("child_safety", "elder_wakeup", "pet_safety", "default", "weird_unknown"):
+        for sid in ("cam_a", "cam_b", "cam_c"):
             cfg = self._resolve(
-                payload={"source_id": f"cam_{uc}", "rtsp_url": "rtsp://x/y", "use_case": uc},
+                payload={
+                    "source_id": sid,
+                    "source_url": "rtsp://x/y",
+                    "pipeline": {},
+                },
                 defaults_prefilter=defaults,
             )
-            assert cfg is defaults, f"use_case={uc} unexpectedly changed prefilter resolution"
+            assert cfg is defaults, f"source {sid} unexpectedly changed prefilter resolution"
