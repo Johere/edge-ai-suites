@@ -8,10 +8,15 @@ webhook:
   retry_attempts: 3
   retry_delay: 2
 
+# `data_dir` is the *root* directory for all per-source output.
+# Each registered source gets its own subdirectory `<data_dir>/<source_id>/`
+# (or whatever absolute path the register_source body specifies in its
+# `data_dir` field; MCP sends an absolute per-source path).
 data_dir: "~/.smartbuilding/data"
 
 defaults:
   motion:
+    enabled: true
     diff_threshold: 15
     area_ratio: 0.005
     stable_frames: 45
@@ -19,7 +24,8 @@ defaults:
     interval: 10
     min_duration: 1.0
   recording:
-    interval: 60
+    enabled: true
+    interval_seconds: 60
     fps: 15
     retention_days: 5
   prefilter:
