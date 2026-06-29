@@ -212,7 +212,7 @@ MCP server 调用以下 analytics RESTful 端点：
 
 待 analytics 侧实现后联调。约定：
 
-- **Endpoint**: `POST /sources/{id}/keepalive`
+- **Endpoint**: `GET /sources/{id}/keepalive`
 - **MCP server 发送间隔**: 30s（`setInterval`，遍历 DB 中 online monitors）
 - **Analytics 超时阈值**: 90s 未收到 keepalive → 自动 pause 该 source
 - **MCP server 侧实现**：等 analytics 端就绪后在 `index.ts` 添加 keepalive interval
