@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from shared.config import (
@@ -16,6 +19,7 @@ from shared.config import (
     PrefilterConfig,
     RecordingConfig,
     HealthConfig,
+    KeepaliveConfig,
     expand_path,
 )
 from stream_monitor.rtsp_monitor import StreamPipeline
@@ -33,6 +37,8 @@ class SourceBundle:
     recorder: ContinuousRecorder | None
     sink: EventSink
     data_dir: str
+    keepalive: KeepaliveConfig | None = None
+    last_keepalive_at: float | None = None
 
 
 class SourceManager:
@@ -40,6 +46,13 @@ class SourceManager:
         self.config = config
         self._default_sink: EventSink = WebhookSink(config.webhook)
         self._bundles: dict[str, SourceBundle] = {}
+        self._watchdog_running = True
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            name="keepalive-watchdog",
+            daemon=True,
+        )
+        self._watchdog_thread.start()
 
     def _resolve_data_dir(self, source: SourceConfig) -> str:
         if source.data_dir:
@@ -82,8 +95,16 @@ class SourceManager:
                 sink=sink,
             )
 
+        keepalive_cfg = source.keepalive or self.config.defaults.keepalive
+        last_keepalive_at = time.time() if keepalive_cfg.enabled else None
+
         bundle = SourceBundle(
-            pipeline=pipeline, recorder=recorder, sink=sink, data_dir=data_dir
+            pipeline=pipeline,
+            recorder=recorder,
+            sink=sink,
+            data_dir=data_dir,
+            keepalive=keepalive_cfg,
+            last_keepalive_at=last_keepalive_at,
         )
         self._bundles[source.source_id] = bundle
         pipeline.start()
@@ -208,6 +229,23 @@ class SourceManager:
             bundle.recorder.resume()
         return {"status": "online", "source_id": source_id}
 
+    def keepalive_source(self, source_id: str) -> dict[str, Any]:
+        """Refresh `last_keepalive_at` for a source (Phase 8).
+
+        Returns `{"status": "not_found"}` if the source isn't registered, else
+        `{"status": "ok", "source_id": ..., "last_keepalive_at": <iso>}`.
+        """
+        bundle = self._bundles.get(source_id)
+        if bundle is None:
+            return {"status": "not_found", "source_id": source_id}
+        now = time.time()
+        bundle.last_keepalive_at = now
+        return {
+            "status": "ok",
+            "source_id": source_id,
+            "last_keepalive_at": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+        }
+
     def get_sources(self) -> list[dict[str, Any]]:
         """List all registered sources with their status."""
         return [
@@ -222,6 +260,12 @@ class SourceManager:
 
     def _describe_bundle(self, source_id: str, bundle: SourceBundle) -> dict[str, Any]:
         pipe = bundle.pipeline
+        ts = bundle.last_keepalive_at
+        last_keepalive_iso = (
+            datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            if ts is not None
+            else None
+        )
         return {
             "source_id": source_id,
             "source_url": pipe.source.source_url,
@@ -230,9 +274,60 @@ class SourceManager:
             "running": pipe.is_running,
             "recording_enabled": bundle.recorder is not None,
             "health": pipe.health_info,
+            "keepalive_enabled": bool(bundle.keepalive and bundle.keepalive.enabled),
+            "last_keepalive_at": last_keepalive_iso,
         }
 
+    def _watchdog_loop(self) -> None:
+        """Daemon: periodically auto-pause sources whose keepalive went stale."""
+        while self._watchdog_running:
+            try:
+                self._watchdog_check_once()
+            except Exception as e:
+                logger.warning("[watchdog] tick error: %s", e)
+            time.sleep(self._watchdog_check_interval())
+
+    def _watchdog_check_interval(self) -> float:
+        """Tightest configured interval across enabled sources, fall back to default."""
+        intervals: list[float] = []
+        for b in list(self._bundles.values()):
+            cfg = b.keepalive
+            if cfg and cfg.enabled:
+                intervals.append(cfg.check_interval_seconds)
+        if intervals:
+            return max(0.1, min(intervals))
+        return max(0.1, self.config.defaults.keepalive.check_interval_seconds)
+
+    def _watchdog_check_once(self) -> None:
+        now = time.time()
+        # Iterate over a snapshot — dict can mutate during register/unregister.
+        for source_id, bundle in list(self._bundles.items()):
+            cfg = bundle.keepalive
+            if cfg is None or not cfg.enabled:
+                continue
+            if bundle.last_keepalive_at is None:
+                continue
+            # Don't re-pause an already-paused source — keepalive only expresses
+            # liveness, not resume intent.
+            if bundle.pipeline.status == "paused":
+                continue
+            elapsed = now - bundle.last_keepalive_at
+            if elapsed > cfg.timeout_seconds:
+                logger.warning(
+                    "[%s] keepalive timeout (%.1fs > %.0fs), auto-pausing",
+                    source_id,
+                    elapsed,
+                    cfg.timeout_seconds,
+                )
+                try:
+                    self.pause_source(source_id)
+                except Exception as e:
+                    logger.warning(
+                        "[%s] watchdog pause failed: %s", source_id, e
+                    )
+
     def stop_all(self):
+        self._watchdog_running = False
         for source_id, bundle in self._bundles.items():
             self._teardown_bundle(source_id, bundle)
         self._bundles.clear()

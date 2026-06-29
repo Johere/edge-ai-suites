@@ -41,6 +41,14 @@ defaults:
     recovery_strategy: "retry"
     backoff_base: 2.0
     backoff_max: 120.0
+  # Phase 8: keepalive protocol — MCP server pings POST /sources/{id}/keepalive
+  # while monitor is online. If no keepalive arrives within timeout_seconds,
+  # the watchdog auto-pauses the source. Default OFF to keep existing scripts
+  # (and the V1-V10 integration drills) unaffected; MCP enables it per-source.
+  keepalive:
+    enabled: false
+    timeout_seconds: 90.0
+    check_interval_seconds: 10.0
 
 logging:
   level: "INFO"

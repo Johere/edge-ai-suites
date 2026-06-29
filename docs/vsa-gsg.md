@@ -151,6 +151,7 @@ videostream-analytics stream \
 | POST | `/sources/{source_id}/pause` | 暂停（不删除） |
 | POST | `/sources/{source_id}/resume` | 恢复 |
 | PUT | `/sources/{source_id}/pipeline` | 热更新 motion / segment / prefilter / recording / health 配置（嵌套 `pipeline` 包装） |
+| POST | `/sources/{source_id}/keepalive` | MCP 心跳 — VSA 刷新 `last_keepalive_at`；超时 watchdog 自动 pause |
 | DELETE | `/sources/{source_id}` | RESTful 删除（同 stop） |
 
 `POST /register_source` 完整 body 示例（嵌套形态，与 MCP `monitor-ctl.ts` 发出的一致）：
@@ -166,12 +167,15 @@ videostream-analytics stream \
     "segment":   { "interval": 10, "min_duration": 1.0 },
     "prefilter": { "enabled": false },
     "recording": { "enabled": true, "interval_seconds": 60, "retention_days": 5 },
-    "health":    { "max_failures": 30, "recovery_strategy": "retry" }
+    "health":    { "max_failures": 30, "recovery_strategy": "retry" },
+    "keepalive": { "enabled": false, "timeout_seconds": 90.0, "check_interval_seconds": 10.0 }
   }
 }
 ```
 
 必填：`source_id`、`source_url`。其他字段省略时使用 `config.yaml` 的 `defaults`。`data_dir` 省略时落到 `<config.data_dir>/<source_id>/`。
+
+**`pipeline.keepalive`（Phase 8）**：MCP 端开启后每 ~30s 调 `POST /sources/{id}/keepalive`；VSA 后台 watchdog 每 `check_interval_seconds` 巡检一次，超过 `timeout_seconds` 没收到心跳就**自动 pause** 该 source（不删除，需要 MCP 显式 resume）。默认 OFF — V1–V10 联调脚本无需关心；MCP 实际部署时显式打开。
 
 **注意**：旧的"平铺"格式（`rtsp_url` / 顶层 `motion/segment/...` / `use_case`）在 Phase 7 硬切换后**不再接受**，会返回 422。
 
@@ -202,7 +206,7 @@ python -m pytest tests/unit/ -v --timeout=60
 
 期望：**152 个用例全 PASS**，约 85 秒内跑完（含 `test_snapshot.py` 6 个 latest.jpg 回归用例）。
 
-## 7. 功能验证（V1 – V10）
+## 7. 功能验证（V1 – V11）
 
 启动顺序：MediaMTX → mock webhook → videostream-analytics → ffmpeg 推流 → 在另一个终端逐条执行下方 curl。
 
@@ -568,13 +572,50 @@ tail -20 /tmp/.../mcp.log   # 看你 redirect 到的文件
 
 **`prefilter_passed=None` 是预期**：注册时 `prefilter.enabled=false`，VSA 不跑 YOLO，所以不附带 `prefilter_*` 字段，MCP 写 NULL。要看 prefilter 落 DB，需要在 register body 开启 prefilter 并提供 YOLO 模型路径。
 
+### V11. Keepalive 行为验证（Phase 8）
+
+```bash
+# 注册一个开启 keepalive 的 source，timeout 设短让验证快速完成
+curl -s -X POST http://localhost:8999/register_source \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_id":   "cam_ka",
+    "source_url":  "rtsp://localhost:8554/live/child",
+    "data_dir":    "/tmp/vsa-test/cam_ka",
+    "pipeline": {
+      "prefilter": {"enabled": false},
+      "recording": {"enabled": false},
+      "keepalive": {"enabled": true, "timeout_seconds": 3.0, "check_interval_seconds": 1.0}
+    }
+  }' | python3 -m json.tool
+
+# 立刻 ping 一次 keepalive — 应返回 200 + last_keepalive_at
+curl -s -X POST http://localhost:8999/sources/cam_ka/keepalive | python3 -m json.tool
+
+# 不再 ping，等待 5s（超过 3s timeout + 至少 1 个 watchdog tick）
+sleep 5
+
+# 状态应已被 watchdog 自动切到 paused
+curl -sf http://localhost:8999/sources/cam_ka/status | python3 -m json.tool
+# 期望：{ "status": "paused", "keepalive_enabled": true, "last_keepalive_at": "..." }
+
+# 不存在的 source ping 应返回 404
+curl -i -X POST http://localhost:8999/sources/no_such/keepalive | head -5
+```
+
+期望：
+- 首次 keepalive 返回 `{"status": "ok", "source_id": "cam_ka", "last_keepalive_at": "..."}`
+- 5s 后 `GET /sources/cam_ka/status` 的 `status` 字段为 `paused`
+- VSA 日志包含 `[cam_ka] keepalive timeout (X.Xs > 3s), auto-pausing`
+- 不存在 source 的 keepalive 返回 404
+
 ### 验收清单
 
 | # | 项目 | 期望 |
 |---|---|---|
 | V1 | GET /health | 200 + `status: ok` |
 | V2 | POST /register_source（嵌套 pipeline） | `status: started` + 旧平铺 body 必须 422 |
-| V3 | GET /sources（裸数组）+ /sources/{id}/status | `health.*` / `recording_enabled` 完整 |
+| V3 | GET /sources（裸数组）+ /sources/{id}/status | `health.*` / `recording_enabled` / `keepalive_enabled` / `last_keepalive_at` 完整 |
 | V4 | Motion + Recording → webhook + 磁盘 + latest.jpg | motion envelope `payload.event_file_path` ✓；recording envelope `payload.recording_path` 按 `interval_seconds` 周期；`latest.jpg` mtime ≤ 2s |
 | V5 | PUT /pipeline 热更新（嵌套 pipeline） | 配置生效，recording 启停可切换 |
 | V6 | POST pause / resume | 状态切换 + 暂停期间无事件 |
@@ -582,6 +623,7 @@ tail -20 /tmp/.../mcp.log   # 看你 redirect 到的文件
 | V8 | recovery_strategy=remove | 自动 remove + envelope `status: unhealthy/stopped` 事件 |
 | V9 | CLI serve/stream/health | 三命令均可用，stream stdout 输出 envelope |
 | V10 | 接真 MCP server 端到端 | MCP DB `events` / `video_summary_tasks` / `recordings` 三张表落行，文件物理存在 |
+| V11 | Keepalive watchdog | 注册 enabled+timeout=3s → keepalive 后 status 正常；停 keepalive 5s 后 status=paused；未注册 source ping 返回 404 |
 
 ## 8. Docker 验证
 
