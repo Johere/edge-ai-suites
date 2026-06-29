@@ -21,7 +21,7 @@ def mock_pipeline_class():
         instance.status = "online"
         instance.rtsp_url = "rtsp://localhost:8554/live/test"
         instance.source = SourceConfig(
-            source_id="test_cam", rtsp_url="rtsp://localhost:8554/live/test"
+            source_id="test_cam", source_url="rtsp://localhost:8554/live/test"
         )
         mock_cls.return_value = instance
         yield mock_cls, instance
@@ -38,7 +38,7 @@ class TestSourceManagerRegister:
     def test_register_source_creates_and_starts_pipeline(self, manager, mock_pipeline_class):
         _, instance = mock_pipeline_class
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         result = manager.register_source(source)
         assert result["status"] == "started"
@@ -48,7 +48,7 @@ class TestSourceManagerRegister:
     def test_register_duplicate_running_returns_already_running(self, manager, mock_pipeline_class):
         _, instance = mock_pipeline_class
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         result = manager.register_source(source)
@@ -57,7 +57,7 @@ class TestSourceManagerRegister:
     def test_register_duplicate_stopped_restarts(self, manager, mock_pipeline_class):
         mock_cls, instance = mock_pipeline_class
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         # Simulate pipeline stopped
@@ -71,7 +71,7 @@ class TestSourceManagerUnregister:
     def test_unregister_existing_stops_pipeline(self, manager, mock_pipeline_class):
         _, instance = mock_pipeline_class
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         result = manager.unregister_source("cam1")
@@ -90,7 +90,7 @@ class TestSourceManagerQuery:
 
     def test_get_sources_after_register(self, manager, mock_pipeline_class):
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         sources = manager.get_sources()
@@ -100,7 +100,7 @@ class TestSourceManagerQuery:
 
     def test_get_source_status_existing(self, manager, mock_pipeline_class):
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         status = manager.get_source_status("cam1")
@@ -123,7 +123,7 @@ class TestSourceManagerPerSourceWebhook:
 
             source = SourceConfig(
                 source_id="cam1",
-                rtsp_url="rtsp://localhost:8554/live/cam1",
+                source_url="rtsp://localhost:8554/live/cam1",
                 webhook_url="http://other-server:9000/events",
             )
             mgr.register_source(source)
@@ -137,7 +137,7 @@ class TestSourceManagerPerSourceWebhook:
     def test_register_without_webhook_url_uses_default_sink(self, manager, mock_pipeline_class):
         mock_cls, instance = mock_pipeline_class
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         # Pipeline should receive the default sink
@@ -149,7 +149,7 @@ class TestSourceManagerStopAll:
     def test_stop_all_clears_pipelines(self, manager, mock_pipeline_class):
         _, instance = mock_pipeline_class
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         manager.stop_all()

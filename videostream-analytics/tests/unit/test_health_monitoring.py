@@ -32,7 +32,7 @@ def make_pipeline(health_cfg=None, on_remove_callback=None):
     """Create a StreamPipeline with mocked OpenCV and prefilter."""
     source = SourceConfig(
         source_id="test_cam",
-        rtsp_url="rtsp://localhost:8554/live/test",
+        source_url="rtsp://localhost:8554/live/test",
         health=health_cfg,
         prefilter=PrefilterConfig(enabled=False),
     )
@@ -71,7 +71,7 @@ class TestHealthConfig:
     def test_source_config_with_health(self):
         src = SourceConfig(
             source_id="cam1",
-            rtsp_url="rtsp://localhost:8554/live/test",
+            source_url="rtsp://localhost:8554/live/test",
             health=HealthConfig(max_failures=5, recovery_strategy="remove"),
         )
         assert src.health is not None
@@ -217,7 +217,7 @@ class TestHandleUnhealthy:
         sink = MagicMock()
         source = SourceConfig(
             source_id="cam_health",
-            rtsp_url="rtsp://localhost:8554/live/test",
+            source_url="rtsp://localhost:8554/live/test",
             health=HealthConfig(recovery_strategy="retry", backoff_max=0.01),
             prefilter=PrefilterConfig(enabled=False),
         )
@@ -234,12 +234,12 @@ class TestHandleUnhealthy:
         with patch("stream_monitor.rtsp_monitor.time.sleep"):
             pipeline._handle_unhealthy()
 
-        sink.emit.assert_called_once_with({
-            "source_id": "cam_health",
-            "event_type": "status",
-            "status": "unhealthy",
-            "reason": "rtsp_timeout",
-        })
+        # Phase 7: nested envelope
+        sink.emit.assert_called_once()
+        event = sink.emit.call_args.args[0]
+        assert event["sourceId"] == "cam_health"
+        assert event["type"] == "status"
+        assert event["payload"] == {"status": "unhealthy", "reason": "rtsp_timeout"}
 
 
 class TestRunReconnectionLogic:

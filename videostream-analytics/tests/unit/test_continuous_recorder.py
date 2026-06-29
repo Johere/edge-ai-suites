@@ -24,7 +24,7 @@ class TestContinuousRecorderLifecycle:
     @pytest.fixture
     def recorder(self, tmp_path, mock_sink):
         source = SourceConfig(
-            source_id="test_recorder", rtsp_url="rtsp://localhost:8554/live/test"
+            source_id="test_recorder", source_url="rtsp://localhost:8554/live/test"
         )
         cfg = RecordingConfig(interval=5, fps=15, retention_days=3)
         return ContinuousRecorder(
@@ -75,7 +75,9 @@ class TestContinuousRecorderLifecycle:
         assert recorder.status == "stopped"
 
     def test_output_dir_created(self, recorder, tmp_path):
-        expected = os.path.join(str(tmp_path), "test_recorder", "recordings")
+        # Phase 7: data_dir is the per-source root (already resolved by caller);
+        # recorder appends "recordings/" without re-prepending source_id.
+        expected = os.path.join(str(tmp_path), "recordings")
         assert os.path.isdir(expected)
 
 
@@ -89,7 +91,7 @@ class TestContinuousRecorderCleanup:
     @pytest.fixture
     def recorder(self, tmp_path, mock_sink):
         source = SourceConfig(
-            source_id="test_cleanup", rtsp_url="rtsp://localhost:8554/live/test"
+            source_id="test_cleanup", source_url="rtsp://localhost:8554/live/test"
         )
         cfg = RecordingConfig(interval=60, fps=15, retention_days=2)
         r = ContinuousRecorder(
@@ -143,7 +145,7 @@ class TestContinuousRecorderWithVideo:
     def recorder(self, test_video_path, tmp_path, mock_sink):
         source = SourceConfig(
             source_id="test_recording",
-            rtsp_url=test_video_path,
+            source_url=test_video_path,
         )
         cfg = RecordingConfig(interval=3, fps=30, retention_days=5)
         return ContinuousRecorder(
@@ -154,20 +156,27 @@ class TestContinuousRecorderWithVideo:
         )
 
     def test_recorder_produces_segments(self, recorder, mock_sink, tmp_path):
-        """Recorder should produce at least 1 segment from a real video."""
+        """Recorder should produce at least 1 segment from a real video.
+
+        Phase 7: events are nested envelope `{sourceId, type, timestamp, payload}`,
+        recording payload uses `recording_path` (not `clip_path`).
+        """
         recorder.start()
         time.sleep(8)
         recorder.stop()
 
-        # Check that recording events were emitted
         recording_events = [
             call.args[0] for call in mock_sink.emit.call_args_list
-            if call.args[0].get("event_type") == "recording"
+            if call.args[0].get("type") == "recording"
         ]
         assert len(recording_events) >= 1
 
         event = recording_events[0]
-        assert event["source_id"] == "test_recording"
-        assert event["duration_seconds"] > 0
-        assert event["clip_path"].endswith(".mp4")
-        assert os.path.exists(event["clip_path"])
+        assert event["sourceId"] == "test_recording"
+        payload = event["payload"]
+        assert payload["duration_seconds"] > 0
+        assert payload["recording_path"].endswith(".mp4")
+        assert os.path.exists(payload["recording_path"])
+        assert "recording_start" in payload
+        assert "recording_end" in payload
+        assert "file_size_bytes" in payload

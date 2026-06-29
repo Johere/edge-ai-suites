@@ -29,7 +29,7 @@ def make_pipeline(source=None):
     if source is None:
         source = SourceConfig(
             source_id="test_cam",
-            rtsp_url="rtsp://localhost:8554/live/test",
+            source_url="rtsp://localhost:8554/live/test",
             prefilter=PrefilterConfig(enabled=False),
         )
     defaults = DefaultsConfig()
@@ -106,7 +106,7 @@ def mock_pipeline_class():
         instance.status = "online"
         instance.rtsp_url = "rtsp://localhost:8554/live/test"
         instance.source = SourceConfig(
-            source_id="test_cam", rtsp_url="rtsp://localhost:8554/live/test"
+            source_id="test_cam", source_url="rtsp://localhost:8554/live/test"
         )
         instance.health_info = {
             "failure_count": 0,
@@ -131,7 +131,7 @@ class TestSourceManagerUpdate:
     def test_update_existing_source(self, manager, mock_pipeline_class):
         _, instance = mock_pipeline_class
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
 
@@ -148,6 +148,9 @@ class TestSourceManagerUpdate:
             prefilter=None,
             health=None,
         )
+        # SourceManager.update_pipeline_config now also accepts `recording=`
+        # for the continuous-recorder branch; pipeline's own update API stays
+        # unchanged (no recording on StreamPipeline).
         instance.start.assert_called()
 
     def test_update_nonexistent_source(self, manager):
@@ -160,7 +163,7 @@ class TestSourceManagerUpdate:
     def test_update_calls_stop_then_start(self, manager, mock_pipeline_class):
         _, instance = mock_pipeline_class
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         instance.reset_mock()
@@ -180,7 +183,7 @@ class TestSourceManagerUpdate:
 class TestSourceManagerRemoveCallback:
     def test_handle_source_removed(self, manager, mock_pipeline_class):
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         assert manager.get_source_status("cam1") is not None
@@ -195,7 +198,7 @@ class TestSourceManagerRemoveCallback:
 class TestSourceManagerHealthInStatus:
     def test_get_sources_includes_health(self, manager, mock_pipeline_class):
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         sources = manager.get_sources()
@@ -204,7 +207,7 @@ class TestSourceManagerHealthInStatus:
 
     def test_get_source_status_includes_health(self, manager, mock_pipeline_class):
         source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/cam1"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/cam1"
         )
         manager.register_source(source)
         status = manager.get_source_status("cam1")
@@ -231,7 +234,7 @@ def api_client():
         instance.status = "online"
         instance.rtsp_url = "rtsp://localhost:8554/live/test"
         instance.source = SourceConfig(
-            source_id="cam1", rtsp_url="rtsp://localhost:8554/live/test"
+            source_id="cam1", source_url="rtsp://localhost:8554/live/test"
         )
         instance.health_info = {
             "failure_count": 0,
@@ -247,50 +250,48 @@ def api_client():
             yield tc
 
 
+_REG_BODY = {
+    "source_id": "cam1",
+    "source_url": "rtsp://localhost:8554/live/test",
+}
+
+
 class TestUpdatePipelineEndpoint:
     def test_update_pipeline_success(self, api_client):
-        api_client.post("/register_source", json={
-            "source_id": "cam1",
-            "rtsp_url": "rtsp://localhost:8554/live/test",
-        })
+        api_client.post("/register_source", json=_REG_BODY)
         resp = api_client.put("/sources/cam1/pipeline", json={
-            "motion": {"diff_threshold": 50, "area_ratio": 0.1, "stable_frames": 60},
+            "pipeline": {
+                "motion": {"diff_threshold": 50, "area_ratio": 0.1, "stable_frames": 60},
+            },
         })
         assert resp.status_code == 200
         assert resp.json()["status"] == "updated"
 
     def test_update_pipeline_not_found(self, api_client):
         resp = api_client.put("/sources/nonexistent/pipeline", json={
-            "motion": {"diff_threshold": 50},
+            "pipeline": {"motion": {"diff_threshold": 50}},
         })
         assert resp.status_code == 404
 
     def test_update_pipeline_empty_body(self, api_client):
-        api_client.post("/register_source", json={
-            "source_id": "cam1",
-            "rtsp_url": "rtsp://localhost:8554/live/test",
-        })
+        api_client.post("/register_source", json=_REG_BODY)
         resp = api_client.put("/sources/cam1/pipeline", json={})
         assert resp.status_code == 200
         assert resp.json()["status"] == "updated"
 
     def test_update_pipeline_health_config(self, api_client):
-        api_client.post("/register_source", json={
-            "source_id": "cam1",
-            "rtsp_url": "rtsp://localhost:8554/live/test",
-        })
+        api_client.post("/register_source", json=_REG_BODY)
         resp = api_client.put("/sources/cam1/pipeline", json={
-            "health": {"max_failures": 10, "recovery_strategy": "pause"},
+            "pipeline": {
+                "health": {"max_failures": 10, "recovery_strategy": "pause"},
+            },
         })
         assert resp.status_code == 200
 
 
 class TestDeleteSourceEndpoint:
     def test_delete_source_success(self, api_client):
-        api_client.post("/register_source", json={
-            "source_id": "cam1",
-            "rtsp_url": "rtsp://localhost:8554/live/test",
-        })
+        api_client.post("/register_source", json=_REG_BODY)
         resp = api_client.delete("/sources/cam1")
         assert resp.status_code == 200
         assert resp.json()["status"] == "stopped"
@@ -300,10 +301,8 @@ class TestDeleteSourceEndpoint:
         assert resp.status_code == 404
 
     def test_delete_source_removes_from_list(self, api_client):
-        api_client.post("/register_source", json={
-            "source_id": "cam1",
-            "rtsp_url": "rtsp://localhost:8554/live/test",
-        })
+        api_client.post("/register_source", json=_REG_BODY)
         api_client.delete("/sources/cam1")
         resp = api_client.get("/sources")
-        assert resp.json()["sources"] == []
+        # /sources is a bare array
+        assert resp.json() == []
