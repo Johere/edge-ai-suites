@@ -25,10 +25,15 @@ async def health():
     return {"status": "ok", "service": "mock-webhook", "event_count": len(_recorded_events)}
 
 
+def _ev_type(event: dict) -> str:
+    """Phase 7 envelope reads `type`; tolerate legacy `event_type` for safety."""
+    return event.get("type") or event.get("event_type") or "?"
+
+
 @app.post("/events")
 async def receive_event(event: dict[str, Any]):
     _recorded_events.append(event)
-    logger.info("Received event: %s (total: %d)", event.get("event_type", "?"), len(_recorded_events))
+    logger.info("Received event: %s (total: %d)", _ev_type(event), len(_recorded_events))
     return {"status": "received"}
 
 
@@ -39,13 +44,19 @@ async def get_recorded_events():
 
 @app.get("/recorded_events/motion")
 async def get_motion_events():
-    motion = [e for e in _recorded_events if e.get("event_type") == "motion"]
+    motion = [e for e in _recorded_events if _ev_type(e) == "motion"]
     return {"events": motion, "count": len(motion)}
+
+
+@app.get("/recorded_events/recording")
+async def get_recording_events():
+    rec = [e for e in _recorded_events if _ev_type(e) == "recording"]
+    return {"events": rec, "count": len(rec)}
 
 
 @app.get("/recorded_events/status")
 async def get_status_events():
-    status = [e for e in _recorded_events if e.get("event_type") == "status"]
+    status = [e for e in _recorded_events if _ev_type(e) == "status"]
     return {"events": status, "count": len(status)}
 
 
