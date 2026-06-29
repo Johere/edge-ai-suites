@@ -19,6 +19,7 @@ from shared.config import (
     PrefilterConfig,
     RecordingConfig,
     HealthConfig,
+    KeepaliveConfig,
 )
 from source_worker import SourceManager
 
@@ -43,6 +44,7 @@ class PipelineConfig(BaseModel):
     prefilter: PrefilterConfig | None = None
     recording: RecordingConfig | None = None
     health: HealthConfig | None = None
+    keepalive: KeepaliveConfig | None = None
 
 
 class RegisterSourceRequest(BaseModel):
@@ -166,6 +168,7 @@ def create_app(config: AppConfig) -> FastAPI:
             prefilter=req.pipeline.prefilter,
             recording=req.pipeline.recording,
             health=req.pipeline.health,
+            keepalive=req.pipeline.keepalive,
         )
         return mgr.register_source(source)
 
@@ -215,6 +218,19 @@ def create_app(config: AppConfig) -> FastAPI:
     async def resume_source(source_id: str) -> dict[str, Any]:
         mgr = get_manager()
         result = mgr.resume_source(source_id)
+        if result["status"] == "not_found":
+            raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
+        return result
+
+    @app.post("/sources/{source_id}/keepalive")
+    async def keepalive_source(source_id: str) -> dict[str, Any]:
+        """Phase 8: MCP server pings this every ~30s while monitor is online.
+
+        Body is ignored (may be empty). Watchdog auto-pauses the source if no
+        keepalive arrives within `pipeline.keepalive.timeout_seconds`.
+        """
+        mgr = get_manager()
+        result = mgr.keepalive_source(source_id)
         if result["status"] == "not_found":
             raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
         return result

@@ -55,6 +55,19 @@ class HealthConfig(BaseModel):
     backoff_max: float = 120.0
 
 
+class KeepaliveConfig(BaseModel):
+    """Keepalive protocol configuration (Phase 8).
+
+    When `enabled`, the source must receive `POST /sources/{id}/keepalive`
+    within `timeout_seconds` or the watchdog auto-pauses it. Default OFF so
+    existing integration scripts that don't send keepalive aren't disturbed.
+    """
+
+    enabled: bool = False
+    timeout_seconds: float = 90.0
+    check_interval_seconds: float = 10.0
+
+
 class WebhookConfig(BaseModel):
     url: str = "http://localhost:18800/events"
     timeout: int = 10
@@ -73,6 +86,7 @@ class DefaultsConfig(BaseModel):
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
     prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
     health: HealthConfig = Field(default_factory=HealthConfig)
+    keepalive: KeepaliveConfig = Field(default_factory=KeepaliveConfig)
 
 
 class SourceConfig(BaseModel):
@@ -91,6 +105,7 @@ class SourceConfig(BaseModel):
     recording: Optional[RecordingConfig] = None
     prefilter: Optional[PrefilterConfig] = None
     health: Optional[HealthConfig] = None
+    keepalive: Optional[KeepaliveConfig] = None
 
     @property
     def rtsp_url(self) -> str:

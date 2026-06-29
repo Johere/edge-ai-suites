@@ -151,6 +151,7 @@ videostream-analytics stream \
 | POST | `/sources/{source_id}/pause` | 暂停（不删除） |
 | POST | `/sources/{source_id}/resume` | 恢复 |
 | PUT | `/sources/{source_id}/pipeline` | 热更新 motion / segment / prefilter / recording / health 配置（嵌套 `pipeline` 包装） |
+| POST | `/sources/{source_id}/keepalive` | MCP 心跳 — VSA 刷新 `last_keepalive_at`；超时 watchdog 自动 pause |
 | DELETE | `/sources/{source_id}` | RESTful 删除（同 stop） |
 
 `POST /register_source` 完整 body 示例（嵌套形态，与 MCP `monitor-ctl.ts` 发出的一致）：
@@ -166,12 +167,15 @@ videostream-analytics stream \
     "segment":   { "interval": 10, "min_duration": 1.0 },
     "prefilter": { "enabled": false },
     "recording": { "enabled": true, "interval_seconds": 60, "retention_days": 5 },
-    "health":    { "max_failures": 30, "recovery_strategy": "retry" }
+    "health":    { "max_failures": 30, "recovery_strategy": "retry" },
+    "keepalive": { "enabled": false, "timeout_seconds": 90.0, "check_interval_seconds": 10.0 }
   }
 }
 ```
 
 必填：`source_id`、`source_url`。其他字段省略时使用 `config.yaml` 的 `defaults`。`data_dir` 省略时落到 `<config.data_dir>/<source_id>/`。
+
+**`pipeline.keepalive`（Phase 8）**：MCP 端开启后每 ~30s 调 `POST /sources/{id}/keepalive`；VSA 后台 watchdog 每 `check_interval_seconds` 巡检一次，超过 `timeout_seconds` 没收到心跳就**自动 pause** 该 source（不删除，需要 MCP 显式 resume）。默认 OFF — V1–V10 联调脚本无需关心；MCP 实际部署时显式打开。
 
 **注意**：旧的"平铺"格式（`rtsp_url` / 顶层 `motion/segment/...` / `use_case`）在 Phase 7 硬切换后**不再接受**，会返回 422。
 
@@ -200,9 +204,9 @@ source .venv/bin/activate
 python -m pytest tests/unit/ -v --timeout=60
 ```
 
-期望：97 个用例全 PASS，约 60 秒内跑完。
+期望：**152 个用例全 PASS**，约 85 秒内跑完（含 `test_snapshot.py` 6 个 latest.jpg 回归用例）。
 
-## 7. 功能验证（V1 – V9）
+## 7. 功能验证（V1 – V11）
 
 启动顺序：MediaMTX → mock webhook → videostream-analytics → ffmpeg 推流 → 在另一个终端逐条执行下方 curl。
 
@@ -427,23 +431,203 @@ docker exec vsa-test timeout 60 videostream-analytics stream \
 - `health` 输出 `{"status": "ok", ...}`，exit 0
 - `stream --sink stdout` stdout 先输出 `{"sourceId":"...","type":"status","payload":{"status":"online"}}`，等 30 秒以上动作累积后输出 `{"sourceId":"...","type":"motion","payload":{"event_file_path":"...",...}}`
 
+### V10. 接真 MCP server 端到端（替换 V1–V9 的 mock webhook）
+
+V1–V9 的 mock webhook 只能验证 VSA **单边**输出契约；V10 把 mock 换成真 MCP server，验证 webhook → MCP `/events` → SQLite 三张表全链路。**保留** T1 (MediaMTX) 和 T4 (ffmpeg 推流) 不变，把 T2 mock 替换为 MCP，并让 T3 VSA 的 webhook 指向 MCP `:3101`。
+
+**前置：构建 MCP server（仅首次）**
+
+```bash
+cd /home/user/jie/smarthome/smart-community
+npm install
+for pkg in db rule-engine tools mcp-server; do
+  (cd packages/$pkg && npx tsc)
+done
+# 4 个 workspace 都无错误输出
+```
+
+**步骤 1：启动 MCP server（替换 T2 mock webhook）**
+
+```bash
+# 干净的 MCP 数据目录
+rm -rf /tmp/mcp-data && mkdir -p /tmp/mcp-data
+
+cd /home/user/jie/smarthome/smart-community
+SMARTBUILDING_DATA_DIR=/tmp/mcp-data \
+  node packages/mcp-server/dist/index.js --http
+
+# 启动日志含：
+#   [mcp-server] Streamable HTTP on http://localhost:3100/mcp
+#   [events-endpoint] Listening on port 3101
+```
+
+MCP 监听两个端口：
+- `:3100/mcp` — MCP protocol (Streamable HTTP)，给 Agent 客户端用
+- `:3101/events` — webhook 接收端点，VSA 推事件来这里
+
+**步骤 2：重启 VSA，webhook 指向 MCP**
+
+杀掉 T3 旧 VSA，重启时 `WEBHOOK_URL` 改成 MCP 的 events 端口：
+
+```bash
+cd /home/user/jie/smarthome/smart-community/videostream-analytics
+WEBHOOK_URL=http://localhost:3101/events \
+  .venv/bin/videostream-analytics serve --config config/config.yaml
+```
+
+**步骤 3：用 MCP 风格 body 注册 source（`data_dir` 指向 MCP 的 segments dir）**
+
+```bash
+curl -s -X POST http://localhost:8999/register_source \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_id":   "cam_demo",
+    "source_url":  "rtsp://localhost:8554/live/child",
+    "webhook_url": "http://localhost:3101/events",
+    "data_dir":    "/tmp/mcp-data/segments/cam_demo",
+    "pipeline": {
+      "motion":    {"diff_threshold": 15, "area_ratio": 0.005, "stable_frames": 45},
+      "segment":   {"interval": 10, "min_duration": 1.0},
+      "prefilter": {"enabled": false},
+      "recording": {"enabled": true, "interval_seconds": 30, "retention_days": 1},
+      "health":    {"max_failures": 30, "recovery_strategy": "retry"}
+    }
+  }' | python3 -m json.tool
+```
+
+`data_dir` 必须落到 `${SMARTBUILDING_DATA_DIR}/segments/<source_id>/` —— 这是 MCP 的存储清理器假定的布局。MCP 端 `monitor-ctl.ts` 注入这个字段时也用同样的拼接。
+
+**步骤 4：等事件累积，查 MCP DB 三张表**
+
+```bash
+sleep 90   # 让 ~3 个 motion 事件 + ~2 个 recording 落 DB
+
+cd /home/user/jie/smarthome/smart-community/videostream-analytics
+.venv/bin/python <<'EOF'
+import os, sqlite3
+
+con = sqlite3.connect('/tmp/mcp-data/smartbuilding.db')
+con.row_factory = sqlite3.Row
+
+print("===== Row counts =====")
+for tbl in ("events", "video_summary_tasks", "recordings"):
+    cnt = con.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+    print(f"  {tbl}: {cnt}")
+
+print("\n===== Latest 3 motion events =====")
+for r in con.execute("""
+    SELECT id, monitor_id, motion_type, event_file_path,
+           prefilter_passed, duration_seconds
+    FROM events ORDER BY id DESC LIMIT 3
+"""):
+    d = dict(r)
+    d['file_exists'] = os.path.exists(d['event_file_path']) if d['event_file_path'] else False
+    print(f"  {d}")
+
+print("\n===== Latest 3 video_summary_tasks =====")
+for r in con.execute("""
+    SELECT id, event_id, summary_clip_input, status
+    FROM video_summary_tasks ORDER BY id DESC LIMIT 3
+"""):
+    print(f"  {dict(r)}")
+
+print("\n===== Latest 3 recordings =====")
+for r in con.execute("""
+    SELECT id, file_path, duration_seconds, file_size_bytes
+    FROM recordings ORDER BY id DESC LIMIT 3
+"""):
+    d = dict(r)
+    d['file_exists'] = os.path.exists(d['file_path']) if d['file_path'] else False
+    print(f"  {d}")
+
+print("\n===== latest.jpg =====")
+snap = '/tmp/mcp-data/segments/cam_demo/latest.jpg'
+if os.path.exists(snap):
+    import time
+    age = int(time.time() - os.path.getmtime(snap))
+    print(f"  exists, mtime {age}s ago, size={os.path.getsize(snap)}B")
+else:
+    print("  MISSING")
+EOF
+```
+
+**通过标准**：
+- `events`: ≥ 3 行（`motion_type=motion`、`event_file_path` 文件 `file_exists=True`）
+- `video_summary_tasks`: ≥ 3 行（`summary_clip_input` 填充、`status="pending"` —— 如果 VLM `:8192` 没启动会一直 pending，这是预期）
+- `recordings`: ≥ 2 行（90s / 30s 间隔，每条 `duration_seconds=30.0`、`file_exists=True`）
+- `latest.jpg`: 存在，mtime ≤ 2s
+- MCP 启动日志含 `[reconcile] ... orphans deleted` — 控制面双向连通的额外证据
+
+**MCP server 日志预期项**：
+
+```bash
+tail -20 /tmp/.../mcp.log   # 看你 redirect 到的文件
+```
+
+应该看到：
+- ✅ `[events-endpoint] Listening on port 3101`
+- ✅ `[reconcile] ...`（启动时主动调 VSA 清理 orphan）
+- ⚠️ `[events-endpoint] unknown event type "status" from cam_demo` — **预期**，VSA 仍发 status envelope，MCP 当前忽略未知 type
+- ❌ **不应该有** `missing required fields ...` — 如果有说明 envelope 字段对不齐
+
+**`prefilter_passed=None` 是预期**：注册时 `prefilter.enabled=false`，VSA 不跑 YOLO，所以不附带 `prefilter_*` 字段，MCP 写 NULL。要看 prefilter 落 DB，需要在 register body 开启 prefilter 并提供 YOLO 模型路径。
+
+### V11. Keepalive 行为验证（Phase 8）
+
+```bash
+# 注册一个开启 keepalive 的 source，timeout 设短让验证快速完成
+curl -s -X POST http://localhost:8999/register_source \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_id":   "cam_ka",
+    "source_url":  "rtsp://localhost:8554/live/child",
+    "data_dir":    "/tmp/vsa-test/cam_ka",
+    "pipeline": {
+      "prefilter": {"enabled": false},
+      "recording": {"enabled": false},
+      "keepalive": {"enabled": true, "timeout_seconds": 3.0, "check_interval_seconds": 1.0}
+    }
+  }' | python3 -m json.tool
+
+# 立刻 ping 一次 keepalive — 应返回 200 + last_keepalive_at
+curl -s -X POST http://localhost:8999/sources/cam_ka/keepalive | python3 -m json.tool
+
+# 不再 ping，等待 5s（超过 3s timeout + 至少 1 个 watchdog tick）
+sleep 5
+
+# 状态应已被 watchdog 自动切到 paused
+curl -sf http://localhost:8999/sources/cam_ka/status | python3 -m json.tool
+# 期望：{ "status": "paused", "keepalive_enabled": true, "last_keepalive_at": "..." }
+
+# 不存在的 source ping 应返回 404
+curl -i -X POST http://localhost:8999/sources/no_such/keepalive | head -5
+```
+
+期望：
+- 首次 keepalive 返回 `{"status": "ok", "source_id": "cam_ka", "last_keepalive_at": "..."}`
+- 5s 后 `GET /sources/cam_ka/status` 的 `status` 字段为 `paused`
+- VSA 日志包含 `[cam_ka] keepalive timeout (X.Xs > 3s), auto-pausing`
+- 不存在 source 的 keepalive 返回 404
+
 ### 验收清单
 
 | # | 项目 | 期望 |
 |---|---|---|
 | V1 | GET /health | 200 + `status: ok` |
-| V2 | POST /register_source | `status: started` |
-| V3 | GET /sources(/id) 含 health 字段 | `health.*` 完整 |
-| V4 | Motion → clip → webhook | 收到 motion 事件 + mp4 文件 1–10 秒 |
-| V5 | PUT /pipeline 热更新 | 配置生效 |
+| V2 | POST /register_source（嵌套 pipeline） | `status: started` + 旧平铺 body 必须 422 |
+| V3 | GET /sources（裸数组）+ /sources/{id}/status | `health.*` / `recording_enabled` / `keepalive_enabled` / `last_keepalive_at` 完整 |
+| V4 | Motion + Recording → webhook + 磁盘 + latest.jpg | motion envelope `payload.event_file_path` ✓；recording envelope `payload.recording_path` 按 `interval_seconds` 周期；`latest.jpg` mtime ≤ 2s |
+| V5 | PUT /pipeline 热更新（嵌套 pipeline） | 配置生效，recording 启停可切换 |
 | V6 | POST pause / resume | 状态切换 + 暂停期间无事件 |
 | V7 | DELETE /sources/{id} | 列表移除 |
-| V8 | recovery_strategy=remove | 自动 remove + unhealthy 事件 |
-| V9 | CLI serve/stream/health | 三命令均可用 |
+| V8 | recovery_strategy=remove | 自动 remove + envelope `status: unhealthy/stopped` 事件 |
+| V9 | CLI serve/stream/health | 三命令均可用，stream stdout 输出 envelope |
+| V10 | 接真 MCP server 端到端 | MCP DB `events` / `video_summary_tasks` / `recordings` 三张表落行，文件物理存在 |
+| V11 | Keepalive watchdog | 注册 enabled+timeout=3s → keepalive 后 status 正常；停 keepalive 5s 后 status=paused；未注册 source ping 返回 404 |
 
 ## 8. Docker 验证
 
-`videostream-analytics:latest` 容器内置 `serve` 入口，对外暴露 `8999`。容器化后 V1 ~ V9 的所有 curl 命令同样适用，区别仅在第 7 节 T3 选择"容器方式"启动。
+`videostream-analytics:latest` 容器内置 `serve` 入口，对外暴露 `8999`。容器化后 V1 ~ V10 的所有 curl 命令同样适用，区别仅在第 7 节 T3 选择"容器方式"启动。
 
 启动 / 停止：
 
@@ -467,9 +651,13 @@ curl -sf http://localhost:8999/health | python3 -m json.tool
 docker exec vsa-test videostream-analytics --help
 docker exec vsa-test videostream-analytics health --port 8999
 
-# 跑完成的集成测试套件（19 cases）
+# 跑完整的集成测试套件（24 cases — 含 recording / status 路径 / 旧平铺 422 等 Phase 7 新增用例）
 cd videostream-analytics
 bash scripts/test-videostream-analytics.sh --integration-only
+
+# 推荐：用 `--local` 跳过 Docker（避免 build 镜像；本地 venv 直接跑）
+bash scripts/test-videostream-analytics.sh --integration-only --local
+# 期望末尾输出 "24 passed in ~180s"
 
 # 停止
 docker rm -f vsa-test
@@ -490,11 +678,13 @@ bash tools/run_eval.sh --scenario child      # 仅儿童安全
 
 涵盖场景：
 
-| 场景 | 视频 | use_case |
+| 场景 | 视频 | use case 标签 |
 |---|---|---|
 | child | `videos/phase2/child-care/composed/child_safety_demo.mp4` | child_safety |
 | fridge | `videos/demo006-2_expanded.mp4` | fridge |
 | elder_day1 | `videos/phase2/elder_wakeup/composed/day1_elder_wakeup.mp4` | elder_wakeup |
 | elder_day2 | `videos/phase2/elder_wakeup/composed/day2_elder_wakeup.mp4` | elder_wakeup |
+
+> "use case 标签" 仅作为评估工具内部分组，**不传给 VSA `register_source`**（Phase 7 起 VSA 注册体不再接受 `use_case` 字段，use case 归属在 MCP 端管理）。
 
 每个场景的输出：webhook 事件 JSON、clip mp4、prefilter 命中率统计、ASCII 时间线图（`tools/render_eval_timeline.py`）。
