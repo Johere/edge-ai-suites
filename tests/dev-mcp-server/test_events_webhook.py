@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Test: Events Webhook — POST /events protocol validation.
 
-Tests the MCP server events-endpoint against the new webhook protocol:
-  motion   → writes events + video_summary_tasks (status conditioned on prefilter)
-  static   → writes events only
-  recording → writes recordings only
-  invalid payload (missing required fields) → returns 200 with warn, no DB write
+Exercises the **real** EventsEndpoint class from packages/mcp-server/dist
+against a real SmartBuildingDB. The status-code contract under test is the
+one documented in docs/apis/mcp_webhook_event_api.md:
 
-Uses a minimal inline Node.js server that replicates the events-endpoint logic
-(same SQL as the actual implementation) so we can test the protocol without
-running the full MCP server stack.
+  200 — DB write succeeded; body carries inserted row ids
+  400 — body not JSON, or envelope shape invalid
+  404 — unknown path
+  405 — wrong method on a known path; sets Allow header
+  413 — body exceeds maxBodyBytes
+  415 — Content-Type is not application/json
+  422 — envelope OK but unprocessable (unknown type / missing required fields)
+  500 — DB INSERT threw
 """
 
 import json
@@ -25,150 +28,133 @@ sys.path.insert(0, str(Path(__file__).parent))
 from conftest import get_temp_dir, cleanup_dir, TestResult, REPO_ROOT
 
 EVENTS_PORT = 13201
+MAX_BODY_BYTES = 4096  # small ceiling so the 413 test stays cheap
 
-# Minimal Node.js events server implementing the new protocol
-NODE_SCRIPT = """
-const {{ createServer }} = require("node:http");
-const Database = require("better-sqlite3");
+DIST = REPO_ROOT / "packages" / "mcp-server" / "dist"
+DB_DIST = REPO_ROOT / "packages" / "db" / "dist"
 
-const db = new Database("{db_path}");
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
+NODE_SCRIPT_TEMPLATE = f"""\
+import {{ SmartBuildingDB }} from "{DB_DIST}/database.js";
+import {{ EventsEndpoint }} from "{DIST}/events-endpoint.js";
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    monitor_id TEXT NOT NULL, motion_type TEXT NOT NULL,
-    start_time TEXT NOT NULL, end_time TEXT, duration_seconds REAL,
-    event_file_path TEXT,
-    prefilter_passed INTEGER, prefilter_classes TEXT,
-    prefilter_confidence REAL, trajectory_region TEXT,
-    created_at TEXT DEFAULT (datetime('now','localtime'))
-  );
-  CREATE TABLE IF NOT EXISTS recordings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    monitor_id TEXT NOT NULL, file_path TEXT NOT NULL,
-    start_time TEXT NOT NULL, end_time TEXT NOT NULL,
-    duration_seconds REAL, file_size_bytes INTEGER,
-    created_at TEXT DEFAULT (datetime('now','localtime'))
-  );
-  CREATE TABLE IF NOT EXISTS video_summary_tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    monitor_id TEXT NOT NULL, event_id INTEGER,
-    summary_clip_input TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
-    created_at TEXT DEFAULT (datetime('now','localtime'))
-  );
-`);
-
-function handleEvent(event) {{
-  const p = event.payload || {{}};
-  const id = event.sourceId;
-  if (event.type === "motion") {{
-    if (!p.event_file_path || !p.summary_clip_input || !p.start_time || !p.duration_seconds) return;
-    const ev = db.prepare(
-      "INSERT INTO events (monitor_id,motion_type,start_time,end_time,duration_seconds,event_file_path,prefilter_passed,prefilter_classes,prefilter_confidence,trajectory_region) VALUES (?,?,?,?,?,?,?,?,?,?)"
-    ).run(id,"motion",String(p.start_time),p.end_time||null,Number(p.duration_seconds),
-         String(p.event_file_path),
-         p.prefilter_passed!==undefined?Number(p.prefilter_passed):null,
-         p.prefilter_classes?String(p.prefilter_classes):null,
-         p.prefilter_confidence!==undefined?Number(p.prefilter_confidence):null,
-         p.trajectory_region?String(p.trajectory_region):null);
-    const status = p.prefilter_passed!==undefined && Number(p.prefilter_passed)===0 ? "ignored" : "pending";
-    db.prepare("INSERT INTO video_summary_tasks (monitor_id,event_id,summary_clip_input,status) VALUES (?,?,?,?)")
-      .run(id,ev.lastInsertRowid,String(p.summary_clip_input),status);
-  }} else if (event.type === "static") {{
-    if (!p.start_time || !p.duration_seconds) return;
-    db.prepare("INSERT INTO events (monitor_id,motion_type,start_time,end_time,duration_seconds) VALUES (?,?,?,?,?)")
-      .run(id,"static",String(p.start_time),p.end_time||null,Number(p.duration_seconds));
-  }} else if (event.type === "recording") {{
-    if (!p.recording_path || !p.recording_start || !p.recording_end) return;
-    db.prepare("INSERT INTO recordings (monitor_id,file_path,start_time,end_time,duration_seconds,file_size_bytes) VALUES (?,?,?,?,?,?)")
-      .run(id,String(p.recording_path),String(p.recording_start),String(p.recording_end),
-           p.duration_seconds?Number(p.duration_seconds):null,
-           p.file_size_bytes?Number(p.file_size_bytes):null);
-  }}
+// Named flags only — positional ordering bugs once wrote the port literal as a DB filename
+// in repo root, leaving stale SQLite files like "13201" / "13201-wal" behind.
+const args = process.argv.slice(2);
+function flag(name) {{
+  const i = args.indexOf(name);
+  if (i < 0 || i + 1 >= args.length) throw new Error(`missing required flag: ${{name}}`);
+  return args[i + 1];
 }}
+const dbPath = flag("--db");
+const port = Number(flag("--port"));
+if (!Number.isInteger(port)) throw new Error(`--port must be an integer, got: ${{flag("--port")}}`);
 
-const server = createServer((req, res) => {{
-  if (req.method === "POST" && req.url === "/events") {{
-    let body = "";
-    req.on("data", c => {{ body += c; }});
-    req.on("end", () => {{
-      try {{
-        const event = JSON.parse(body);
-        handleEvent(event);
-        res.writeHead(200, {{"Content-Type":"application/json"}});
-        res.end(JSON.stringify({{status:"ok"}}));
-      }} catch(err) {{
-        res.writeHead(400, {{"Content-Type":"application/json"}});
-        res.end(JSON.stringify({{error:err.message}}));
-      }}
-    }});
-  }} else if (req.method === "GET" && req.url === "/health") {{
-    res.writeHead(200, {{"Content-Type":"application/json"}});
-    res.end(JSON.stringify({{status:"healthy"}}));
-  }} else {{
-    res.writeHead(404); res.end();
-  }}
-}});
-
-server.listen({port}, () => {{ console.log("READY"); }});
+const db = new SmartBuildingDB(dbPath);
+db.initialize();
+const endpoint = new EventsEndpoint(db, undefined, {{ maxBodyBytes: {MAX_BODY_BYTES} }});
+await endpoint.start(port);
+console.log("READY");
 """
 
 
-def start_server(db_path: str, port: int) -> subprocess.Popen:
-    script = NODE_SCRIPT.format(db_path=db_path.replace("\\", "/"), port=port)
+def start_server(db_path: str, port: int, workdir: Path) -> subprocess.Popen:
+    # Write the script as a .mjs file so Node loads it in ESM mode without --input-type quirks.
+    script_path = workdir / "boot.mjs"
+    script_path.write_text(NODE_SCRIPT_TEMPLATE)
     proc = subprocess.Popen(
-        ["node", "-e", script],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ["node", str(script_path), "--db", db_path, "--port", str(port)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         cwd=str(REPO_ROOT),
     )
-    for line in proc.stdout:
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        line = proc.stdout.readline()
+        if not line:
+            if proc.poll() is not None:
+                err = proc.stderr.read().decode()
+                raise RuntimeError(f"node server exited before READY:\n{err}")
+            continue
         if b"READY" in line:
-            break
-    return proc
+            return proc
+    raise RuntimeError("node server did not become READY in time")
 
 
-def http_request(url, method="GET", data=None):
-    body = json.dumps(data).encode() if data else None
-    req = urllib.request.Request(url, data=body, method=method)
-    if body:
-        req.add_header("Content-Type", "application/json")
+def http_post_json(url: str, body: dict, *, content_type: str = "application/json"):
+    raw = json.dumps(body).encode()
+    return http_post_raw(url, raw, content_type=content_type)
+
+
+def http_post_raw(url: str, raw: bytes, *, content_type: str | None = "application/json"):
+    headers: dict[str, str] = {}
+    if content_type is not None:
+        headers["Content-Type"] = content_type
+    req = urllib.request.Request(url, data=raw, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req) as resp:
             content = resp.read().decode()
-            return resp.status, json.loads(content) if content else {}
+            return resp.status, dict(resp.getheaders()), (json.loads(content) if content else {})
     except urllib.error.HTTPError as e:
         content = e.read().decode()
         try:
-            return e.code, json.loads(content)
+            return e.code, dict(e.headers), json.loads(content)
         except Exception:
-            return e.code, content
+            return e.code, dict(e.headers), content
+
+
+def http_get(url: str):
+    try:
+        with urllib.request.urlopen(url) as resp:
+            content = resp.read().decode()
+            return resp.status, dict(resp.getheaders()), (json.loads(content) if content else {})
+    except urllib.error.HTTPError as e:
+        content = e.read().decode()
+        try:
+            return e.code, dict(e.headers), json.loads(content)
+        except Exception:
+            return e.code, dict(e.headers), content
 
 
 def main():
-    print("\n=== Test: Events Webhook (new protocol) ===\n")
+    print("\n=== Test: Events Webhook (target contract) ===\n")
     t = TestResult("Events Webhook")
 
     tmp = get_temp_dir("events")
     db_path = str(tmp / "test.db")
 
-    proc = start_server(db_path, EVENTS_PORT)
+    # Ensure dist builds exist before we try to import them.
+    if not (DIST / "events-endpoint.js").exists() or not (DB_DIST / "database.js").exists():
+        print("  ! dist/ missing — run `npm run build --workspaces` first")
+        sys.exit(2)
+
+    proc = start_server(db_path, EVENTS_PORT, tmp)
     base = f"http://localhost:{EVENTS_PORT}"
 
     try:
-        time.sleep(0.3)
+        time.sleep(0.2)
+        conn = sqlite3.connect(db_path)
 
         # --- GET /health ---
-        status, body = http_request(f"{base}/health")
+        status, _, body = http_get(f"{base}/health")
         t.check_equal(status, 200, "GET /health returns 200")
         t.check_equal(body.get("status"), "healthy", "Health body correct")
 
-        conn = sqlite3.connect(db_path)
+        # --- POST /health → 405 with Allow: GET ---
+        status, headers, _ = http_post_json(f"{base}/health", {})
+        t.check_equal(status, 405, "POST /health returns 405")
+        t.check_equal(headers.get("Allow"), "GET", "Allow header on /health 405")
 
-        # --- motion event: prefilter passed=1 → status=pending ---
-        status, _ = http_request(f"{base}/events", "POST", {
+        # --- GET /events → 405 with Allow: POST ---
+        status, headers, _ = http_get(f"{base}/events")
+        t.check_equal(status, 405, "GET /events returns 405")
+        t.check_equal(headers.get("Allow"), "POST", "Allow header on /events 405")
+
+        # --- Unknown path → 404 ---
+        status, _, _ = http_get(f"{base}/unknown")
+        t.check_equal(status, 404, "Unknown path returns 404")
+
+        # --- 200: motion event with prefilter pass → status=pending, body has event_id+task_id ---
+        status, _, body = http_post_json(f"{base}/events", {
             "sourceId": "cam_child", "type": "motion", "timestamp": "2026-06-25T10:00:00Z",
             "payload": {
                 "event_file_path": "/data/seg_001.mp4",
@@ -179,32 +165,32 @@ def main():
             },
         })
         t.check_equal(status, 200, "motion event returns 200")
-        events = conn.execute("SELECT * FROM events WHERE monitor_id='cam_child'").fetchall()
-        tasks  = conn.execute("SELECT * FROM video_summary_tasks WHERE monitor_id='cam_child'").fetchall()
-        t.check_equal(len(events), 1, "motion event writes events table")
-        t.check_equal(len(tasks), 1, "motion event writes video_summary_tasks")
-        t.check_equal(tasks[0][4], "pending", "prefilter_passed=1 → status=pending")
-        t.check_equal(events[0][6], "/data/seg_001.mp4", "event_file_path stored correctly")
-        t.check_equal(tasks[0][3], "/data/seg_001_input.mp4", "summary_clip_input stored correctly")
+        t.check(isinstance(body.get("event_id"), int), "200 body has event_id")
+        t.check(isinstance(body.get("task_id"), int), "200 body has task_id")
 
-        # --- motion event: prefilter passed=0 → status=ignored ---
-        http_request(f"{base}/events", "POST", {
+        ev_row = conn.execute("SELECT motion_type, event_file_path FROM events WHERE id=?", (body["event_id"],)).fetchone()
+        t.check_equal(ev_row[0], "motion", "events.motion_type=motion")
+        t.check_equal(ev_row[1], "/data/seg_001.mp4", "event_file_path stored correctly")
+        task_row = conn.execute("SELECT status, summary_clip_input FROM video_summary_tasks WHERE id=?", (body["task_id"],)).fetchone()
+        t.check_equal(task_row[0], "pending", "prefilter_passed=1 → status=pending")
+        t.check_equal(task_row[1], "/data/seg_001_input.mp4", "summary_clip_input stored correctly")
+
+        # --- 200: motion event with prefilter NOT passed → status=ignored ---
+        _, _, body = http_post_json(f"{base}/events", {
             "sourceId": "cam_child", "type": "motion", "timestamp": "2026-06-25T10:01:00Z",
             "payload": {
                 "event_file_path": "/data/seg_002.mp4",
-                "summary_clip_input": "/data/seg_002_input.mp4",
+                "summary_clip_input": "/data/seg_002.mp4",
                 "start_time": "2026-06-25T10:01:00Z",
                 "duration_seconds": 10.0,
                 "prefilter_passed": 0,
             },
         })
-        tasks2 = conn.execute(
-            "SELECT status FROM video_summary_tasks WHERE monitor_id='cam_child' ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        t.check_equal(tasks2[0], "ignored", "prefilter_passed=0 → status=ignored")
+        task_status = conn.execute("SELECT status FROM video_summary_tasks WHERE id=?", (body["task_id"],)).fetchone()[0]
+        t.check_equal(task_status, "ignored", "prefilter_passed=0 → status=ignored")
 
-        # --- motion event: no prefilter → status=pending ---
-        http_request(f"{base}/events", "POST", {
+        # --- 200: motion w/o prefilter → status=pending ---
+        _, _, body = http_post_json(f"{base}/events", {
             "sourceId": "cam_fridge", "type": "motion", "timestamp": "2026-06-25T10:02:00Z",
             "payload": {
                 "event_file_path": "/data/fridge_001.mp4",
@@ -213,29 +199,22 @@ def main():
                 "duration_seconds": 20.0,
             },
         })
-        fridge_task = conn.execute(
-            "SELECT status FROM video_summary_tasks WHERE monitor_id='cam_fridge'"
-        ).fetchone()
-        t.check_equal(fridge_task[0], "pending", "no prefilter → status=pending")
+        task_status = conn.execute("SELECT status FROM video_summary_tasks WHERE id=?", (body["task_id"],)).fetchone()[0]
+        t.check_equal(task_status, "pending", "no prefilter → status=pending")
 
-        # --- static event → events only, no task ---
-        tasks_before = conn.execute(
-            "SELECT COUNT(*) FROM video_summary_tasks WHERE monitor_id='cam_child'"
-        ).fetchone()[0]
-        http_request(f"{base}/events", "POST", {
+        # --- 200: static → events only, no task; body has event_id but no task_id ---
+        status, _, body = http_post_json(f"{base}/events", {
             "sourceId": "cam_child", "type": "static", "timestamp": "2026-06-25T10:03:00Z",
             "payload": {"start_time": "2026-06-25T10:03:00Z", "duration_seconds": 30.0},
         })
-        events_after = conn.execute("SELECT * FROM events WHERE monitor_id='cam_child'").fetchall()
-        tasks_after  = conn.execute(
-            "SELECT COUNT(*) FROM video_summary_tasks WHERE monitor_id='cam_child'"
-        ).fetchone()[0]
-        static_ev = [e for e in events_after if e[2] == "static"]
-        t.check_equal(len(static_ev), 1, "static event writes events table (motion_type=static)")
-        t.check_equal(tasks_after, tasks_before, "static event does not create task")
+        t.check_equal(status, 200, "static event returns 200")
+        t.check("event_id" in body, "static 200 body has event_id")
+        t.check("task_id" not in body, "static 200 body has no task_id")
+        motion_type = conn.execute("SELECT motion_type FROM events WHERE id=?", (body["event_id"],)).fetchone()[0]
+        t.check_equal(motion_type, "static", "events.motion_type=static")
 
-        # --- recording event → recordings only ---
-        http_request(f"{base}/events", "POST", {
+        # --- 200: recording → recordings only; body has recording_id ---
+        status, _, body = http_post_json(f"{base}/events", {
             "sourceId": "cam_child", "type": "recording", "timestamp": "2026-06-25T10:04:00Z",
             "payload": {
                 "recording_path": "/data/rec_001.mp4",
@@ -244,44 +223,67 @@ def main():
                 "duration_seconds": 60.0, "file_size_bytes": 8192000,
             },
         })
-        recs = conn.execute("SELECT * FROM recordings WHERE monitor_id='cam_child'").fetchall()
-        t.check_equal(len(recs), 1, "recording event writes recordings table")
-        t.check_equal(recs[0][2], "/data/rec_001.mp4", "recording file_path stored correctly")
+        t.check_equal(status, 200, "recording event returns 200")
+        t.check(isinstance(body.get("recording_id"), int), "recording 200 body has recording_id")
+        rec_path = conn.execute("SELECT file_path FROM recordings WHERE id=?", (body["recording_id"],)).fetchone()[0]
+        t.check_equal(rec_path, "/data/rec_001.mp4", "recording file_path stored correctly")
 
-        # --- motion event missing required field → 200 (warn + skip) ---
-        status, _ = http_request(f"{base}/events", "POST", {
+        # --- 422: motion missing required field ---
+        events_before = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        status, _, body = http_post_json(f"{base}/events", {
             "sourceId": "cam_child", "type": "motion", "timestamp": "2026-06-25T10:05:00Z",
-            "payload": {"event_file_path": "/data/seg_003.mp4"},  # missing summary_clip_input
+            "payload": {"event_file_path": "/data/seg_x.mp4"},
         })
-        t.check_equal(status, 200, "motion event missing required field returns 200 (not 500)")
-        tasks_no_change = conn.execute(
-            "SELECT COUNT(*) FROM video_summary_tasks WHERE monitor_id='cam_child'"
-        ).fetchone()[0]
-        t.check_equal(tasks_no_change, 2, "missing required field: no new task created")
+        t.check_equal(status, 422, "missing required fields returns 422")
+        t.check_equal(body.get("code"), "missing_required_fields", "422 body code")
+        t.check("summary_clip_input" in body.get("missing", []), "422 lists summary_clip_input as missing")
+        events_after = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        t.check_equal(events_after, events_before, "422 missing fields → no DB write")
 
-        # --- invalid JSON → 400 ---
-        req = urllib.request.Request(
-            f"{base}/events", data=b"not json", method="POST",
-            headers={"Content-Type": "application/json"},
+        # --- 422: unknown event type ---
+        status, _, body = http_post_json(f"{base}/events", {
+            "sourceId": "cam_child", "type": "audio", "timestamp": "2026-06-25T10:05:00Z",
+            "payload": {},
+        })
+        t.check_equal(status, 422, "unknown type returns 422")
+        t.check_equal(body.get("code"), "unknown_event_type", "422 body code unknown_event_type")
+        t.check_equal(body.get("type"), "audio", "422 echoes the offending type")
+
+        # --- 400: malformed JSON ---
+        status, _, body = http_post_raw(f"{base}/events", b"not even { json")
+        t.check_equal(status, 400, "malformed JSON returns 400")
+        t.check_equal(body.get("code"), "invalid_json", "400 body code invalid_json")
+
+        # --- 400: envelope sourceId wrong type ---
+        status, _, body = http_post_json(f"{base}/events", {
+            "sourceId": 12345, "type": "motion", "timestamp": "x", "payload": {},
+        })
+        t.check_equal(status, 400, "bad envelope returns 400")
+        t.check_equal(body.get("code"), "invalid_envelope", "400 body code invalid_envelope")
+
+        # --- 415: wrong Content-Type ---
+        status, _, body = http_post_raw(
+            f"{base}/events", b'{"sourceId":"x","type":"motion","payload":{}}',
+            content_type="text/plain",
         )
-        try:
-            urllib.request.urlopen(req)
-            t.check(False, "Invalid JSON should return 400")
-        except urllib.error.HTTPError as e:
-            t.check_equal(e.code, 400, "Invalid JSON returns 400")
+        t.check_equal(status, 415, "wrong content-type returns 415")
+        t.check_equal(body.get("code"), "unsupported_media_type", "415 body code")
 
-        # --- 404 for unknown path ---
-        try:
-            urllib.request.urlopen(f"{base}/unknown")
-            t.check(False, "Unknown path should return 404")
-        except urllib.error.HTTPError as e:
-            t.check_equal(e.code, 404, "Unknown path returns 404")
+        # --- 413: body too large ---
+        oversized = b'{"sourceId":"x","type":"motion","payload":{"pad":"' + b"A" * (MAX_BODY_BYTES + 1024) + b'"}}'
+        status, _, body = http_post_raw(f"{base}/events", oversized)
+        t.check_equal(status, 413, "oversized body returns 413")
+        t.check_equal(body.get("code"), "body_too_large", "413 body code")
+        t.check_equal(body.get("limit_bytes"), MAX_BODY_BYTES, "413 reports limit_bytes")
 
         conn.close()
 
     finally:
         proc.terminate()
-        proc.wait(timeout=5)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
     cleanup_dir(tmp)
     passed = t.summary()

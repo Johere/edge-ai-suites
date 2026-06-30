@@ -12,7 +12,9 @@ TESTS = [
     "test_schema.py",
     "test_rule_engine.py",
     "test_events_webhook.py",
-    "test_video_worker.py",
+    # test_video_worker.py removed — the end-to-end video-worker path is exercised
+    # by tests/mock/videostream-analytics/mock_server.py against a real
+    # multilevel-video-understanding container (WW27 e2e work).
     "test_tools_mcp.py",
 ]
 

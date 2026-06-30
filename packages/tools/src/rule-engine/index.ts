@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
-import { parseSummaryFields } from "./summary-parser.js";
 
 export { parseSummaryFields } from "./summary-parser.js";
 export type { ParsedSummary } from "./summary-parser.js";
@@ -85,5 +84,3 @@ export async function evaluateWithOverride(
   }
 }
 
-// Internal helper export to silence unused-import warning if parser is not referenced elsewhere
-void parseSummaryFields;

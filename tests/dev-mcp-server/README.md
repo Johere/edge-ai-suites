@@ -27,7 +27,6 @@ python tests/dev-mcp-server/run_all.py
 python tests/dev-mcp-server/test_db.py
 python tests/dev-mcp-server/test_schema.py
 python tests/dev-mcp-server/test_events_webhook.py
-python tests/dev-mcp-server/test_video_worker.py
 python tests/dev-mcp-server/test_rule_engine.py
 python tests/dev-mcp-server/test_tools_mcp.py
 ```

@@ -21,9 +21,15 @@
 #   logs/reports/             — SRT debug artifacts from generate_report
 # ─────────────────────────────────────────────────────────────
 
-# multilevel-video-understanding service (video segment analysis)
+# multilevel-video-understanding service (video segment analysis).
+# Optional path_remap: when multilevel runs in a container that mounts the host's data
+# dir at a different path, the client rewrites the host prefix to the container prefix
+# before POSTing /v1/summary. Drop the block entirely when both sides see the same paths.
 summary_service:
   url: http://localhost:8192
+  path_remap:
+    host_prefix: ${HOME}/.mcp-smartbuilding   # host's SMARTBUILDING_DATA_DIR
+    container_prefix: /data                    # container mount point
 
 # vllm-serving-ipex (VLM for scene_query — single-frame queries)
 vlm_service:
@@ -78,6 +84,12 @@ use_case_dict:
     description: "Fridge content tracking"
     video_summary_task: refrigerator_monitor_en
     # No evaluate_rules_path → defaultRuleEvaluator handles it
+    summarize:
+      method: SIMPLE
+      processor_kwargs:
+        levels: 1
+        level_sizes: [-1]
+        process_fps: 2
     reports:
       data_source: events
       default_type: daily
@@ -87,6 +99,14 @@ use_case_dict:
     description: "Child safety monitoring"
     video_summary_task: child_safety_monitor
     evaluate_rules_path: ${HOME}/use-cases/child_safety/evaluate_rules.py  # optional Python override
+    # Per-clip summarize tuning. Defaults (single LOCAL_PROMPT pass) suit most use cases;
+    # override only when you need multi-level roll-up or T-1 temporal context.
+    summarize:
+      method: SIMPLE           # SIMPLE | USE_VLM_T-1 | USE_LLM_T-1 | USE_ALL_T-1
+      processor_kwargs:
+        levels: 1              # 1 = LOCAL_PROMPT only, no MACRO/GLOBAL roll-up
+        level_sizes: [-1]      # -1 = single group at the level
+        process_fps: 2         # frames per second sampled from the clip
     reports:
       data_source: alerts
       default_type: daily
@@ -96,6 +116,12 @@ use_case_dict:
     description: "Elder wakeup monitoring"
     video_summary_task: elder_wakeup_monitor
     evaluate_rules_path: ${HOME}/use-cases/elder_wakeup/evaluate_rules.py
+    summarize:
+      method: SIMPLE
+      processor_kwargs:
+        levels: 1
+        level_sizes: [-1]
+        process_fps: 2
     reports:
       data_source: video_summary_tasks
       default_type: daily

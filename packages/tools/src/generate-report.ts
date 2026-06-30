@@ -1,4 +1,5 @@
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
+import type { VideoSummaryClient } from "./clients/video-summary-client.js";
 
 export interface GenerateReportParams {
   monitor_id: string;
@@ -11,7 +12,8 @@ export interface GenerateReportParams {
 export interface ReportConfig {
   dataSource: "events" | "alerts" | "video_summary_tasks";
   defaultType: "daily" | "weekly" | "monthly";
-  summaryServiceUrl: string; // multilevel-video-understanding base URL
+  /** Shared client to multilevel-video-understanding (caption-only mode here). */
+  summaryClient: VideoSummaryClient;
   filter?: Record<string, any>;
   debugDir?: string; // when set, persist SRT artifacts here
 }
@@ -139,44 +141,6 @@ function planLevels(
 }
 
 // ---------------------------------------------------------------------------
-// multilevel-video-understanding API call (caption-only mode)
-// ---------------------------------------------------------------------------
-
-async function callSummaryService(opts: {
-  serviceUrl: string;
-  srtText: string;
-  numEvents: number;
-  task: string;
-}): Promise<{ summary: string | null; usage?: any; error?: string }> {
-  const { levels, levelSizes } = planLevels(opts.srtText, opts.numEvents);
-  const payload = {
-    video: "none",
-    video_subtitles: { text: opts.srtText },
-    task: opts.task,
-    method: "USE_ALL_T-1",
-    processor_kwargs: { levels, level_sizes: levelSizes, process_fps: 0 },
-  };
-
-  const resp = await fetch(`${opts.serviceUrl}/v1/summary`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(600_000),
-  });
-
-  if (!resp.ok) {
-    const detail = await resp.text().catch(() => "");
-    return { summary: null, error: `HTTP ${resp.status}: ${detail.slice(0, 300)}` };
-  }
-
-  const result = (await resp.json()) as any;
-  const raw: string = result.summary ?? null;
-  if (!raw) return { summary: null, error: "empty summary from service" };
-  const summary = raw.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
-  return { summary, usage: result.usage };
-}
-
-// ---------------------------------------------------------------------------
 // Data query helpers
 // ---------------------------------------------------------------------------
 
@@ -234,7 +198,6 @@ export async function generateReport(
   const { periodStart, periodEnd } = calcPeriod(type, params.period_start, params.period_end);
   const filter = reportConfig.filter ?? {};
   const dataSource = reportConfig.dataSource;
-  const serviceUrl = reportConfig.summaryServiceUrl;
 
   const monitor = db.getMonitor(params.monitor_id);
   if (!monitor) {
@@ -278,13 +241,23 @@ export async function generateReport(
   }
 
   // 4. Call multilevel-video-understanding caption-only
+  const { levels, levelSizes } = planLevels(srtText, rows.length);
   const t0 = Date.now();
-  const { summary, usage, error } = await callSummaryService({
-    serviceUrl,
-    srtText,
-    numEvents: rows.length,
-    task: summaryTaskName,
-  });
+  let summary: string | null = null;
+  let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
+  let error: string | undefined;
+  try {
+    const resp = await reportConfig.summaryClient.summarizeSubtitles({
+      srtText,
+      task: summaryTaskName,
+      processor_kwargs: { levels, level_sizes: levelSizes },
+    });
+    summary = resp.summary;
+    usage = resp.usage;
+    if (!summary) error = "empty summary from service";
+  } catch (err: any) {
+    error = err.message;
+  }
   const latency = (Date.now() - t0) / 1000;
 
   // 5. Persist to reports table

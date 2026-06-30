@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { SmartBuildingDB, SchemaManager } from "@smartbuilding-video/db";
+import { VideoSummaryClient } from "@smartbuilding-video/tools";
 import { registerTools } from "./tools.js";
 import { registerResources } from "./resources.js";
 import { loadConfig, loadMonitorsConfig, type ServerConfig } from "./config.js";
@@ -21,13 +22,14 @@ function createMcpServer(
   config: ServerConfig,
   db: SmartBuildingDB,
   workerService: WorkerService,
+  summaryClient: VideoSummaryClient,
 ): McpServer {
   const server = new McpServer({
     name: "smartbuilding-video",
     version: "0.1.0",
   });
 
-  registerTools(server, config, db, workerService);
+  registerTools(server, config, db, workerService, summaryClient);
   registerResources(server, config, db);
 
   return server;
@@ -94,7 +96,8 @@ async function main() {
     logger.debug(`[worker] Alert triggered for monitor ${monitorId}`);
   };
 
-  const workerService = new WorkerService(config, db, onAlert);
+  const summaryClient = new VideoSummaryClient(config.summaryService.url, config.summaryService.pathRemap);
+  const workerService = new WorkerService(config, db, summaryClient, onAlert);
 
   let mcpServer: McpServer | null = null;
 
@@ -105,7 +108,7 @@ async function main() {
     app.all("/mcp", async (req, res) => {
       logger.debug(`[mcp] ${req.method} /mcp`);
 
-      const server = createMcpServer(config, db, workerService);
+      const server = createMcpServer(config, db, workerService, summaryClient);
 
       try {
         const transport = new StreamableHTTPServerTransport({
@@ -138,12 +141,14 @@ async function main() {
 
   } else {
     // stdio: single stateful server instance
-    mcpServer = createMcpServer(config, db, workerService);
+    mcpServer = createMcpServer(config, db, workerService, summaryClient);
     const transport = new StdioServerTransport();
     await mcpServer.connect(transport);
   }
 
-  const eventsEndpoint = new EventsEndpoint(db);
+  const eventsEndpoint = new EventsEndpoint(db, undefined, {
+    maxBodyBytes: config.eventsWebhook!.maxBodyBytes,
+  });
   await eventsEndpoint.start(config.eventsWebhook!.port);
 
   // Clean up state from previous crash (analytics sources that DB doesn't know about, etc.)

@@ -1,9 +1,9 @@
 import type { ServerConfig } from "../config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
-import type { VideoSummaryClient } from "./video-summary-client.js";
+import type { VideoSummaryClient } from "@smartbuilding-video/tools";
 import type { VideoSummaryYield } from "./video-summary-yield.js";
 import type { AlertCallback } from "./index.js";
-import { evaluateWithOverride, parseSummaryFields } from "@smartbuilding-video/rule-engine";
+import { evaluateWithOverride, parseSummaryFields } from "@smartbuilding-video/tools";
 import { logger } from "../logger.js";
 
 export class TaskPoller {
@@ -62,15 +62,36 @@ export class TaskPoller {
     if (tasks.length === 0) return;
 
     const task = tasks[0];
+    const monitor = this.db.getMonitor(monitorId);
+    const useCase = monitor?.useCase ?? "";
+    const summaryTaskName = monitor?.videoSummaryTask ?? "";
 
     try {
       await this.yieldManager.acquire();
       this.db.updateTaskStatus(task.id, "processing");
 
       const videoPath = task.summaryClipInput ?? "";
-      const result = await this.videoSummaryClient.summarize({ videoUrl: videoPath, taskId: String(task.id) });
+      const t0 = Date.now();
+      // Per-clip summarize tuning is configurable via use_case_dict.<useCase>.summarize.
+      // Defaults below match the legacy smarthome stream_monitor config: LOCAL_PROMPT
+      // only (levels=1), no T-1 dependency (method=SIMPLE), 2 fps sampling.
+      const summarizeCfg = this.config.useCaseDict[useCase]?.summarize ?? {};
+      const result = await this.videoSummaryClient.summarize({
+        video: videoPath,
+        task: summaryTaskName,
+        method: summarizeCfg.method ?? "SIMPLE",
+        processor_kwargs: {
+          levels: summarizeCfg.processor_kwargs?.levels ?? 1,
+          level_sizes: summarizeCfg.processor_kwargs?.level_sizes ?? [-1],
+          process_fps: summarizeCfg.processor_kwargs?.process_fps ?? 2,
+          ...(summarizeCfg.processor_kwargs?.chunking_method
+            ? { chunking_method: summarizeCfg.processor_kwargs.chunking_method }
+            : {}),
+        },
+      });
+      const latencySeconds = (Date.now() - t0) / 1000;
 
-      // Schema-aware parse of VLM output: only fields declared in
+      // Schema-aware parse of multilevel-video-understanding output: only fields declared in
       // config.schema.video_summary_tasks.extensions are extracted.
       const extensions = this.config.schema?.video_summary_tasks?.extensions ?? [];
       const parsed = parseSummaryFields(result.summary ?? "", extensions);
@@ -78,13 +99,16 @@ export class TaskPoller {
         logger.warn(`[task-poller] task ${task.id} (${monitorId}) missing required schema fields: ${parsed.missingRequired.join(", ")}`);
       }
 
-      // Persist summary text + parsed extension fields in one UPDATE
-      this.db.updateTaskStatus(task.id, "completed", result.summary, undefined, parsed.fields);
+      // Persist summary text + extension fields + service usage in one UPDATE.
+      this.db.updateTaskStatus(task.id, "completed", result.summary ?? "", {
+        latencySeconds,
+        promptTokens: result.usage?.prompt_tokens,
+        imageTokens: result.usage?.image_tokens,
+        completionTokens: result.usage?.completion_tokens,
+      }, parsed.fields);
 
       // Evaluate rules via rule engine. Override path (Python script) is derived
       // from config.useCaseDict[monitor.useCase].evaluate_rules_path; absent → defaultRuleEvaluator.
-      const monitor = this.db.getMonitor(monitorId);
-      const useCase = monitor?.useCase ?? "";
       const overridePath = this.config.useCaseDict[useCase]?.evaluate_rules_path ?? null;
       const ruleCtx = {
         monitorId,
@@ -100,7 +124,7 @@ export class TaskPoller {
           monitorId,
           taskId: task.id,
           eventId: task.eventId,
-          useCase: monitor?.useCase ?? "",
+          useCase,
           description: ruleResult.alertMessage,
         });
         if (this.onAlert) {
@@ -108,7 +132,8 @@ export class TaskPoller {
         }
       }
     } catch (err: any) {
-      this.db.updateTaskStatus(task.id, "failed", err.message);
+      logger.error(`[task-poller] task ${task.id} (${monitorId}) failed: ${err.message}`);
+      this.db.updateTaskStatus(task.id, "failed", undefined, { errorMessage: err.message });
     } finally {
       this.yieldManager.release();
     }
