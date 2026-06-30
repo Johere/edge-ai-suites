@@ -13,6 +13,22 @@ export interface MonitorConfig {
 }
 
 /**
+ * Per-clip summarization tuning consumed by video-worker task-poller.
+ * All fields optional — defaults applied in task-poller match the legacy
+ * stream_monitor config (single-level LOCAL_PROMPT only, no MACRO/GLOBAL
+ * roll-up). Override per use_case when a different temporal strategy fits.
+ */
+export interface SummarizeConfig {
+  method?: "SIMPLE" | "USE_VLM_T-1" | "USE_LLM_T-1" | "USE_ALL_T-1";
+  processor_kwargs?: {
+    levels?: number;
+    level_sizes?: number[];
+    process_fps?: number;
+    chunking_method?: "pelt" | "uniform";
+  };
+}
+
+/**
  * Use case definition. Lives in config.yaml under `use_case_dict.<key>` —
  * one entry per use case, referenced by monitors via `use_case` field.
  */
@@ -22,6 +38,8 @@ export interface UseCaseConfig {
   video_summary_task: string;
   /** Optional path to Python override script for rule evaluation. */
   evaluate_rules_path?: string;
+  /** Optional per-clip summarization tuning (see SummarizeConfig). */
+  summarize?: SummarizeConfig;
   /** Optional default report configuration consumed by smartbuilding_generate_report. */
   reports?: {
     data_source: "events" | "alerts" | "video_summary_tasks";

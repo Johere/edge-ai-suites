@@ -72,10 +72,22 @@ export class TaskPoller {
 
       const videoPath = task.summaryClipInput ?? "";
       const t0 = Date.now();
+      // Per-clip summarize tuning is configurable via use_case_dict.<useCase>.summarize.
+      // Defaults below match the legacy smarthome stream_monitor config: LOCAL_PROMPT
+      // only (levels=1), no T-1 dependency (method=SIMPLE), 2 fps sampling.
+      const summarizeCfg = this.config.useCaseDict[useCase]?.summarize ?? {};
       const result = await this.videoSummaryClient.summarize({
         video: videoPath,
         task: summaryTaskName,
-        method: "USE_ALL_T-1",
+        method: summarizeCfg.method ?? "SIMPLE",
+        processor_kwargs: {
+          levels: summarizeCfg.processor_kwargs?.levels ?? 1,
+          level_sizes: summarizeCfg.processor_kwargs?.level_sizes ?? [-1],
+          process_fps: summarizeCfg.processor_kwargs?.process_fps ?? 2,
+          ...(summarizeCfg.processor_kwargs?.chunking_method
+            ? { chunking_method: summarizeCfg.processor_kwargs.chunking_method }
+            : {}),
+        },
       });
       const latencySeconds = (Date.now() - t0) / 1000;
 
