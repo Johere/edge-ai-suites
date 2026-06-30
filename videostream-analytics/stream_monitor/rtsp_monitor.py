@@ -34,6 +34,7 @@ from stream_monitor.base_monitor import BaseMonitor
 from stream_monitor.pipeline.motion_detector import MotionDetector
 from stream_monitor.pipeline.segment_extractor import SegmentExtractor
 from stream_monitor.pipeline.prefilter_yolo import YoloPrefilter, FramePrefilter
+from stream_monitor.pipeline.roi_processor import prepare_roi_segment
 
 logger = logging.getLogger(__name__)
 
@@ -357,6 +358,18 @@ class StreamPipeline(BaseMonitor):
                     extractor.start_segment()
                     if self._prefilter:
                         self._prefilter.reset_for_next_segment()
+                elif self._prefilter and self._should_split_segment():
+                    # Phase 9: trajectory union grew past auto_split_area;
+                    # finish current segment early so the ROI crop stays tight.
+                    early = extractor.finish()
+                    if early:
+                        self._maybe_emit(early)
+                    extractor.start_segment()
+                    self._prefilter.reset_for_next_segment()
+                    logger.debug(
+                        "[%s] Segment early-split by trajectory union",
+                        self.source_id,
+                    )
 
                 # Cascaded exit check
                 if self._should_exit_motion(detector, motion_frames):
@@ -372,6 +385,19 @@ class StreamPipeline(BaseMonitor):
             if result:
                 self._maybe_emit(result)
         extractor.close()
+
+    def _should_split_segment(self) -> bool:
+        """Return True when the active prefilter wants an early segment cut.
+
+        Honors `pipeline.prefilter.roi_crop.auto_split_area`. With value <=0 or
+        roi_crop disabled, never splits.
+        """
+        if self._prefilter is None:
+            return False
+        roi_cfg = getattr(self._prefilter_cfg, "roi_crop", None)
+        if roi_cfg is None or not roi_cfg.enabled or roi_cfg.auto_split_area <= 0:
+            return False
+        return self._prefilter.should_split(roi_cfg.auto_split_area)
 
     def _maybe_emit(self, result):
         """Check prefilter and emit or discard segment."""
@@ -402,10 +428,39 @@ class StreamPipeline(BaseMonitor):
 
     def _emit_segment(self, result, pf_result=None) -> None:
         """Post segment as motion event via sink, in MCP's nested envelope."""
-        # summary_clip_input: prefer a pre-cropped sibling clip if present.
         clip_path = result.path
-        crop_path = clip_path.rsplit(".", 1)[0] + "_input.mp4"
-        summary_clip_input = crop_path if os.path.exists(crop_path) else clip_path
+        summary_clip_input = clip_path  # default: original clip
+
+        # Phase 9: optionally produce <clip>_input.mp4 via ROI crop. Only when
+        # prefilter passed AND roi_crop is enabled AND we have a trajectory
+        # region. Failure falls back to the original clip — never raises.
+        roi_cfg = getattr(self._prefilter_cfg, "roi_crop", None)
+        traj = getattr(pf_result, "trajectory_region_xyxy", None) if pf_result else None
+        if (
+            pf_result is not None
+            and pf_result.passed
+            and roi_cfg is not None
+            and roi_cfg.enabled
+            and traj is not None
+        ):
+            yolo_inst = None
+            if roi_cfg.mode == "crop_and_concat" and self._prefilter is not None:
+                yolo_inst = getattr(self._prefilter, "_yolo", None)
+            roi_path = prepare_roi_segment(
+                clip_path, traj,
+                mode=roi_cfg.mode,
+                expand=roi_cfg.expand,
+                yolo=yolo_inst,
+            )
+            if roi_path:
+                summary_clip_input = roi_path
+
+        # Pre-cropped sibling clip fallback (e.g. produced out-of-band): only
+        # honour it if ROI crop above didn't run.
+        if summary_clip_input == clip_path:
+            crop_path = clip_path.rsplit(".", 1)[0] + "_input.mp4"
+            if os.path.exists(crop_path):
+                summary_clip_input = crop_path
 
         payload: dict[str, Any] = {
             "event_file_path": clip_path,
@@ -418,14 +473,18 @@ class StreamPipeline(BaseMonitor):
             payload["prefilter_passed"] = int(bool(pf_result.passed))
             payload["prefilter_classes"] = json.dumps(list(pf_result.hit_classes))
             payload["prefilter_confidence"] = float(pf_result.max_confidence)
+            if traj is not None:
+                # MCP expects a JSON string (events-endpoint.ts:143 wraps in String()).
+                payload["trajectory_region"] = json.dumps(traj)
 
         self._emit_envelope("motion", payload)
         logger.debug(
-            "[%s] Emitted motion: %.1fs %s prefilter=%s",
+            "[%s] Emitted motion: %.1fs %s prefilter=%s region=%s",
             self.source_id,
             result.duration_s,
             clip_path,
             "n/a" if pf_result is None else ("pass" if pf_result.passed else "skip"),
+            traj,
         )
 
     def _emit_status(self, status: str):

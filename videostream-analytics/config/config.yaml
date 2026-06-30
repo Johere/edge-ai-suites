@@ -36,6 +36,14 @@ defaults:
     min_frames_hit: 1
     detect_fps: 2.0
     device: "NPU"
+    # Phase 9: ROI crop for child_safety / elder_wakeup. Default OFF so other
+    # use cases (which want full-frame VLM input) aren't disturbed. MCP sends
+    # this block per-use-case in the register payload.
+    roi_crop:
+      enabled: false
+      mode: "crop"           # crop | highlight | crop_and_concat
+      expand: 0.25
+      auto_split_area: 0.0   # 0 disables early-split; child_safety: 0.35
   health:
     max_failures: 30
     recovery_strategy: "retry"

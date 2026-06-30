@@ -37,6 +37,22 @@ class RecordingConfig(BaseModel):
     retention_days: int = 5
 
 
+class RoiCropConfig(BaseModel):
+    """ROI crop configuration for prefilter (Phase 9, child_safety).
+
+    When enabled and prefilter accumulates a `trajectory_region_xyxy`, the
+    pipeline writes a `<clip>_input.mp4` next to the original segment and
+    points `summary_clip_input` there. `auto_split_area` triggers early
+    segment cuts when the union bbox grows beyond the fraction (avoids one
+    over-large crop on long fast-moving events).
+    """
+
+    enabled: bool = False
+    mode: str = "crop"  # crop | highlight | crop_and_concat
+    expand: float = 0.25
+    auto_split_area: float = 0.0  # 0 disables early-split
+
+
 class PrefilterConfig(BaseModel):
     enabled: bool = False
     model_path: str = ""
@@ -45,6 +61,7 @@ class PrefilterConfig(BaseModel):
     min_frames_hit: int = 2
     detect_fps: float = 2.0
     device: str = "CPU"
+    roi_crop: RoiCropConfig | None = None
 
 
 class HealthConfig(BaseModel):
