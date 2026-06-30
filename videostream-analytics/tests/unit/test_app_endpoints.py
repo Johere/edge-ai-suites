@@ -137,6 +137,39 @@ class TestRegisterSource:
         assert resp.status_code == 200
         assert resp.json()["status"] == "started"
 
+    def test_register_accepts_roi_crop_nested(self, client, mock_mgr):
+        """Phase 9: prefilter.roi_crop nested config must be accepted."""
+        mock_mgr.register_source.return_value = {
+            "status": "started",
+            "source_id": "cam_child",
+            "source_url": "rtsp://localhost:8554/live/child",
+        }
+        resp = client.post("/register_source", json={
+            "source_id": "cam_child",
+            "source_url": "rtsp://localhost:8554/live/child",
+            "pipeline": {
+                "prefilter": {
+                    "enabled": True,
+                    "model_path": "/models/yolo11s.xml",
+                    "target_classes": ["person"],
+                    "roi_crop": {
+                        "enabled": True,
+                        "mode": "crop",
+                        "expand": 0.25,
+                        "auto_split_area": 0.35,
+                    },
+                },
+            },
+        })
+        assert resp.status_code == 200
+        # Verify the nested roi_crop survived into the SourceConfig hand-off.
+        ((source_arg,), _) = mock_mgr.register_source.call_args
+        assert source_arg.prefilter is not None
+        assert source_arg.prefilter.roi_crop is not None
+        assert source_arg.prefilter.roi_crop.enabled is True
+        assert source_arg.prefilter.roi_crop.mode == "crop"
+        assert source_arg.prefilter.roi_crop.auto_split_area == 0.35
+
     def test_register_already_running(self, client, mock_mgr):
         mock_mgr.register_source.return_value = {
             "status": "already_running",
