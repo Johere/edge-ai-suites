@@ -1,7 +1,7 @@
 import type { ServerConfig } from "../config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
+import type { VideoSummaryClient } from "@smartbuilding-video/tools";
 import { TaskPoller } from "./task-poller.js";
-import { VideoSummaryClient } from "./video-summary-client.js";
 import { VideoSummaryYield } from "./video-summary-yield.js";
 
 export interface MonitorWorker {
@@ -19,9 +19,9 @@ export class WorkerService {
   constructor(
     config: ServerConfig,
     db: SmartBuildingDB,
+    summaryClient: VideoSummaryClient,
     onAlert?: AlertCallback,
   ) {
-    const summaryClient = new VideoSummaryClient(config.summaryService.url, config.summaryService.pathRemap);
     const yieldManager = new VideoSummaryYield(config.videoSummaryMaxConcurrent);
     this.poller = new TaskPoller(config, db, summaryClient, yieldManager, onAlert);
   }

@@ -1,9 +1,9 @@
 import type { ServerConfig } from "../config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
-import type { VideoSummaryClient } from "./video-summary-client.js";
+import type { VideoSummaryClient } from "@smartbuilding-video/tools";
 import type { VideoSummaryYield } from "./video-summary-yield.js";
 import type { AlertCallback } from "./index.js";
-import { evaluateWithOverride, parseSummaryFields } from "@smartbuilding-video/rule-engine";
+import { evaluateWithOverride, parseSummaryFields } from "@smartbuilding-video/tools";
 import { logger } from "../logger.js";
 
 export class TaskPoller {
@@ -75,6 +75,7 @@ export class TaskPoller {
       const result = await this.videoSummaryClient.summarize({
         video: videoPath,
         task: summaryTaskName,
+        method: "USE_ALL_T-1",
       });
       const latencySeconds = (Date.now() - t0) / 1000;
 

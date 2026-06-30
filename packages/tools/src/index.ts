@@ -6,6 +6,28 @@ export { sceneQuery } from "./scene-query.js";
 export type { SceneQueryParams } from "./scene-query.js";
 export { generateReport } from "./generate-report.js";
 export type { GenerateReportParams, ReportConfig } from "./generate-report.js";
+export { VideoSummaryClient } from "./clients/video-summary-client.js";
+export type {
+  SummaryMethod,
+  ProcessorKwargs,
+  SubtitlePayload,
+  SummaryUsage,
+  SummaryResponse,
+  PathRemap,
+  VideoSummarizeRequest,
+  SubtitleSummarizeRequest,
+} from "./clients/video-summary-client.js";
+export {
+  evaluateWithOverride,
+  defaultRuleEvaluator,
+  parseSummaryFields,
+} from "./rule-engine/index.js";
+export type {
+  RuleContext,
+  RuleResult,
+  RuleEvaluator,
+  ParsedSummary,
+} from "./rule-engine/index.js";
 export { monitorCtl } from "./monitor-ctl.js";
 export type { MonitorCtlParams } from "./monitor-ctl.js";
 export { loadMonitorsFromYaml, validateMonitors } from "./monitors-compose.js";
