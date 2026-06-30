@@ -41,6 +41,13 @@ export interface ServerConfig {
 
   summaryService: {
     url: string;
+    /**
+     * Optional host↔container path remap. multilevel-video-understanding typically runs
+     * in a container that mounts the host's data dir at a different path. If set, the
+     * client rewrites `video` paths starting with `hostPrefix` to `containerPrefix`
+     * before POSTing. Leave undefined when both sides see the same paths.
+     */
+    pathRemap?: { hostPrefix: string; containerPrefix: string };
   };
   vlmService: {
     url: string;
@@ -58,6 +65,7 @@ export interface ServerConfig {
   };
   eventsWebhook?: {
     port?: number;
+    maxBodyBytes?: number;
   };
   /** Use case library — loaded from config.yaml top-level `use_case_dict` block. */
   useCaseDict: Record<string, UseCaseConfig>;
@@ -100,7 +108,15 @@ export function loadConfig(configPath?: string): ServerConfig {
     reportsLogsDir: join(dataDir, "logs", "reports"),
     monitorsLogsDir: join(dataDir, "logs", "monitors"),
 
-    summaryService: { url: parsed?.summary_service?.url ?? "http://localhost:8192" },
+    summaryService: {
+      url: parsed?.summary_service?.url ?? "http://localhost:8192",
+      pathRemap: parsed?.summary_service?.path_remap?.host_prefix && parsed?.summary_service?.path_remap?.container_prefix
+        ? {
+            hostPrefix: resolve(parsed.summary_service.path_remap.host_prefix.replace(/\$\{HOME\}/g, homedir())),
+            containerPrefix: parsed.summary_service.path_remap.container_prefix,
+          }
+        : undefined,
+    },
     vlmService: {
       url: parsed?.vlm_service?.url ?? "http://localhost:41091/v1",
       model: parsed?.vlm_service?.model ?? "default",
@@ -111,7 +127,10 @@ export function loadConfig(configPath?: string): ServerConfig {
     videoSummaryMaxConcurrent: parsed?.video_summary_max_concurrent ?? 2,
     schema: parsed?.schema,
     mcp: { port: parsed?.mcp?.port ?? 3100 },
-    eventsWebhook: { port: parsed?.events_webhook?.port ?? 3101 },
+    eventsWebhook: {
+      port: parsed?.events_webhook?.port ?? 3101,
+      maxBodyBytes: parsed?.events_webhook?.max_body_bytes ?? 1024 * 1024,
+    },
     logging: {
       retentionDays: parsed?.logging?.retention_days ?? 14,
       maxFileMb: parsed?.logging?.max_file_mb ?? 50,

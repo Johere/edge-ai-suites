@@ -143,7 +143,9 @@ async function main() {
     await mcpServer.connect(transport);
   }
 
-  const eventsEndpoint = new EventsEndpoint(db);
+  const eventsEndpoint = new EventsEndpoint(db, undefined, {
+    maxBodyBytes: config.eventsWebhook!.maxBodyBytes,
+  });
   await eventsEndpoint.start(config.eventsWebhook!.port);
 
   // Clean up state from previous crash (analytics sources that DB doesn't know about, etc.)

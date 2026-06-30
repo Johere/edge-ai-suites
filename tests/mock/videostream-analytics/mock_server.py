@@ -177,12 +177,11 @@ class Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 def discover_clips(data_dir: Path, monitor_id: str) -> List[Path]:
-    """Return sorted list of original (non-_input) mp4 files for a monitor."""
+    """Return sorted list of original (non-_input) mp4 files under <data_dir>/<monitor_id>/."""
     cam_dir = data_dir / monitor_id
     if not cam_dir.exists():
         return []
-    clips = sorted(f for f in cam_dir.glob("*.mp4") if not f.name.endswith("_input.mp4"))
-    return clips
+    return sorted(f for f in cam_dir.rglob("*.mp4") if not f.name.endswith("_input.mp4"))
 
 
 def find_crop(clip: Path) -> Optional[Path]:
@@ -200,19 +199,36 @@ PREFILTER_CAMERAS = {"cam_child", "cam_elder_bedroom", "cam_elder_bedroom_2"}
 PREFILTER_FAIL_RATE = 0.2  # ~20% of events have prefilter_passed=0
 
 
-def send_webhook(events_url: str, monitor_id: str, clip: Path, index: int, total: int) -> bool:
+def hardlink_into(target_root: Path, monitor_id: str, src: Path) -> Path:
+    """Hardlink src into <target_root>/<monitor_id>/<YYYY-MM-DD>/<filename>; idempotent."""
+    day = datetime.now().strftime("%Y-%m-%d")
+    dst_dir = target_root / monitor_id / day
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / src.name
+    if not dst.exists():
+        os.link(src, dst)
+    return dst
+
+
+def send_webhook(events_url: str, target_root: Path, monitor_id: str, clip: Path, index: int, total: int) -> bool:
     """Send a motion event webhook to MCP server."""
     has_prefilter = monitor_id in PREFILTER_CAMERAS
     prefilter_passed = 1
     if has_prefilter and random.random() < PREFILTER_FAIL_RATE:
         prefilter_passed = 0
 
+    # Hardlink the source clip (and crop, if present) into the SmartBuilding convention
+    # layout so multilevel-video-understanding's bind-mount (host data dir → /data) can
+    # see them after MCP server's path_remap. Hardlinks share the inode — no copy, no
+    # symlink container-boundary issues.
+    linked_clip = hardlink_into(target_root, monitor_id, clip)
     crop = find_crop(clip)
-    summary_clip_input = str(crop) if crop else str(clip)
+    linked_crop = hardlink_into(target_root, monitor_id, crop) if crop else None
+    summary_clip_input = str(linked_crop or linked_clip)
 
     now = datetime.now().isoformat()
     payload: dict = {
-        "event_file_path": str(clip),
+        "event_file_path": str(linked_clip),
         "summary_clip_input": summary_clip_input,
         "start_time": now,
         "end_time": now,
@@ -240,10 +256,11 @@ def send_webhook(events_url: str, monitor_id: str, clip: Path, index: int, total
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             status_icon = "✓" if prefilter_passed else "✗(prefilter)"
-            print(f"  [{monitor_id}] event {index+1}/{total} → {status_icon} {clip.name}")
+            print(f"  [{monitor_id}] event {index+1}/{total} → {status_icon} {clip.name} "
+                  f"(HTTP {resp.status})", flush=True)
             return resp.status == 200
     except Exception as e:
-        print(f"  [{monitor_id}] event {index+1}/{total} → failed: {e}")
+        print(f"  [{monitor_id}] event {index+1}/{total} → failed: {e}", flush=True)
         return False
 
 
@@ -252,10 +269,11 @@ def send_webhook(events_url: str, monitor_id: str, clip: Path, index: int, total
 # ---------------------------------------------------------------------------
 
 class MonitorEventSender(threading.Thread):
-    def __init__(self, monitor_id: str, data_dir: Path, events_url: str, interval: float):
+    def __init__(self, monitor_id: str, data_dir: Path, target_root: Path, events_url: str, interval: float):
         super().__init__(daemon=True)
         self.monitor_id = monitor_id
         self.data_dir = data_dir
+        self.target_root = target_root
         self.events_url = events_url
         self.interval = interval
         self._stop = threading.Event()
@@ -263,16 +281,24 @@ class MonitorEventSender(threading.Thread):
     def run(self):
         clips = discover_clips(self.data_dir, self.monitor_id)
         if not clips:
-            print(f"  [{self.monitor_id}] no clips found under {self.data_dir / self.monitor_id}, skipping")
+            print(f"  [{self.monitor_id}] no clips found under {self.data_dir / self.monitor_id}, skipping", flush=True)
             return
 
         total = len(clips)
-        print(f"  [{self.monitor_id}] {total} clips found, sending every {self.interval}s")
+        print(f"  [{self.monitor_id}] {total} clips found, sending every {self.interval}s", flush=True)
         idx = 0
+        warned_waiting = False
         while not self._stop.is_set():
             if registry.is_running(self.monitor_id):
-                send_webhook(self.events_url, self.monitor_id, clips[idx % total], idx, total)
+                if warned_waiting:
+                    print(f"  [{self.monitor_id}] now registered as running, starting webhook sends", flush=True)
+                    warned_waiting = False
+                send_webhook(self.events_url, self.target_root, self.monitor_id, clips[idx % total], idx, total)
                 idx += 1
+            else:
+                if not warned_waiting:
+                    print(f"  [{self.monitor_id}] waiting for source to be registered (POST /register_source)…", flush=True)
+                    warned_waiting = True
             self._stop.wait(self.interval)
 
     def stop(self):
@@ -287,17 +313,36 @@ def main():
     parser = argparse.ArgumentParser(description="Mock videostream-analytics service")
     parser.add_argument("--port", type=int, default=8999)
     parser.add_argument("--events-url", default="http://localhost:3101/events")
-    parser.add_argument("--data-dir", default="data/motion_events")
+    parser.add_argument(
+        "--data-dir",
+        default=str(Path(__file__).resolve().parents[3] / "data" / "motion_events"),
+        help="Root directory containing per-monitor clip fixtures: looks for "
+             "<data-dir>/<monitor_id>/motion_events/*.mp4, then <data-dir>/<monitor_id>/*.mp4. "
+             "Default: repo's data/motion_events.",
+    )
+    parser.add_argument(
+        "--target-root",
+        default=str(Path.home() / ".mcp-smartbuilding" / "segments" / "mock"),
+        help="Where to hardlink emitted clips. Convention: $SMARTBUILDING_DATA_DIR/segments/mock. "
+             "Per-event layout is <target-root>/<monitor_id>/<YYYY-MM-DD>/<clip>.mp4.",
+    )
     parser.add_argument("--interval", type=float, default=60.0,
                         help="Seconds between webhook events per camera (default: 60)")
     parser.add_argument("--monitor", nargs="*", dest="monitors",
                         help="Camera IDs to simulate (default: all found under data-dir)")
+    parser.add_argument("--auto-register", action="store_true", default=True,
+                        help="Auto-register listed monitors as running on startup (so standalone runs send "
+                             "webhooks without waiting for MCP server's POST /register_source). Default: on.")
+    parser.add_argument("--no-auto-register", action="store_false", dest="auto_register",
+                        help="Disable auto-register; only send when MCP server registers the source first.")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
     if not data_dir.exists():
         print(f"ERROR: data-dir {data_dir} does not exist", file=sys.stderr)
         sys.exit(1)
+    target_root = Path(args.target_root)
+    target_root.mkdir(parents=True, exist_ok=True)
 
     # Discover monitors
     if args.monitors:
@@ -308,17 +353,25 @@ def main():
     print("╔════════════════════════════════════════════╗")
     print("║  Mock videostream-analytics                ║")
     print("╚════════════════════════════════════════════╝")
-    print(f"  API port:   {args.port}")
-    print(f"  Events URL: {args.events_url}")
-    print(f"  Data dir:   {data_dir}")
-    print(f"  Interval:   {args.interval}s")
-    print(f"  Monitors:   {', '.join(monitors)}")
+    print(f"  API port:    {args.port}")
+    print(f"  Events URL:  {args.events_url}")
+    print(f"  Data dir:    {data_dir}")
+    print(f"  Target root: {target_root}  (hardlinks)")
+    print(f"  Interval:    {args.interval}s")
+    print(f"  Monitors:    {', '.join(monitors)}")
     print()
+
+    # Auto-register so standalone runs (no MCP server in the loop) don't sit idle waiting
+    # for POST /register_source. Disable with --no-auto-register to exercise the real flow.
+    if args.auto_register:
+        for monitor_id in monitors:
+            registry.register(monitor_id, {"auto_registered": True})
+        print(f"  Auto-registered as running: {', '.join(monitors)}")
 
     # Start per-monitor event senders
     senders = []
     for monitor_id in monitors:
-        sender = MonitorEventSender(monitor_id, data_dir, args.events_url, args.interval)
+        sender = MonitorEventSender(monitor_id, data_dir, target_root, args.events_url, args.interval)
         sender.start()
         senders.append(sender)
 

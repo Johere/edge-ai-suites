@@ -62,15 +62,23 @@ export class TaskPoller {
     if (tasks.length === 0) return;
 
     const task = tasks[0];
+    const monitor = this.db.getMonitor(monitorId);
+    const useCase = monitor?.useCase ?? "";
+    const summaryTaskName = monitor?.videoSummaryTask ?? "";
 
     try {
       await this.yieldManager.acquire();
       this.db.updateTaskStatus(task.id, "processing");
 
       const videoPath = task.summaryClipInput ?? "";
-      const result = await this.videoSummaryClient.summarize({ videoUrl: videoPath, taskId: String(task.id) });
+      const t0 = Date.now();
+      const result = await this.videoSummaryClient.summarize({
+        video: videoPath,
+        task: summaryTaskName,
+      });
+      const latencySeconds = (Date.now() - t0) / 1000;
 
-      // Schema-aware parse of VLM output: only fields declared in
+      // Schema-aware parse of multilevel-video-understanding output: only fields declared in
       // config.schema.video_summary_tasks.extensions are extracted.
       const extensions = this.config.schema?.video_summary_tasks?.extensions ?? [];
       const parsed = parseSummaryFields(result.summary ?? "", extensions);
@@ -78,13 +86,16 @@ export class TaskPoller {
         logger.warn(`[task-poller] task ${task.id} (${monitorId}) missing required schema fields: ${parsed.missingRequired.join(", ")}`);
       }
 
-      // Persist summary text + parsed extension fields in one UPDATE
-      this.db.updateTaskStatus(task.id, "completed", result.summary, undefined, parsed.fields);
+      // Persist summary text + extension fields + service usage in one UPDATE.
+      this.db.updateTaskStatus(task.id, "completed", result.summary ?? "", {
+        latencySeconds,
+        promptTokens: result.usage?.prompt_tokens,
+        imageTokens: result.usage?.image_tokens,
+        completionTokens: result.usage?.completion_tokens,
+      }, parsed.fields);
 
       // Evaluate rules via rule engine. Override path (Python script) is derived
       // from config.useCaseDict[monitor.useCase].evaluate_rules_path; absent → defaultRuleEvaluator.
-      const monitor = this.db.getMonitor(monitorId);
-      const useCase = monitor?.useCase ?? "";
       const overridePath = this.config.useCaseDict[useCase]?.evaluate_rules_path ?? null;
       const ruleCtx = {
         monitorId,
@@ -100,7 +111,7 @@ export class TaskPoller {
           monitorId,
           taskId: task.id,
           eventId: task.eventId,
-          useCase: monitor?.useCase ?? "",
+          useCase,
           description: ruleResult.alertMessage,
         });
         if (this.onAlert) {
@@ -108,7 +119,8 @@ export class TaskPoller {
         }
       }
     } catch (err: any) {
-      this.db.updateTaskStatus(task.id, "failed", err.message);
+      logger.error(`[task-poller] task ${task.id} (${monitorId}) failed: ${err.message}`);
+      this.db.updateTaskStatus(task.id, "failed", undefined, { errorMessage: err.message });
     } finally {
       this.yieldManager.release();
     }
