@@ -7,23 +7,38 @@ from birds, kites, leaves, or other natural phenomena.
 
 ## LOCAL_PROMPT
 
-请分析视频中是否出现"高空抛物"事件。判断标准:
+分析视频, 判断是否为"高空抛物"事件, 按下列格式返回 4 个字段, 每字段一行, 使用半角冒号。**不要**把示例照抄, 必须根据视频内容选择一个值。
 
-1. 是否有明显的物体从画面上方向下方运动 (motion direction = downward)。
-2. 该物体是否为人为投掷的疑似垃圾/物品 (排除鸟类、树叶、气球等自然物)。
-3. 落物速度是否呈现自由落体或抛物线特征。
+输出示例 1 (观测到明确高空抛物):
+    SEVERITY: critical
+    EVENT: high_altitude_throw
+    DESC: 一名黑色物体自建筑上方向下坠落
+    MOTION_DIRECTION: downward
 
-按以下格式输出 (每行一个字段, 缺失项写 unknown):
+输出示例 2 (自然坠物或无事件):
+    SEVERITY: info
+    EVENT: no_incident
+    DESC: 视频中未观测到抛物, 仅有树叶随风飘落
+    MOTION_DIRECTION: none
 
-SEVERITY: critical | warn | info
-EVENT: high_altitude_throw | no_incident | uncertain
-DESC: 一句话描述观察到的现象
-MOTION_DIRECTION: downward | upward | horizontal | none
+输出示例 3 (无法判断):
+    SEVERITY: info
+    EVENT: uncertain
+    DESC: 画面模糊无法确认坠物性质
+    MOTION_DIRECTION: none
 
-判定规则:
-- 观测到明确的物体自上而下坠落且非自然物 → SEVERITY: critical, EVENT: high_altitude_throw, MOTION_DIRECTION: downward
-- 观测到自然坠物 (树叶、鸟粪) → SEVERITY: info, EVENT: no_incident
-- 无法判断 → SEVERITY: info, EVENT: uncertain
+字段取值范围:
+- SEVERITY 只能是: critical, warn, info (三选一)
+- EVENT 只能是: high_altitude_throw, no_incident, uncertain (三选一)
+- MOTION_DIRECTION 只能是: downward, upward, horizontal, none (四选一)
+- DESC 是一句自由描述, 15-30 字
+
+判定规则 (**重要**):
+1. **人造物品** (塑料袋、瓶子、纸盒、烟头、饮料罐、衣物、玩具、生活垃圾、书本、烟花爆竹等) 从楼上/建筑物上方向下坠落 → **一律判 SEVERITY=critical, EVENT=high_altitude_throw, MOTION_DIRECTION=downward**, 即使物体"飘"或速度慢也算 (塑料袋在气流中飘落也视为高空抛物)。
+2. **自然物** (仅限: 树叶、鸟粪、水滴、雪花) 缓慢飘落 → SEVERITY=info, EVENT=no_incident
+3. 完全无法判断物体性质或方向 → SEVERITY=info, EVENT=uncertain, MOTION_DIRECTION=none
+
+判定原则: **只要建筑物上方出现向下运动的人造物, 就是高空抛物** (无论速度和轨迹)。塑料袋、纸屑等轻质垃圾也算 (居民从窗户丢弃垃圾是典型场景)。
 
 ## GLOBAL_PROMPT
 
