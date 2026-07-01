@@ -37,10 +37,10 @@ npm run build --workspace=packages/mcp-server
 npm run dev
 
 # 或带配置文件
-npx tsx packages/mcp-server/src/index.ts --config config.yaml.example
+npx tsx packages/mcp-server/src/index.ts --config config.yaml.example --monitors monitor_cam_child.yaml
 
 # 编译后运行
-node packages/mcp-server/dist/index.js --config config.yaml.example
+node packages/mcp-server/dist/index.js --config config.yaml.example --monitors monitor_cam_child.yaml
 ```
 
 stdio 模式下，Server 通过 stdin/stdout 与 MCP Client 通信。通常由 Client 自动 spawn，不需要手动启动。
@@ -49,13 +49,13 @@ stdio 模式下，Server 通过 stdin/stdout 与 MCP Client 通信。通常由 C
 
 ```bash
 # 开发时
-npm run dev:http --workspace=packages/mcp-server
+# npm run dev:http --workspace=packages/mcp-server
 
-# 或带配置文件
-npx tsx packages/mcp-server/src/index.ts --http --config config.yaml.example
+# 带配置文件
+npx tsx packages/mcp-server/src/index.ts --http --config config.yaml.example --monitors monitor_cam_child.yaml
 
 # 编译后运行
-node packages/mcp-server/dist/index.js --http --config config.yaml.example
+node packages/mcp-server/dist/index.js --http --config config.yaml.example --monitors monitor_cam_child.yaml
 ```
 
 HTTP 模式启动后输出：
@@ -76,7 +76,7 @@ mcp:
 ### 验证 stdio 模式（MCP Inspector）
 
 ```bash
-npx @modelcontextprotocol/inspector npx tsx packages/mcp-server/src/index.ts --config config.yaml.example
+npx @modelcontextprotocol/inspector npx tsx packages/mcp-server/src/index.ts --config config.yaml.example --monitors monitor_cam_child.yaml
 ```
 
 浏览器打开 Inspector UI → 可看到 8 个 tools + 4 个 resources → 点击调用测试。
@@ -94,7 +94,7 @@ curl -X POST http://localhost:3100/mcp \
 
 ```
 event: message
-data: {"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{"listChanged":true},"resources":{"listChanged":true}},"serverInfo":{"name":"smartbuilding-video","version":"0.1.0"}},"jsonrpc":"2.0","id":1}
+data: {"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{"listChanged":true},"resources":{"listChanged":true}},"serverInfo":{"name":"smart-community","version":"0.1.0"}},"jsonrpc":"2.0","id":1}
 ```
 
 ## 5. 接入 Agent 客户端
@@ -106,7 +106,7 @@ data: {"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{"listCh
 ```json
 {
   "mcpServers": {
-    "smartbuilding-video": {
+    "smart-community": {
       "command": "npx",
       "args": ["tsx", "packages/mcp-server/src/index.ts", "--config", "config.yaml.example"]
     }
@@ -121,7 +121,7 @@ data: {"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{"listCh
 ```json
 {
   "mcpServers": {
-    "smartbuilding-video": {
+    "smart-community": {
       "command": "npx",
       "args": ["tsx", "/absolute/path/to/packages/mcp-server/src/index.ts", "--config", "/absolute/path/to/config.yaml"]
     }
@@ -134,7 +134,7 @@ data: {"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{"listCh
 先手动启动 HTTP 模式：
 
 ```bash
-npx tsx packages/mcp-server/src/index.ts --http --config config.yaml.example
+npx tsx packages/mcp-server/src/index.ts --http --config config.yaml.example --monitors monitor_cam_child.yaml
 ```
 
 然后在 OpenClaw 配置中添加：
@@ -143,8 +143,8 @@ npx tsx packages/mcp-server/src/index.ts --http --config config.yaml.example
 {
   "mcp": {
     "servers": {
-      "smartbuilding-video": {
-        "transport": "sse",
+      "smart-community": {
+        "transport": "streamable-http",
         "url": "http://localhost:3100/mcp"
       }
     }
@@ -159,7 +159,7 @@ npx tsx packages/mcp-server/src/index.ts --http --config config.yaml.example
 ```json
 {
   "mcpServers": {
-    "smartbuilding-video": {
+    "smart-community": {
       "command": "npx",
       "args": ["tsx", "packages/mcp-server/src/index.ts", "--config", "config.yaml.example"]
     }
@@ -232,5 +232,5 @@ schema:
 | 参数 | （默认） | `--http` |
 | 端口 | 无 | 3100（可配） |
 | 多 Client 连接 | 不行（1对1） | 可以（1对多） |
-| 实时推送 | 支持 | 支持（GET /mcp SSE 流） |
+| 实时推送 | 支持 | 支持（GET /mcp streamable-http 流） |
 | 适用 Client | Claude Desktop、VS Code、Cursor | OpenClaw、远程部署 |
