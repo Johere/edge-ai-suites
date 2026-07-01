@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ServerConfig } from "./config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
+import type { VideoSummaryClient } from "@smartbuilding-video/tools";
 import type { WorkerService } from "./video-worker/index.js";
 
 export function registerTools(
@@ -9,6 +10,7 @@ export function registerTools(
   config: ServerConfig,
   db: SmartBuildingDB,
   workerService: WorkerService,
+  summaryClient: VideoSummaryClient,
 ): void {
   // --- smartbuilding_alert_query ---
   server.registerTool("smartbuilding_alert_query", {
@@ -104,7 +106,7 @@ export function registerTools(
       const reportConfig = {
         dataSource: (params.data_source ?? ucReports?.data_source ?? "alerts") as "events" | "alerts" | "video_summary_tasks",
         defaultType: (ucReports?.default_type ?? "daily") as "daily" | "weekly" | "monthly",
-        summaryServiceUrl: config.summaryService.url,
+        summaryClient,
         filter: (params.filter ?? ucReports?.filter) as Record<string, any> | undefined,
         debugDir: config.reportsLogsDir,
       };

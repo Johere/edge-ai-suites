@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS monitors (
   status TEXT NOT NULL DEFAULT 'offline',
   use_case TEXT NOT NULL,
   video_summary_task TEXT NOT NULL,
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -387,7 +387,7 @@ export class SmartBuildingDB {
 
   ackAlertWithUser(alertId: number, ackBy: string): void {
     this.db.prepare(
-      "UPDATE alerts SET ack_at = datetime('now'), ack_by = ? WHERE id = ?"
+      "UPDATE alerts SET ack_at = datetime('now', 'localtime'), ack_by = ? WHERE id = ?"
     ).run(ackBy, alertId);
   }
 
@@ -539,7 +539,7 @@ export class SmartBuildingDB {
     const sets: string[] = [
       "status = ?",
       "summary_text = ?",
-      "completed_at = datetime('now')",
+      "completed_at = datetime('now', 'localtime')",
       "latency_seconds = ?",
       "prompt_tokens = ?",
       "image_tokens = ?",

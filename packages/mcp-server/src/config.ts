@@ -13,6 +13,22 @@ export interface MonitorConfig {
 }
 
 /**
+ * Per-clip summarization tuning consumed by video-worker task-poller.
+ * All fields optional — defaults applied in task-poller match the legacy
+ * stream_monitor config (single-level LOCAL_PROMPT only, no MACRO/GLOBAL
+ * roll-up). Override per use_case when a different temporal strategy fits.
+ */
+export interface SummarizeConfig {
+  method?: "SIMPLE" | "USE_VLM_T-1" | "USE_LLM_T-1" | "USE_ALL_T-1";
+  processor_kwargs?: {
+    levels?: number;
+    level_sizes?: number[];
+    process_fps?: number;
+    chunking_method?: "pelt" | "uniform";
+  };
+}
+
+/**
  * Use case definition. Lives in config.yaml under `use_case_dict.<key>` —
  * one entry per use case, referenced by monitors via `use_case` field.
  */
@@ -22,6 +38,8 @@ export interface UseCaseConfig {
   video_summary_task: string;
   /** Optional path to Python override script for rule evaluation. */
   evaluate_rules_path?: string;
+  /** Optional per-clip summarization tuning (see SummarizeConfig). */
+  summarize?: SummarizeConfig;
   /** Optional default report configuration consumed by smartbuilding_generate_report. */
   reports?: {
     data_source: "events" | "alerts" | "video_summary_tasks";
@@ -41,6 +59,13 @@ export interface ServerConfig {
 
   summaryService: {
     url: string;
+    /**
+     * Optional host↔container path remap. multilevel-video-understanding typically runs
+     * in a container that mounts the host's data dir at a different path. If set, the
+     * client rewrites `video` paths starting with `hostPrefix` to `containerPrefix`
+     * before POSTing. Leave undefined when both sides see the same paths.
+     */
+    pathRemap?: { hostPrefix: string; containerPrefix: string };
   };
   vlmService: {
     url: string;
@@ -58,6 +83,7 @@ export interface ServerConfig {
   };
   eventsWebhook?: {
     port?: number;
+    maxBodyBytes?: number;
   };
   /** Use case library — loaded from config.yaml top-level `use_case_dict` block. */
   useCaseDict: Record<string, UseCaseConfig>;
@@ -100,7 +126,15 @@ export function loadConfig(configPath?: string): ServerConfig {
     reportsLogsDir: join(dataDir, "logs", "reports"),
     monitorsLogsDir: join(dataDir, "logs", "monitors"),
 
-    summaryService: { url: parsed?.summary_service?.url ?? "http://localhost:8192" },
+    summaryService: {
+      url: parsed?.summary_service?.url ?? "http://localhost:8192",
+      pathRemap: parsed?.summary_service?.path_remap?.host_prefix && parsed?.summary_service?.path_remap?.container_prefix
+        ? {
+            hostPrefix: resolve(parsed.summary_service.path_remap.host_prefix.replace(/\$\{HOME\}/g, homedir())),
+            containerPrefix: parsed.summary_service.path_remap.container_prefix,
+          }
+        : undefined,
+    },
     vlmService: {
       url: parsed?.vlm_service?.url ?? "http://localhost:41091/v1",
       model: parsed?.vlm_service?.model ?? "default",
@@ -111,7 +145,10 @@ export function loadConfig(configPath?: string): ServerConfig {
     videoSummaryMaxConcurrent: parsed?.video_summary_max_concurrent ?? 2,
     schema: parsed?.schema,
     mcp: { port: parsed?.mcp?.port ?? 3100 },
-    eventsWebhook: { port: parsed?.events_webhook?.port ?? 3101 },
+    eventsWebhook: {
+      port: parsed?.events_webhook?.port ?? 3101,
+      maxBodyBytes: parsed?.events_webhook?.max_body_bytes ?? 1024 * 1024,
+    },
     logging: {
       retentionDays: parsed?.logging?.retention_days ?? 14,
       maxFileMb: parsed?.logging?.max_file_mb ?? 50,
