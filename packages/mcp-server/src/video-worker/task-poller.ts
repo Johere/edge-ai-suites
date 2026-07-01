@@ -1,10 +1,16 @@
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { promisify } from "node:util";
 import type { ServerConfig } from "../config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
 import type { VideoSummaryClient } from "@smartbuilding-video/tools";
 import type { VideoSummaryYield } from "./video-summary-yield.js";
 import type { AlertCallback } from "./index.js";
-import { evaluateWithOverride, parseSummaryFields } from "@smartbuilding-video/tools";
+import type { RuleContext, RuleResult } from "@smartbuilding-video/rule-engine";
+import { evaluateWithOverride, parseSummaryFields } from "@smartbuilding-video/rule-engine";
 import { logger } from "../logger.js";
+
+const execFileAsync = promisify(execFile);
 
 export class TaskPoller {
   private intervals: Map<string, ReturnType<typeof setInterval>> = new Map();
@@ -64,6 +70,7 @@ export class TaskPoller {
     const task = tasks[0];
     const monitor = this.db.getMonitor(monitorId);
     const useCase = monitor?.useCase ?? "";
+    const useCaseCfg = this.config.useCaseDict[useCase];
     const summaryTaskName = monitor?.videoSummaryTask ?? "";
 
     try {
@@ -75,7 +82,7 @@ export class TaskPoller {
       // Per-clip summarize tuning is configurable via use_case_dict.<useCase>.summarize.
       // Defaults below match the legacy smarthome stream_monitor config: LOCAL_PROMPT
       // only (levels=1), no T-1 dependency (method=SIMPLE), 2 fps sampling.
-      const summarizeCfg = this.config.useCaseDict[useCase]?.summarize ?? {};
+      const summarizeCfg = useCaseCfg?.summarize ?? {};
       const result = await this.videoSummaryClient.summarize({
         video: videoPath,
         task: summaryTaskName,
@@ -91,10 +98,14 @@ export class TaskPoller {
       });
       const latencySeconds = (Date.now() - t0) / 1000;
 
-      // Schema-aware parse of multilevel-video-understanding output: only fields declared in
-      // config.schema.video_summary_tasks.extensions are extracted.
+      // VLM output parser. When `parse_summary_path` is set, run the Python
+      // override; otherwise fall back to the schema-aware built-in parser.
       const extensions = this.config.schema?.video_summary_tasks?.extensions ?? [];
-      const parsed = parseSummaryFields(result.summary ?? "", extensions);
+      const parsed = await this.parseSummary(
+        result.summary ?? "",
+        extensions,
+        useCaseCfg?.parse_summary_path,
+      );
       if (parsed.missingRequired.length > 0) {
         logger.warn(`[task-poller] task ${task.id} (${monitorId}) missing required schema fields: ${parsed.missingRequired.join(", ")}`);
       }
@@ -109,26 +120,54 @@ export class TaskPoller {
 
       // Evaluate rules via rule engine. Override path (Python script) is derived
       // from config.useCaseDict[monitor.useCase].evaluate_rules_path; absent → defaultRuleEvaluator.
-      const overridePath = this.config.useCaseDict[useCase]?.evaluate_rules_path ?? null;
+      const overridePath = useCaseCfg?.evaluate_rules_path ?? null;
       const ruleCtx = {
         monitorId,
         useCase,
         taskId: task.id,
         summaryText: result.summary ?? "",
-        payload: { fields: parsed.fields },
+        payload: {
+          fields: parsed.fields,
+          rules: useCaseCfg?.rules ?? {},
+        },
       };
       const ruleResult = await evaluateWithOverride(ruleCtx, overridePath);
 
       if (ruleResult.shouldAlert) {
-        this.db.createAlert({
-          monitorId,
-          taskId: task.id,
-          eventId: task.eventId,
-          useCase,
-          description: ruleResult.alertMessage,
-        });
-        if (this.onAlert) {
-          this.onAlert(monitorId);
+        // Cooldown check: suppress if another alert for the same monitor +
+        // use case is still within the configured window. `rules.cooldownSeconds`
+        // is honoured for the built-in evaluator and — by convention — read by
+        // Python overrides that want the same behaviour. A missing / zero /
+        // negative value disables cooldown.
+        const cooldownSec = Number((useCaseCfg?.rules as any)?.cooldownSeconds ?? 0);
+        let suppressed = false;
+        if (cooldownSec > 0) {
+          const recent = this.db.latestAlertWithin(monitorId, useCase, cooldownSec);
+          if (recent) {
+            suppressed = true;
+            logger.debug(
+              `[task-poller] cooldown suppressed alert for ${monitorId}/${useCase} ` +
+              `(previous alert id=${recent.id} at ${recent.createdAt}, cooldown=${cooldownSec}s)`,
+            );
+          }
+        }
+
+        if (!suppressed) {
+          const alert = this.db.createAlert({
+            monitorId,
+            taskId: task.id,
+            eventId: task.eventId,
+            useCase,
+            description: ruleResult.alertMessage,
+          });
+          if (this.onAlert) {
+            this.onAlert(monitorId);
+          }
+          // Optional post-processing callback (see design §5.3).
+          const onTaskPath = useCaseCfg?.on_task_completed_path;
+          if (onTaskPath) {
+            void this.runOnTaskCompleted(onTaskPath, ruleCtx, ruleResult, alert.id);
+          }
         }
       }
     } catch (err: any) {
@@ -136,6 +175,75 @@ export class TaskPoller {
       this.db.updateTaskStatus(task.id, "failed", undefined, { errorMessage: err.message });
     } finally {
       this.yieldManager.release();
+    }
+  }
+
+  /**
+   * Parse VLM `summary_text` into schema fields. When `overridePath` is
+   * supplied and exists, invoke the Python override:
+   *
+   *   argv[1] = {"summary": <text>, "extensions": [<SchemaExtension>...]}
+   *   stdout  = {"fields": {<name>: <value>}, "missingRequired": [<name>]}
+   *
+   * Any failure (missing script, non-zero exit, bad JSON) falls back to the
+   * schema-aware built-in parser so a broken override cannot stall the poller.
+   */
+  private async parseSummary(
+    summary: string,
+    extensions: any[],
+    overridePath?: string,
+  ): Promise<{ fields: Record<string, string>; missingRequired: string[] }> {
+    if (overridePath && existsSync(overridePath)) {
+      try {
+        const { stdout } = await execFileAsync("python3", [
+          overridePath,
+          JSON.stringify({ summary, extensions }),
+        ], { timeout: 10_000 });
+        const parsed = JSON.parse(stdout.trim());
+        return {
+          fields: (parsed.fields ?? {}) as Record<string, string>,
+          missingRequired: Array.isArray(parsed.missingRequired) ? parsed.missingRequired : [],
+        };
+      } catch (err: any) {
+        logger.warn(
+          `[task-poller] parse_summary override failed (${overridePath}), ` +
+            `falling back to built-in parser: ${err.message}`,
+        );
+      }
+    }
+    return parseSummaryFields(summary, extensions);
+  }
+
+  /**
+   * Fire-and-forget post-alert callback (design §5.3 on_task_completed).
+   * Receives JSON on argv[1] with the same shape as the rule-engine context
+   * plus the newly-created `alertId`. Never rejects — failures log a warning
+   * and are otherwise dropped so a broken callback cannot stall the poller.
+   */
+  private async runOnTaskCompleted(
+    scriptPath: string,
+    ruleCtx: RuleContext,
+    ruleResult: RuleResult,
+    alertId: number,
+  ): Promise<void> {
+    if (!existsSync(scriptPath)) {
+      logger.warn(`[task-poller] on_task_completed script missing: ${scriptPath}`);
+      return;
+    }
+    const payload = {
+      ...ruleCtx,
+      alertId,
+      alertMessage: ruleResult.alertMessage ?? "",
+    };
+    try {
+      await execFileAsync("python3", [scriptPath, JSON.stringify(payload)], {
+        timeout: 10_000,
+      });
+    } catch (err: any) {
+      logger.warn(
+        `[task-poller] on_task_completed failed for ${ruleCtx.useCase} ` +
+          `(task=${ruleCtx.taskId}): ${err.message}`,
+      );
     }
   }
 }

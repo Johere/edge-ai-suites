@@ -79,6 +79,10 @@ schema:
 
 # Use case library. Each entry is referenced by monitors via `use_case`.
 # A single use case may be referenced by multiple monitors.
+#
+# `rules` (optional) is a free-form dict passed verbatim to the Python override
+# at RuleContext.payload.rules. Keys are use-case specific — see each entry's
+# adapter under `use-cases/<name>/evaluate_rules.py`.
 use_case_dict:
   fridge:
     description: "Fridge content tracking"
@@ -98,7 +102,9 @@ use_case_dict:
   child_safety:
     description: "Child safety monitoring"
     video_summary_task: child_safety_monitor
-    evaluate_rules_path: ${HOME}/use-cases/child_safety/evaluate_rules.py  # optional Python override
+    evaluate_rules_path: ./use-cases/child_safety/evaluate_rules.py
+    rules:
+      severityThreshold: warn        # "info" | "warn" | "critical" — override script fires at or above this
     # Per-clip summarize tuning. Defaults (single LOCAL_PROMPT pass) suit most use cases;
     # override only when you need multi-level roll-up or T-1 temporal context.
     summarize:
@@ -115,7 +121,10 @@ use_case_dict:
   elder_wakeup:
     description: "Elder wakeup monitoring"
     video_summary_task: elder_wakeup_monitor
-    evaluate_rules_path: ${HOME}/use-cases/elder_wakeup/evaluate_rules.py
+    evaluate_rules_path: ./use-cases/elder_wakeup/evaluate_rules.py
+    rules:
+      expectedWakeupLocal: "07:00"   # HH:MM local time
+      graceMinutes: 30               # tolerated delay before late_wakeup fires
     summarize:
       method: SIMPLE
       processor_kwargs:
