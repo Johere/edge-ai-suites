@@ -5,7 +5,7 @@
 **列说明**：
 - **ID**：全局唯一，前缀标场景族（CS/EW/BB/PT/GN/FS/AC/HA/EL/PK/CN/PP/RT/OD/ST/NG）
 - **Severity**：默认输出严重级；`—` 表示只出信息类日报
-- **难度**：极梦 AI 生成视频的复杂度 ★ / ★★ / ★★★
+- **难度**：即梦 AI 生成视频的复杂度 ★ / ★★ / ★★★
 - **状态**：✅ 已实现 adapter / 🟡 有 prompt 无 rules / 🔴 未开发
 - **技术依赖**：VLM 描述 / YOLO 类别 / ROI / 时间窗 / monitor_state
 
@@ -230,11 +230,11 @@
 
 ## 附录 A：第 1 批 10 个 case 完整落地方案
 
-覆盖 3 大部署场景、跨 rules 层的核心表达力（严重级/时间窗/ROI/运动方向/YOLO 目标类）。每个 case 给：极梦 prompt / VLM 期望输出 / rules 配置 / 期望 alert。
+覆盖 3 大部署场景、跨 rules 层的核心表达力（严重级/时间窗/ROI/运动方向/YOLO 目标类）。每个 case 给：即梦 prompt / VLM 期望输出 / rules 配置 / 期望 alert。
 
 ### A.1 CS-1 儿童攀爬窗台
 
-**极梦 prompt**：
+**即梦 prompt**：
 
 ```
 [fixed camera view, 1280×720, 10 seconds, 15 fps, indoor natural lighting]
@@ -279,7 +279,7 @@ use_case_dict:
 
 ### A.2 CS-3 儿童安静玩耍（反例）
 
-**极梦 prompt**：
+**即梦 prompt**：
 
 ```
 [fixed camera, 1280×720, 10 seconds, 15 fps, indoor natural lighting]
@@ -306,7 +306,7 @@ DESC: 儿童安静玩耍
 
 ### A.3 CS-5 儿童玩火（打火机）
 
-**极梦 prompt**：
+**即梦 prompt**：
 
 ```
 [fixed camera, 1280×720, 10 seconds, 15 fps, indoor kitchen lighting]
@@ -340,7 +340,7 @@ DESC: 儿童正在玩打火机,存在火灾风险
 
 ### A.4 EW-1 老人晚起
 
-**极梦 prompt**：
+**即梦 prompt**：
 
 ```
 [fixed camera, 1280×720, 10 seconds, 15 fps, morning bedroom natural lighting]
@@ -386,7 +386,7 @@ use_case_dict:
 
 ### A.5 EW-3 老人躺床（反例）
 
-**极梦 prompt**：
+**即梦 prompt**：
 
 ```
 [fixed camera, 1280×720, 10 seconds, 15 fps, morning bedroom lighting]
@@ -413,7 +413,7 @@ DESC: 老人仍在床上休息
 
 ### A.6 FS-1 电动车停在楼道
 
-**极梦 prompt**：
+**即梦 prompt**：
 
 ```
 [fixed camera, 1280×720, 10 seconds, 15 fps, corridor fluorescent lighting]
@@ -461,7 +461,7 @@ use_case_dict:
 
 ### A.7 FS-6 楼道明火
 
-**极梦 prompt**：
+**即梦 prompt**：
 
 ```
 [fixed camera, 1280×720, 10 seconds, 15 fps, dim corridor lighting]
@@ -493,30 +493,38 @@ DESC: 楼道内出现明火,建筑消防隐患
 
 ### A.8 HA-1 高空抛物 ⭐（重点验证）
 
-**极梦 prompt**：
+**即梦 prompt**（强化 10s 时长要求 + 缓慢下落）：
 
 ```
-[fixed camera, 1280×720, 10 seconds, 15 fps, outdoor daylight]
+[fixed camera view, 1280×720, MINIMUM 10 seconds duration, 15 fps or higher,
+ outdoor daylight]
 
-Scene: exterior of a residential apartment building, ground-level view
-looking up at the balconies of a 10-story building. Sky background, building
-facade takes up left 2/3 of frame.
-Subject: an object (小型塑料袋 / 小瓶 / 苹果 / plastic bag) falling from
-the 6th-floor balcony.
-Action: object appears at top of frame at second 3, falls straight down
-through the frame reaching ground level by second 5. Object is clearly
-visible against sky/building background, motion path is unambiguously
-downward and vertical.
-Camera: fixed low-angle tripod shot, wide angle covering the building
-facade and sky.
-Style: realistic surveillance footage, high contrast for object visibility.
+Scene: exterior of a mid-rise residential apartment building, ground-level
+camera looking upward at balconies from below. Building facade fills the
+left 2/3 of the frame; open sky fills the top and right.
+Subject: a single dark-colored plastic bag or small object.
+Action timeline (MUST last 10 seconds total):
+  - 0–2s: static scene, empty sky, building facade visible.
+  - 2–4s: object appears at the very top of the frame from behind a balcony.
+  - 4–8s: object falls SLOWLY straight downward at natural falling speed
+          (about half the frame per 2 seconds), fully visible against the
+          building/sky background the whole time.
+  - 8–10s: object reaches the lower part of the frame or ground level.
+Camera: fixed low-angle tripod shot, absolutely no movement, no zoom, no pan.
+Style: realistic surveillance camera footage, high contrast for visibility,
+       daytime, consistent lighting throughout.
+Constraint: the total video must be at least 10 seconds long. Do NOT compress
+the action into a shorter clip.
 ```
 
-**难度提示**：极梦对"物体下落"运动方向的把控较难，可能需要 3-5 次生成挑选。**关键要素**：
-- 物体**从画面顶部出现，向下运动到底部**（motion direction = downward）
-- 物体在画面中**至少可见 1-2 秒**（不能一闪而过）
+**难度提示**：即梦经常把动作压到 4-6 秒完成，导致视频太短。**关键要素**：
+- 生成时在 prompt 里明确 `MINIMUM 10 seconds duration` 与"缓慢下落"
+- 若得到的视频短于 10s（例如 `building-throwing.mp4` 实测 4s），两种补救：
+  1. **用 `ffmpeg -stream_loop -1` 循环推流**（RTSP 端不断重复，VSA 端看到的是 10s+ 的连续流；这是最简单的方法，直接用短视频跑测试）
+  2. **用 ffmpeg 慢放 + 拼接**：`ffmpeg -i short.mp4 -filter:v "setpts=2.5*PTS" -an long.mp4` 把 4s 慢放到 10s
+- 物体在画面中**连续可见 2-4 秒**（不能一闪而过；VLM 采样帧全错过就判不出）
 - 背景与物体有**颜色对比**（天空浅 + 物体深，或反之）
-- 摄像机位置**不动**，物体在画面里的运动全靠下落
+- 摄像机位置**不动**，物体在画面里的运动完全靠下落
 
 **期望 VLM 输出**：
 
@@ -566,7 +574,7 @@ use_case_dict:
 
 ### A.9 PK-1 消防通道停车
 
-**极梦 prompt**：
+**即梦 prompt**：
 
 ```
 [fixed camera, 1280×720, 10 seconds, 15 fps, outdoor parking lot lighting]
@@ -602,7 +610,7 @@ DESC: 车辆停放在消防通道内
 
 ### A.10 PP-1 未戴安全帽
 
-**极梦 prompt**：
+**即梦 prompt**：
 
 ```
 [fixed camera, 1280×720, 10 seconds, 15 fps, construction site daylight]
@@ -636,7 +644,7 @@ DESC: 工地内 1 名工人未佩戴安全帽
 
 ### A.11 HA-1 高空抛物完整验证脚本 ⭐
 
-本节假定你**已用极梦生成好 `ha01_falling_object.mp4`**，按顺序执行即可端到端跑通。
+本节假定你**已用即梦生成好 `ha01_falling_object.mp4`**，按顺序执行即可端到端跑通。
 
 #### 步骤 0：准备目录 + 新建 use case adapter
 
@@ -892,7 +900,7 @@ curl -s -X POST http://localhost:3100/mcp \
 - 需目标物（打火机 / 电动车 / 车辆）的场景：目标清晰可见 ≥ 5 秒
 - 高空抛物 / 运动方向类场景：主体运动方向必须**单向、无遮挡**
 
-**极梦 AI 通用 prompt 骨架**（放在每个具体 prompt 前面）：
+**即梦 AI 通用 prompt 骨架**（放在每个具体 prompt 前面）：
 
 ```
 [fixed camera view, 1280×720, 10 seconds, 15 fps, <环境光描述>]
