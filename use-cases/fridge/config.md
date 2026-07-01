@@ -14,9 +14,9 @@ strong "fridge never alerts" invariant even if a summary happens to contain
 
 ## Prompts
 
-- `prompt.py` — Chinese-language task registration content (`LOCAL_PROMPT` /
-  `GLOBAL_PROMPT`).
-- `prompt_en.py` — English-language variant, selectable by the operator at
+- `prompt.md` — Chinese-language task registration content (`LOCAL_PROMPT` /
+  `GLOBAL_PROMPT` sections).
+- `prompt_en.md` — English-language variant, selectable by the operator at
   task registration time.
 
 Both variants target the same VLM task name (`fridge_monitor`); only one

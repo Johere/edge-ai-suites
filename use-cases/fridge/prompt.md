@@ -1,4 +1,4 @@
-"""Dynamic task registration content for fridge_monitor (Chinese).
+Dynamic task registration content for fridge_monitor (Chinese).
 
 Pre-staged for future use; not yet on the registration path. When the
 multilevel-video-understanding service drops its built-in
@@ -30,9 +30,9 @@ Template placeholders (auto-filled by the video-summary service):
   {end_tm}        — chunk end time in seconds
   {dur}           — previous chunk duration (T_MINUS_1)
   {past_summary}  — previous chunk summary (T_MINUS_1)
-"""
 
-GLOBAL_PROMPT = '''
+## GLOBAL_PROMPT
+
 ##任务:
 将以下冰箱事件汇总为简短报告。
 **重要：以下 SRT 中的时间戳（HH:MM:SS）是 24 小时制的真实北京时间，不是视频播放时间。例如：06:30 = 早晨6:30, 12:15 = 中午12:15, 17:03 = 下午5:03, 22:00 = 晚上10:00。请据此准确判断用户活动时段**
@@ -70,10 +70,9 @@ GLOBAL_PROMPT = '''
 
 ##待总结内容:
 以下事件用 ">|<" 分开。
-'''
 
+## MACRO_CHUNK_PROMPT
 
-MACRO_CHUNK_PROMPT = '''
 ##任务:
 用2-3句话汇总该时段冰箱使用情况。
 **注意：事件中的时间戳是北京时间真实钟表时间（如 17:03 = 下午5:03）。**
@@ -97,10 +96,9 @@ MACRO_CHUNK_PROMPT = '''
 
 ##待总结内容:
 以下子事件用 ">|<" 分开。
-'''
 
+## LOCAL_PROMPT
 
-LOCAL_PROMPT = '''
 ##任务:
 你正在分析一段智能家居场景中的冰箱监控视频片段。请详细描述该片段中与冰箱相关的所有活动。
 开始时间: {st_tm} 秒
@@ -118,14 +116,12 @@ LOCAL_PROMPT = '''
 - 如果该片段中没有与冰箱相关的活动（如人物仅路过），也请如实描述画面内容。
 - 摘要中不要包含 "[" 或 "]"。
 - 输出中不要包含 "开始时间" 和 "结束时间"。
-'''
 
+## T_MINUS_1_PROMPT
 
-T_MINUS_1_PROMPT = '''
 ##上下文（前{dur}秒的判断结果，仅供参考，不要复制到输出中）:
 开始时间: {st_tm} 秒
 结束时间: {end_tm} 秒
 {past_summary}
 
 注意：根据上一片段中冰箱门的状态和出现的人物，在当前片段描述中保持连贯。不要把上一片段的内容复制到本次输出。
-'''

@@ -1,4 +1,4 @@
-"""Dynamic task registration content for fridge_monitor_en (English).
+Dynamic task registration content for fridge_monitor_en (English).
 
 Pre-staged for future use; not yet on the registration path. When the
 multilevel-video-understanding service drops its built-in
@@ -30,9 +30,9 @@ Template placeholders (auto-filled by the video-summary service):
   {end_tm}        — chunk end time in seconds
   {dur}           — previous chunk duration (T_MINUS_1)
   {past_summary}  — previous chunk summary (T_MINUS_1)
-"""
 
-GLOBAL_PROMPT = '''
+## GLOBAL_PROMPT
+
 ##Task:
 Summarize the following refrigerator events into a brief report.
 **Important: The timestamps (HH:MM:SS) are real Beijing time in 24-hour format, NOT video playback time. Examples: 06:30 = 6:30 AM, 12:15 = 12:15 PM, 17:03 = 5:03 PM, 22:00 = 10:00 PM. Use these to accurately determine activity periods**
@@ -70,10 +70,9 @@ User Habit Analysis: Door openings are concentrated between 7-8 AM and 6-7 PM; m
 
 ##Content to Summarize:
 The following events are separated by ">|<".
-'''
 
+## MACRO_CHUNK_PROMPT
 
-MACRO_CHUNK_PROMPT = '''
 ##Task:
 Summarize the refrigerator usage during this period in 2-3 sentences.
 **Note: The timestamps in the events represent real wall-clock time (Beijing time) (e.g., 17:03 = 5:03 PM).**
@@ -97,10 +96,9 @@ Items involved: 2 cartons of milk taken out, 1 bottle of soda put in. Milk has 1
 
 ##Content to Summarize:
 The following sub-events are separated by ">|<".
-'''
 
+## LOCAL_PROMPT
 
-LOCAL_PROMPT = '''
 ##Task:
 You are analyzing a video clip from a smart home refrigerator monitoring camera. Please describe in detail all refrigerator-related activities in this clip.
 Start time: {st_tm} seconds
@@ -118,14 +116,12 @@ User prompt: {question}
 - If there is no refrigerator-related activity in this clip (e.g., a person merely walks past), describe the scene content as-is.
 - Do not include "[" or "]" in the summary.
 - Do not include "Start time" or "End time" in the output.
-'''
 
+## T_MINUS_1_PROMPT
 
-T_MINUS_1_PROMPT = '''
 ##Previous Summary (do not copy, use as reference only):
 Start time: {st_tm} seconds
 End time: {end_tm} seconds
 Previous summary (last {dur} seconds): {past_summary}
 
 Note: pay attention to the refrigerator door status and people from the previous clip; maintain continuity in the current clip description. Do not copy the previous summary into the output.
-'''

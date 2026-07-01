@@ -18,13 +18,15 @@ smart-community/
 │   ├── README.md                 # protocol reference for override authors
 │   ├── child_safety/
 │   │   ├── evaluate_rules.py     # optional Python rule override
-│   │   └── prompt.py             # VLM task prompts (LOCAL / GLOBAL)
+│   │   └── prompt.md             # VLM task prompts (LOCAL / GLOBAL sections)
 │   ├── elder_wakeup/
 │   │   ├── evaluate_rules.py
-│   │   └── prompt.py
+│   │   └── prompt.md
 │   └── fridge/
 │       ├── config.md             # per-use-case notes
-│       └── prompt.py
+│       ├── evaluate_rules.py     # no-alert stub
+│       ├── prompt.md             # Chinese prompt
+│       └── prompt_en.md          # English variant
 └── config.yaml                   # wiring via use_case_dict.<name>
 ```
 
@@ -78,27 +80,31 @@ Assume you are adding `pet_safety`.
 mkdir -p use-cases/pet_safety
 ```
 
-### Step 2 — write the VLM prompt (`prompt.py`)
+### Step 2 — write the VLM prompt (`prompt.md`)
 
-Copy an existing adapter's `prompt.py` as a starting point. The file must
-export module-level string constants:
+Copy an existing adapter's `prompt.md` as a starting point. The file is a
+plain Markdown document split into sections by `##` headings:
 
-```python
-LOCAL_PROMPT = """
-… per-clip prompt ; produce output the built-in parser can decode …
+```markdown
+Free-form intro / rationale (optional).
+
+## LOCAL_PROMPT
+
+… per-clip prompt; produce output the built-in parser can decode …
 SEVERITY: ...
 EVENT: ...
 DESC: ...
-"""
 
-GLOBAL_PROMPT = """
+## GLOBAL_PROMPT
+
 … aggregation prompt used by daily / weekly reports …
-"""
 ```
 
 The `LOCAL_PROMPT` output must be line-oriented `KEY: value`; keys align with
 `schema.video_summary_tasks.extensions` in `config.yaml` (`event`, `severity`,
-`desc`, plus any custom columns your use case declares).
+`desc`, plus any custom columns your use case declares). Optional
+`MACRO_CHUNK_PROMPT` and `T_MINUS_1_PROMPT` sections are also recognised for
+chained-summary flows.
 
 ### Step 3 — (optional) write `evaluate_rules.py`
 
