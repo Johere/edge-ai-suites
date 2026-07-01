@@ -75,6 +75,7 @@ schema:
       - { name: "severity",   type: "text", required: true }   # critical / warn / info
       - { name: "desc",       type: "text", required: true }   # one-sentence description
       - { name: "confidence", type: "real", required: false }  # optional VLM confidence
+      - { name: "motion_direction", type: "text", required: false }  # high_altitude_safety: downward | upward | horizontal | none
   custom_tables: []
 
 # Use case library. Each entry is referenced by monitors via `use_case`.
@@ -136,3 +137,16 @@ use_case_dict:
       default_type: daily
       filter:
         event: wakeup    # filter on video_summary_tasks.event extension column
+
+  high_altitude_safety:
+    description: "High-altitude object throwing detection"
+    video_summary_task: high_altitude_monitor
+    evaluate_rules_path: ./use-cases/high_altitude_safety/evaluate_rules.py
+    rules:
+      severityThreshold: warn         # fire when severity >= warn
+      requireDirection: downward      # only fires when VLM reports motion_direction=downward
+      cooldownSeconds: 30             # short window: consecutive throws should each alert
+    reports:
+      data_source: alerts
+      default_type: daily
+      filter: {}
