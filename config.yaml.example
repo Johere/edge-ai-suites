@@ -76,6 +76,7 @@ schema:
       - { name: "desc",       type: "text", required: true }   # one-sentence description
       - { name: "confidence", type: "real", required: false }  # optional VLM confidence
       - { name: "motion_direction", type: "text", required: false }  # high_altitude_safety: downward | upward | horizontal | none
+      - { name: "parking_zone", type: "text", required: false }        # parking_safety: fire_lane | entrance | handicapped | double_yellow_line | normal | unknown
   custom_tables: []
 
 # Use case library. Each entry is referenced by monitors via `use_case`.
@@ -146,6 +147,19 @@ use_case_dict:
       severityThreshold: warn         # fire when severity >= warn
       requireDirection: downward      # only fires when VLM reports motion_direction=downward
       cooldownSeconds: 30             # short window: consecutive throws should each alert
+    reports:
+      data_source: alerts
+      default_type: daily
+      filter: {}
+
+  parking_safety:
+    description: "Community parking violation detection (fire lane / entrance / handicapped)"
+    video_summary_task: parking_safety_monitor
+    evaluate_rules_path: ./use-cases/parking_safety/evaluate_rules.py
+    rules:
+      severityThreshold: warn         # fire when severity >= warn
+      # excludeZones: [normal, unknown] # optional: whitelist zones that should not alert
+      cooldownSeconds: 600            # 10 min: a parked car re-triggers only after cooldown
     reports:
       data_source: alerts
       default_type: daily
