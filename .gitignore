@@ -53,3 +53,6 @@ dist/
 
 # Test videos (large binary; store elsewhere / regenerate on demand)
 tests/videos/
+
+# Ad-hoc test videos at repo root (regenerate via 即梦 AI)
+building-throwing*.mp4
