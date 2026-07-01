@@ -42,6 +42,41 @@ def clear_webhook_events(http_client, webhook_url):
     yield
 
 
+@pytest.fixture(autouse=True)
+def reset_vsa_sources(http_client, analytics_url):
+    """Clear all VSA sources before AND after each test.
+
+    Per-test fixtures (e.g. `register_source` in test_motion_to_webhook.py)
+    do their own teardown, but a flaky network / slow pipeline.stop() can
+    leave bundles behind. Stale sources accumulate across the suite, share
+    the RTSP feed, and starve later motion tests of bandwidth — which is
+    how we saw `test_motion_events_received` and
+    `test_watchdog_auto_pauses_after_timeout` flake (both pass when run in
+    isolation but fail when the full suite runs in sequence).
+
+    Clean both before and after each test so the order doesn't matter and
+    a crashed test can't poison the next one. Sleep 0.3s after delete to
+    let the pipeline threads actually join before the next register.
+    """
+    def _drain():
+        try:
+            resp = http_client.get(f"{analytics_url}/sources", timeout=3)
+            ids = [s["source_id"] for s in resp.json()] if resp.status_code == 200 else []
+        except (httpx.HTTPError, ValueError):
+            return
+        for sid in ids:
+            try:
+                http_client.delete(f"{analytics_url}/sources/{sid}", timeout=3)
+            except httpx.HTTPError:
+                pass
+        if ids:
+            time.sleep(0.3)
+
+    _drain()
+    yield
+    _drain()
+
+
 def wait_for_events(
     http_client: httpx.Client,
     webhook_url: str,
