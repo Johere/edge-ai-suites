@@ -50,3 +50,6 @@ package-lock.json
 dist/
 *.js.map
 *.d.ts.map
+
+# Test videos (large binary; store elsewhere / regenerate on demand)
+tests/videos/
