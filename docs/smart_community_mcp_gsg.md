@@ -152,6 +152,19 @@ npx tsx packages/mcp-server/src/index.ts --http --config config.yaml.example --m
 }
 ```
 
+启动后，命令行验证:
+```bash
+$ openclaw mcp probe  smart-community
+│
+◇
+
+OpenClaw 2026.6.9 (c645ec4) — I'll refactor your busywork like it owes me money.
+
+MCP probe (/home/mytest/.openclaw/openclaw.json):
+- smart-community: 8 tools, resources
+
+``` 
+
 ### Cursor（stdio）
 
 项目根目录创建 `.cursor/mcp.json`：
