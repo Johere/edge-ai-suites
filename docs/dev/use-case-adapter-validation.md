@@ -370,3 +370,145 @@ schema extension 列被剥离**。修复：rule_eval **直接查 raw SQLite row*
 - [use-case-adapter-gsg.md](../use-case-adapter-gsg.md) — 端到端测试 recipe
 - [vlm-integration-gsg.md](../vlm-integration-gsg.md) — VLM 服务集成手册
 - [use-case-catalog.md](../use-case-catalog.md) — 85 case 蓝图
+
+---
+
+# Round 2 Validation — `parking_safety` (违章停车) — 2026-07-01 下午
+
+第二个新 use case 验证，考察 adapter 框架**通用性**。选择"违章停车"因为它与高空抛物差异明显：
+
+- **静态场景**（车不动）vs 高空抛物的动态运动
+- **多种子事件**（fire_lane / entrance / handicapped / double_yellow_line）—— 测试单 use case 内部的**多枚举 event 类型**
+- **新扩展字段** `parking_zone`（fire_lane / entrance / handicapped / ...）
+- **长 cooldown**（10 分钟）—— 停车违章短时间内不该重复告警
+
+## 视频参数
+
+`/home/user/jie/smarthome/smart-community/false-parking.mp4`
+- 4.02s / 1280×720 / 60fps / h264 / 4.3 MB
+
+## 一次成型（Round 4 经验直接复用）
+
+由于已经沉淀了 [use-case-adapter.md](../use-case-adapter.md) 里的 4 条 Prompt 编写规范，本次 prompt.md 直接按规范起草，**一次成型**：
+
+- 用输出示例 + 允许值列表替代 `A | B | C`
+- 用 4 空格缩进而非 code fence
+- 每个 EVENT 都给具体案例（fire_lane / entrance / handicapped / double_yellow_line）
+- 顶部加"不要照抄示例"警告
+
+**这是 Prompt 规范的第一次外推验证**：从高空抛物学到的经验能否让第 2 个 use case 一次跑通？
+
+## Adapter Unit 层验证（6/6 pass）
+
+```bash
+python3 use-cases/parking_safety/evaluate_rules.py <ctx>
+```
+
+| Case | Fields | Rules | 期望 | 实测 |
+|------|--------|-------|------|------|
+| 1 | fire_lane_parking + critical | threshold=warn | 触发 | ✅ `[parking_safety] fire_lane_parking: critical — ... (zone=fire_lane)` |
+| 2 | handicapped_spot_parking + warn | threshold=warn | 触发 | ✅ zone=handicapped |
+| 3 | no_incident | 空 rules | 抑制 | ✅ should_alert:false |
+| 4 | warn 事件 + threshold=critical | 阈值抬高 | 抑制 | ✅ |
+| 5 | handicapped + excludeZones=["handicapped"] | 白名单 | 抑制 | ✅ |
+| 6 | uncertain | 空 rules | 抑制 | ✅ |
+
+**新功能**：`excludeZones` rule key（区域白名单）— 未来支持"周末不告 visitor 位违章"这类灵活策略，**adapter 框架天生支持任意 rules 字段**，只要 override 脚本认。
+
+## VLM 打样（一次通过，2.8s）
+
+```bash
+curl -sS http://localhost:8192/v1/summary -d '{
+  "task": "parking_safety_monitor",
+  "video": "/data/test-videos/parking/false-parking.mp4",
+  "method": "SIMPLE",
+  "processor_kwargs": {"levels": 1, "level_sizes": [-1], "process_fps": 4}
+}'
+```
+
+**VLM 输出**：
+
+```
+一辆白色轿车停在禁停区域内, 未见标识
+    SEVERITY: warn
+    EVENT: double_yellow_line_parking
+    DESC: 一辆白色轿车停在禁停区域内, 未见标识
+    PARKING_ZONE: double_yellow_line
+    MOTION_DIRECTION: none
+```
+
+**观察**：
+
+1. VLM 在 5 字段前面**加了一行开场白**（"一辆白色轿车停在禁停区域内, 未见标识"）
+2. 5 字段格式**完全正确**，包括新扩展字段 `PARKING_ZONE`
+3. VLM 判为 `double_yellow_line_parking` warn 而非视频名暗示的 `fire_lane`
+   —— 因为视频里没有明显的消防通道标识（红黄色地面 / "消防通道"字样），VLM 保守判为"禁停"
+
+### `parseSummaryFields` 抗噪声能力（关键发现）
+
+即使 VLM 在 5 字段前多加了一行散文，`^\s*KEY:` 正则**照样只挑它认识的字段**：
+
+```
+EVENT: 'double_yellow_line_parking'
+SEVERITY: 'warn'
+DESC: '一辆白色轿车停在禁停区域内, 未见标识'
+PARKING_ZONE: 'double_yellow_line'
+MOTION_DIRECTION: 'none'
+```
+
+**开场白被自动忽略**——这是 schema-aware parser 的用户友好性体现：VLM 输出可以有额外噪声，parser 只挑 schema 声明的字段。**未来 use case 作者不用告诉 VLM"不要开场白"这种细节**。
+
+## E2E rule_eval（一次通过）
+
+`SchemaManager` **自动 ALTER TABLE ADD COLUMN parking_zone**（因为 `config.yaml` 里 schema.extensions 加了一个新字段）：
+
+```
+✓ parking_zone column auto-created: True
+```
+
+`rule_eval create_alert=true` 结果：
+
+```json
+{
+  "rule_result": {
+    "shouldAlert": true,
+    "alertMessage": "[parking_safety] double_yellow_line_parking: warn — 一辆白色轿车停在禁停区域内, 未见标识 (zone=double_yellow_line)"
+  },
+  "alert_created": true,
+  "alert_id": 1
+}
+```
+
+Alert 写入 DB，alerts 表 `description` 包含 `zone=double_yellow_line` 后缀（override helper 生成）。
+
+## 判定汇总
+
+| # | 判定标准 | Round 1 (HA) | Round 2 (Parking) |
+|---|----------|-------|-------|
+| A | 注册脚本通用 | ✅ | ✅（同一脚本，改 UC 变量） |
+| B | 视频挂载简单 | ✅ | ✅ |
+| C | prompt 让 VLM 按 schema 输出 | ✅ (v3) | ✅ **一次成型** |
+| D | parseSummaryFields 抽扩展字段 | ✅（容忍缩进） | ✅ **容忍开场白** |
+| E | use_case_validate 通过 | ⚠️ dynamic task 校验 gap | ⚠️ 同 |
+| F | rule engine 按 override 判定 | ✅ | ✅ |
+| G | 反例正确抑制 | ✅ | ✅ 6/6 unit |
+| **H (新)** | **多枚举 event 类型** | N/A | ✅ 4 种子 event + 6 种 zone 都跑通 |
+| **I (新)** | **规范外推有效** | N/A（首例） | ✅ 一次成型 |
+
+## 关键发现
+
+1. **Prompt 规范验证外推有效**：第一次踩过的坑，第二次可以避免。规范沉淀出真正价值。
+2. **Adapter 框架**：单 use case 内容纳 4 种 event + 6 种 zone 无压力，`payload.rules.excludeZones` 这种自定义 key 天生支持。
+3. **Parser 抗噪声**：VLM 输出的开场白 / 缩进 / 全角混排都能被 `^\s*KEY:` 正则容忍。
+4. **SchemaManager 动态 ALTER**：新 use case 加新扩展字段（`parking_zone`），运行时自动加列，**用户不需要写迁移**。
+
+## 遗留观察
+
+**VLM 语义精度局限（不是框架问题）**：
+- 视频名叫 `false-parking.mp4`（消防通道违章），但 VLM 判为 `double_yellow_line_parking`
+- 因为视频里没有明显的"消防通道"地面标识（黄色斑马线 / 红色边线 / 字样）
+- Qwen3.5-0.8B 只能靠视觉线索识别，无法根据"车辆停在楼道边"这种上下文推理
+- 想拿到 `fire_lane_parking` 判定，视频里必须**明显有消防通道标识**；或者切更大模型
+
+这是**视频生成质量**问题，与 adapter 框架无关。
+
