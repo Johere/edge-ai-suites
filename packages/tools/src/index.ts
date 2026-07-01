@@ -45,3 +45,7 @@ export type {
   UseCaseValidateDeps,
   UseCaseValidateResult,
 } from "./use-case-validate.js";
+export { ruleEval } from "./rule-eval.js";
+export type { RuleEvalParams, RuleEvalDeps, RuleEvalResult } from "./rule-eval.js";
+export { stateQuery } from "./state-query.js";
+export type { StateQueryParams, StateQueryResult } from "./state-query.js";

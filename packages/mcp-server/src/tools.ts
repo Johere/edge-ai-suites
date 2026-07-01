@@ -310,4 +310,58 @@ export function registerTools(
       return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
     }
   });
+
+  // --- smartbuilding_rule_eval ---
+  server.registerTool("smartbuilding_rule_eval", {
+    description: "Manually re-run the rule evaluator against a completed task (defaults to the " +
+      "monitor's latest completed task). Rebuilds the same RuleContext task-poller uses. " +
+      "By default runs dry (returns shouldAlert without persisting); pass create_alert=true to " +
+      "actually insert a row (cooldown honoured).",
+    inputSchema: {
+      monitor_id: z.string().describe("Monitor ID"),
+      task_id: z.number().optional().describe(
+        "Task to re-evaluate (default: latest completed for the monitor)",
+      ),
+      create_alert: z.boolean().optional().describe(
+        "When true, insert an alert row on shouldAlert (default false — dry run)",
+      ),
+    },
+  }, async (params) => {
+    try {
+      const { ruleEval } = await import("@smartbuilding-video/tools");
+      const result = await ruleEval(
+        db,
+        {
+          useCaseDict: config.useCaseDict,
+          schemaExtensions: config.schema?.video_summary_tasks?.extensions,
+        },
+        params as any,
+      );
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  });
+
+  // --- smartbuilding_state_query ---
+  server.registerTool("smartbuilding_state_query", {
+    description: "Read or write the per-monitor JSON state store. action=get returns one key " +
+      "(or the whole state map when `key` is omitted); action=set upserts one key; action=delete " +
+      "removes one key. Rule-engine overrides and on_task_completed callbacks use this store to " +
+      "persist state across task boundaries.",
+    inputSchema: {
+      monitor_id: z.string().describe("Monitor ID"),
+      action: z.enum(["get", "set", "delete"]).describe("Action to perform"),
+      key: z.string().optional().describe("State key (required for set/delete; optional for get)"),
+      value: z.unknown().optional().describe("Any JSON value (required for set)"),
+    },
+  }, async (params) => {
+    try {
+      const { stateQuery } = await import("@smartbuilding-video/tools");
+      const result = stateQuery(db, params as any);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  });
 }
