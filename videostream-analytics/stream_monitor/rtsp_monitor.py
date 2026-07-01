@@ -227,10 +227,16 @@ class StreamPipeline(BaseMonitor):
             try:
                 self._connect()
                 if self._cap and self._cap.isOpened():
-                    self._status = "online"
+                    # Respect an externally-set paused flag: RTSP idle-timeout
+                    # during pause can drop us here after a silent reconnect,
+                    # but the user intent is still "paused" until /resume.
+                    if self._paused.is_set():
+                        self._status = "online"
+                        self._emit_status("online")
+                    else:
+                        self._status = "paused"
                     self._failure_count = 0
                     self._reconnect_count = 0
-                    self._emit_status("online")
                     self._process_loop()
             except Exception as e:
                 logger.error("[%s] Pipeline error: %s", self.source_id, e)
@@ -249,8 +255,11 @@ class StreamPipeline(BaseMonitor):
                     if not self._running:
                         break
                 else:
-                    self._status = "reconnecting"
-                    self._emit_status("reconnecting")
+                    # Same rule as above: keep the pause label visible while
+                    # we quietly retry in the background.
+                    if self._paused.is_set():
+                        self._status = "reconnecting"
+                        self._emit_status("reconnecting")
                     delay = self._calculate_backoff()
                     logger.info("[%s] Reconnecting in %.1fs (attempt %d)...",
                                self.source_id, delay, self._reconnect_count)
