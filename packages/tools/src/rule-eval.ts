@@ -1,6 +1,6 @@
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
-import type { RuleContext, RuleResult } from "@smartbuilding-video/rule-engine";
-import { evaluateWithOverride } from "@smartbuilding-video/rule-engine";
+import type { RuleContext, RuleResult } from "./rule-engine/index.js";
+import { evaluateWithOverride } from "./rule-engine/index.js";
 
 /**
  * Configuration slice needed by `ruleEval`. The tool must be able to look up
