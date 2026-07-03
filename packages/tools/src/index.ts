@@ -51,6 +51,14 @@ export type {
   UseCaseRegisterDeps,
   UseCaseRegisterResult,
 } from "./use-case-register.js";
+export { generatePrompt } from "./prompt-autogen.js";
+export type {
+  GeneratePromptParams,
+  GeneratePromptDeps,
+  GeneratePromptResult,
+  PromptAutogenEventType,
+  PromptAutogenSchemaExtension,
+} from "./prompt-autogen.js";
 export { videoSummaryTask } from "./video-summary-task.js";
 export type {
   VideoSummaryTaskParams,
