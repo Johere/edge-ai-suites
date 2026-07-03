@@ -27,7 +27,44 @@ interface DefaultRuleOptions {
   severityThreshold?: string;
   /** Events that never fire even at or above the threshold. */
   excludeEvents?: string[];
+  /**
+   * Whitelist single event value — when set, only `fields.event === requireEvent`
+   * fires. Combines with severityThreshold (both must pass). Used by
+   * high_altitude_safety to gate on `high_altitude_throw` only.
+   */
+  requireEvent?: string;
+  /**
+   * Whitelist single direction value — when set, `fields.motion_direction`
+   * must equal this (case-insensitive). Used by high_altitude_safety to
+   * suppress e.g. balloon rising upward.
+   */
+  requireDirection?: string;
+  /**
+   * Zones that never fire even when event / severity pass. Compared against
+   * `fields.parking_zone`. Used by parking_safety to opt-out specific zones
+   * (e.g. deprioritise visitor spots on weekends).
+   */
+  excludeZones?: string[];
+  /**
+   * When present, the alert message will carry a suffix `(<label>=<value>)`
+   * where `<value>` is read from `fields[<this key>]` and `<label>` is a
+   * human-friendly short form (see EXTRA_LABEL_MAP). Empty / missing fields
+   * result in no suffix.
+   */
+  alertMessageExtraField?: string;
 }
+
+/**
+ * Short label used when composing `alertMessage` suffix. Keeps the alerts
+ * table readable (`zone=fire_lane` reads better than `parking_zone=fire_lane`)
+ * while preserving the schema field name in DB columns.
+ * Fallback: unknown fields use the field name verbatim.
+ */
+const EXTRA_LABEL_MAP: Record<string, string> = {
+  parking_zone: "zone",
+  motion_direction: "direction",
+  pet_zone: "zone",
+};
 
 export interface RuleContext {
   monitorId: string;
@@ -62,13 +99,17 @@ export type RuleEvaluator = (context: RuleContext) => Promise<RuleResult>;
  * configured threshold and the `event` field is not in the exclusion list.
  *
  * Behaviour is controlled by the per-use-case `rules` block loaded from
- * `config.yaml → use_case_dict.<name>.rules`. Recognised keys:
+ * `config.yaml → use_case_dict.<name>.rules`. Recognised keys (all optional):
  *   - `severityThreshold`: `"info" | "warn" | "critical"` (default `"warn"`)
  *   - `excludeEvents`: `string[]` — events that never fire regardless of severity
+ *   - `requireEvent`: single event whitelist (paired with severity check)
+ *   - `requireDirection`: `fields.motion_direction` must match (case-insensitive)
+ *   - `excludeZones`: `string[]` compared against `fields.parking_zone`
+ *   - `alertMessageExtraField`: field to append as `(label=value)` suffix
  *
  * Complex use-case logic (time comparisons, multi-event joint decisions,
- * external service calls) should live in a Python override — see
- * `evaluateWithOverride`.
+ * external service calls) still needs a Python override — see
+ * `evaluateWithOverride`. `elder_wakeup` is a canonical example.
  */
 export async function defaultRuleEvaluator(context: RuleContext): Promise<RuleResult> {
   const fields = context.payload?.fields ?? {};
@@ -86,6 +127,33 @@ export async function defaultRuleEvaluator(context: RuleContext): Promise<RuleRe
   const excludeEvents = Array.isArray(rules.excludeEvents) ? rules.excludeEvents : [];
   if (excludeEvents.includes(eventField)) return { shouldAlert: false };
 
+  if (rules.requireEvent && eventField !== rules.requireEvent) {
+    return { shouldAlert: false };
+  }
+
+  if (rules.requireDirection) {
+    const observed = (fields["motion_direction"] ?? "").toLowerCase();
+    if (observed !== rules.requireDirection.toLowerCase()) {
+      return { shouldAlert: false };
+    }
+  }
+
+  if (Array.isArray(rules.excludeZones) && rules.excludeZones.length > 0) {
+    const zone = fields["parking_zone"] ?? "";
+    if (zone && rules.excludeZones.includes(zone)) {
+      return { shouldAlert: false };
+    }
+  }
+
+  let extra: string | undefined;
+  if (rules.alertMessageExtraField) {
+    const value = fields[rules.alertMessageExtraField];
+    if (value) {
+      const label = EXTRA_LABEL_MAP[rules.alertMessageExtraField] ?? rules.alertMessageExtraField;
+      extra = `${label}=${value}`;
+    }
+  }
+
   const desc = fields["desc"] ?? fields["description"] ?? "";
   return {
     shouldAlert: true,
@@ -94,6 +162,7 @@ export async function defaultRuleEvaluator(context: RuleContext): Promise<RuleRe
       alertType: eventField,
       severity,
       desc,
+      extra,
     }),
   };
 }
