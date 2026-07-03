@@ -3,10 +3,42 @@
 本文档面向 use case adapter 的功能验证，给出一套完整可执行的测试步骤。use case adapter 包含三个可测层，本文按层逐个覆盖：
 
 - **Prompt 层**：VLM 拿到 clip 后按 `LOCAL_PROMPT` 的规定输出结构化字段（`SEVERITY: / EVENT: / DESC: / …`）
-- **Rules 层**：`evaluate_rules.py` 对 VLM 输出 + `payload.rules` 判定 Python override 协议 `{should_alert, alert_message}`；通过 MCP `smartbuilding_rule_eval` 查看时，对应字段为 `rule_result.shouldAlert` / `rule_result.alertMessage`
+- **Rules 层**：`evaluate_rules.py`（可选 Python override）**或** `defaultRuleEvaluator` 通过 `payload.rules` 完成判定；产出 `{should_alert, alert_message}`；通过 MCP `smartbuilding_rule_eval` 查看时，对应字段为 `rule_result.shouldAlert` / `rule_result.alertMessage`
 - **Cooldown 层**：`rules.cooldownSeconds` 抑制同 use case 短期重复告警
 
 上游产品文档：[use-cases/README.md](../use-cases/README.md)、[docs/use-case-adapter.md](./use-case-adapter.md)、[docs/implements/schema-usecase-parser-alerts-pipeline.md](./implements/schema-usecase-parser-alerts-pipeline.md)。
+
+---
+
+## 完整测试流程速览
+
+以下 5 个 Phase 覆盖 use case adapter 全部能力，按顺序跑：
+
+| Phase | 目标 | 需要什么 | 参考章节 |
+|---|---|---|---|
+| **Phase 0** | 清场（可选，重新起环境时用）| 无 | §3 上面的清理命令 |
+| **Phase 1** | 起底层服务（VLM / VSA / MCP / mediamtx）| Docker + NPU（可选）| §3 |
+| **Phase 2** | 基线 U1–U10（3 内置 UC：fridge / child_safety / elder_wakeup + cooldown）| 现有 4 条 loop 视频（已在 demo-videos/）| §5 |
+| **Phase 3** | 扩展验证 U11–U12（自定义 UC：high_altitude / parking）| 现有 building-throwing-2.mp4 / false-parking.mp4 或自造更长视频 | §9 |
+| **Phase 4** | 零重启注册 + 持久化 + LLM prompt autogen 全流程（3 action 一站式）| VLM 服务 + `--config` 启动 MCP | §10 |
+
+**每个 use case 从"零"到"跑通"的核心 5 步**（§10 详解）：
+
+1. `smartbuilding_use_case_register action=generate_prompt` —— 提供 event_types + description，让 vLLM 生成 `## LOCAL_PROMPT` 骨架
+2. 人工 review + refine 骨架，存到 `use-cases/<uc>/prompt.md`
+3. `smartbuilding_use_case_register action=register persist=true` —— 一次搞定 schema ALTER + VLM POST /v1/tasks + inject useCaseDict + 写回 config.yaml
+4. `smartbuilding_monitor_ctl action=register_source` —— 绑一个 RTSP monitor
+5. VSA motion → task-poller → VLM → rule engine → alert，观察 `alerts` 表
+
+**"零代码"承诺兑现进度**（对照 [gap-analysis §6](./dev/use-case-adapter-gap-analysis.md#6-验证结论adapter-框架是否达到-design-13-零代码用例创建)）：
+
+| 维度 | 状态 |
+|---|---|
+| 零 TypeScript 代码 | ✅ |
+| 零 curl 手工 | ✅（一次 MCP tool call）|
+| 零 YAML 手工 | ✅（`persist: true` 自动写回 config.yaml.example）|
+| 零 prompt 手工 | ✅ 骨架自动生成（`action=generate_prompt` 兑现）+ ⚠️ 用户仍需人工 refine 业务细节（human-in-the-loop 设计）|
+| 零 Python 手工 | ✅ 简单 UC 完全靠 `rules` dict（3 个 UC 已迁）；仅 `elder_wakeup`（时间比较）+ `fridge`（stub）保留 override |
 
 ---
 
@@ -1000,10 +1032,74 @@ MCP server 启动时把 `config.yaml` 的 `use_case_dict` 一次性快照到 `Se
 
 `action=unregister`：DELETE `/v1/tasks/<name>` + `delete config.useCaseDict[name]`。schema 扩展列**不回滚**（sqlite 没法 drop column 而不破坏数据）。
 
+**当 `persist: true`** 时，register 和 unregister 都会用 yaml `Document` API 把改动**写回 `--config` 指定的 config.yaml 文件**（注释和字段顺序保留）—— MCP 重启后仍在，不再是 in-memory-only。
+
+**`action=generate_prompt`**（本节主打）：**不 mutate 任何状态**，仅调 vLLM 生成 `## LOCAL_PROMPT` 骨架并返回；用户手工 review + refine 后再走 `action=register`。设计为 human-in-the-loop，兑现 Design §5.2 Step 3 "LLM 生成 VIDEO_SUMMARY prompt"。
+
 ### 10.3 零重启操作步骤（`pet_safety` 完整例子）
 
 假设已经在跑 §3 那套三服务（VSA / VLM / MCP），且没重启 MCP。以下所有步骤对已在跑的
 `cam_fridge` / `cam_child` / `cam_elder_bedroom(*)` 都无影响。
+
+#### 步骤 A0 — （新推荐）用 `generate_prompt` 生成 prompt.md 骨架
+
+给"3 个语义输入"（use case 名 + 一句描述 + event_types 表 + 可选 schema_extensions），vLLM 生成一个 `## LOCAL_PROMPT` 段骨架。骨架已经**遵循 4 条 prompt writing conventions**（无 `A | B | C` 枚举、无 markdown code fence、含正/反输出示例、末尾重复禁令）。
+
+```bash
+curl -sS -X POST http://localhost:3100/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"smartbuilding_use_case_register",
+    "arguments":{
+      "action":"generate_prompt",
+      "use_case":"pet_safety",
+      "description":"监控家里的宠物是否处于危险状态",
+      "event_types":[
+        {"name":"pet_stuck","severity":"critical","desc":"宠物被卡住/困在狭窄处"},
+        {"name":"pet_escape","severity":"warn","desc":"宠物尝试跳门/翻窗逃跑"},
+        {"name":"pet_normal","severity":"info","desc":"宠物正常休息/玩耍/进食"},
+        {"name":"no_incident","severity":"info","desc":"画面无宠物"}
+      ],
+      "schema_extensions":[
+        {"name":"pet_zone","type":"text","required":false}
+      ],
+      "language":"zh"
+    }}}' \
+  | grep "^data:" | head -1 | sed 's/^data: //' \
+  | jq '.result.content[0].text | fromjson | {ok, warnings, next_steps, preview: (.generated_prompt|.[0:400])}'
+```
+
+**期望输出**：
+
+```json
+{
+  "ok": true,
+  "warnings": [],
+  "next_steps": [
+    "1. Save 'generated_prompt' to use-cases/pet_safety/prompt.md",
+    "2. Manually refine business boundaries — spell out concrete edge cases (see Convention 3 in use-case-adapter.md)",
+    "3. Call smartbuilding_use_case_register action=register with prompt_text=$(cat use-cases/pet_safety/prompt.md) persist=true"
+  ],
+  "preview": "## LOCAL_PROMPT\n\n你是一个家庭宠物看护摄像头...\n\n输出示例 1 (positive case):\n    SEVERITY: critical\n    EVENT: pet_stuck\n    DESC: 宠物被卡在两个家具之间\n    PET_ZONE: sofa\n\n字段取值范围:\n..."
+}
+```
+
+`warnings` 里如果出现：
+- `contains triple-backtick code fence` → vLLM 输出包含 ```，会被 `/v1/tasks` 拒收；**必须手工 edit 掉**
+- `contains A | B | C pipe-separated enum` → 小 VLM 可能照抄；**建议手工 refine**
+- `event names missing` → 某些 event 没进 prompt；**必须补上**
+
+保存骨架到磁盘：
+
+```bash
+mkdir -p use-cases/pet_safety
+curl ... | jq -r '.result.content[0].text | fromjson | .generated_prompt' \
+  > use-cases/pet_safety/prompt.md
+```
+
+然后 **`vim use-cases/pet_safety/prompt.md`**——加业务细节（Convention 3，具体案例枚举，例如"宠物在门缝里挣扎"、"宠物爬向阳台栏杆"）。
+
+> **不想用 generate_prompt？** 完全跳过 §A0，直接进 §A（手写 prompt.md）。tool 不强制。
 
 #### 步骤 A — 写 evaluate_rules.py 和 prompt.md（磁盘上）
 
@@ -1214,19 +1310,20 @@ curl -s -X POST http://localhost:3100/mcp \
 但 MCP 会因为找不到 `pet_safety` use case 而抛
 `monitors reference unknown use_case keys` 并退出（[index.ts:64-68](../packages/mcp-server/src/index.ts#L64-L68)）。
 
-**修复方式**（二选一）：
-- **推荐**：在 `config.yaml.example` 里加上 `use_case_dict.pet_safety` 条目，让下次启动能读到。这是当前推荐的"补 config、下次启动可继续"的做法
-- **临时**：先 unregister monitor（`cam_pet`），再重启 MCP，之后再 register_use_case + register_source
-
-后续 P3：给 tool 加一个 `persist: true` 参数，把 use_case 序列化写回 `config.yaml.example`，实现"真正的一次调用永久生效"。当前实现不做这一步，避免运行时改写用户配置文件带来的破坏性风险。
+**修复方式**（两种）：
+- **推荐（`persist: true` 自动，已实现）**：register 时传 `persist: true`，tool 会用 yaml Document API 把条目**同步写回 `config.yaml.example`**（保留注释和字段顺序）。重启后 MCP 自动从磁盘加载，无缝继续
+- **临时**（不能或不想 persist 时）：先 unregister monitor（`cam_pet`），再重启 MCP，之后再 register_use_case + register_source
 
 ### 10.5 关联 tool 一览
 
-| Tool | 什么时候用 |
-|---|---|
-| `smartbuilding_use_case_register` | 新加 use case（本节主角）|
-| `smartbuilding_use_case_validate` | 校验现有 use case 的三层（存在 / VLM task 注册 / prompt schema）|
-| `smartbuilding_monitor_ctl` | 加/减 monitor；用 `action=register_source` 时 tool 内部自动跑 use_case_validate |
-| `smartbuilding_monitors_compose` | 批量按 `monitors.yaml` 起 monitor |
-| `smartbuilding_rule_eval` | dry-run 一个 completed task 看 rule 层判定，不写 DB |
+| Tool | action | 什么时候用 |
+|---|---|---|
+| `smartbuilding_use_case_register` | `generate_prompt` | 从 3 个语义输入（description + event_types + schema_extensions）让 vLLM 生成 `## LOCAL_PROMPT` 骨架；不写盘、不 mutate；human-in-the-loop refine |
+| `smartbuilding_use_case_register` | `register` | 一次搞定：schema ALTER + VLM POST /v1/tasks + inject useCaseDict + 可选 `persist=true` 写回 config.yaml |
+| `smartbuilding_use_case_register` | `unregister` | 反向清除：DELETE /v1/tasks + remove from useCaseDict + 可选 `persist=true` 从 config.yaml 删条目 |
+| `smartbuilding_use_case_validate` | — | 校验现有 use case 的三层（存在 / VLM task 注册 / prompt schema）|
+| `smartbuilding_video_summary_task` | `list` / `get` / `delete` | 直接管理 VLM `/v1/tasks`：list 看全部、get 看单条 4 常量、delete 单条 dynamic |
+| `smartbuilding_monitor_ctl` | `register_source` 等 | 加/减 monitor；`register_source` 内部自动跑 use_case_validate |
+| `smartbuilding_monitors_compose` | `up/down/...` | 批量按 `monitors.yaml` 起 monitor |
+| `smartbuilding_rule_eval` | — | dry-run 一个 completed task 看 rule 层判定，不写 DB；`create_alert=true` 时走 cooldown 落 alert |
 
