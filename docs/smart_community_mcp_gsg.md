@@ -4,11 +4,34 @@
 
 - Node.js ≥ 18
 - npm（随 Node.js 安装）
+- Docker + docker compose（跑 VLM 后端 `multilevel-video-understanding` + `vllm-ipex-serving`）
+
+## 0. 启动 VLM 后端（首次或换栈时）
+
+MCP server 依赖 `multilevel-video-understanding` (`:8192`) 作 video summary，以及 `vllm-ipex-serving` (`:41091`) 作单帧 scene_query。仓库根目录 `docker/multilevel-video-understanding/compose.yaml` 提供了自包含的 stack，与 MCP 数据目录对齐（`SMARTBUILDING_DATA_DIR` → 容器内 `/data:ro`）。
+
+```bash
+cd /home/user/jie/smarthome/smart-community/docker/multilevel-video-understanding
+source ./set_env.sh                       # 导出 SMARTBUILDING_DATA_DIR、模型选择、VLM URL 等
+docker compose up -d                      # 首次会拉/build 镜像；vllm 加载 35B 模型 ≈ 30 分钟
+docker compose logs -f vllm-ipex-serving  # 等到日志出现 "Uvicorn running on ..."
+```
+
+准入依赖：**MCP 侧的 `SMARTBUILDING_DATA_DIR`（默认 `${HOME}/.mcp-smartbuilding`）、`set_env.sh` 里同名变量、`config.yaml.example` 的 `summary_service.path_remap.host_prefix` 三者必须指向同一个宿主机目录**——否则容器内 `/data/segments/...` 找不到 MCP 写下的 clip，会报 `Local file not found`。
+
+停止（切换到其他 stack 前必须先 down 掉，否则端口冲突）：
+
+```bash
+cd /home/user/jie/smarthome/smart-community/docker/multilevel-video-understanding
+source ./set_env.sh && docker compose down
+```
+
+> 若之前跑的是 `agent-ai.smarthome/start-video-summary-service/end2end` 那个旧 stack，需要先到那个目录 `source set_env.sh && docker compose down`，否则 `vllm-ipex-serving` / `multilevel-video-understanding` 端口 8192 / 41091 会占用。
 
 ## 1. 安装依赖
 
 ```bash
-cd agent-ai.smart-community-ai-automation
+cd /home/user/jie/smarthome/smart-community
 npm install
 ```
 
@@ -79,7 +102,7 @@ mcp:
 npx @modelcontextprotocol/inspector npx tsx packages/mcp-server/src/index.ts --config config.yaml.example --monitors monitor_cam_child.yaml
 ```
 
-浏览器打开 Inspector UI → 可看到 8 个 tools + 4 个 resources → 点击调用测试。
+浏览器打开 Inspector UI → 可看到 10 个 tools + 4 个 resources → 点击调用测试。
 
 ### 验证 HTTP 模式（curl）
 
@@ -182,19 +205,28 @@ MCP probe (/home/mytest/.openclaw/openclaw.json):
 
 ## 6. 配置文件说明
 
-`config.yaml` 完整示例：
+`config.yaml` 完整示例（以 `config.yaml.example` 为准）：
 
 ```yaml
-db:
-  path: ./data/smartbuilding.db
-
+# 与 multilevel-video-understanding 容器的挂载路径对齐：
+# host_prefix 必须等于 $SMARTBUILDING_DATA_DIR（也就是 docker/multilevel-video-understanding/set_env.sh
+# 里同名变量的值）；container_prefix 与 compose.yaml 中 volumes 段的容器侧一致。
 summary_service:
   url: http://localhost:8192
+  path_remap:
+    host_prefix: ${HOME}/.mcp-smartbuilding
+    container_prefix: /data
 
+# 单帧 scene_query 的 VLM 后端（vllm-ipex-serving）
+vlm_service:
+  url: http://localhost:41091/v1
+  model: default
+  max_edge_px: 720
+
+# videostream-analytics 微服务
 videostream_analytics:
   url: http://localhost:8999
 
-segments_dir: ./segments
 poll_interval_ms: 5000
 video_summary_max_concurrent: 2
 
@@ -202,31 +234,47 @@ video_summary_max_concurrent: 2
 mcp:
   port: 3100
 
+# events webhook 端口（接 videostream-analytics）
+events_webhook:
+  port: 3101
+
 # DB schema 扩展（用例自定义字段）
 schema:
   video_summary_tasks:
     extensions:
-      - { name: "event", type: "text", required: true }
-      - { name: "severity", type: "text", required: true }
-      - { name: "desc", type: "text", required: true }
+      - { name: "event",      type: "text", required: true }
+      - { name: "severity",   type: "text", required: true }
+      - { name: "desc",       type: "text", required: true }
       - { name: "confidence", type: "real", required: false }
-  alerts:
-    extensions: []
   custom_tables: []
+```
+
+数据目录由 `SMARTBUILDING_DATA_DIR` 环境变量决定（默认 `~/.mcp-smartbuilding`），布局：
+
+```
+$SMARTBUILDING_DATA_DIR/
+├── smartbuilding.db                     # SQLite（events / video_summary_tasks / alerts / …）
+├── segments/<monitor_id>/               # videostream-analytics 写入的 clip / latest.jpg
+│   ├── latest.jpg
+│   ├── motion_events/<YYYY-MM-DD>/*.mp4
+│   └── recordings/<YYYY-MM-DD>/*.mp4
+└── logs/monitors/<monitor_id>/<YYYY-MM-DD>.log
 ```
 
 ## 7. 可用 MCP Tools
 
 | Tool | 功能 |
 |------|------|
-| `smartbuilding_alert_query` | 查询/确认告警 |
-| `smartbuilding_state_query` | 读写 monitor 状态 |
-| `smartbuilding_scene_query` | 实时 VLM 画面分析 |
-| `smartbuilding_daily_report` | 生成日报 |
-| `smartbuilding_monitor_ctl` | 启停/注册视频源 |
-| `smartbuilding_rule_eval` | 手动触发规则评估 |
-| `smartbuilding_video_db` | 底层 DB 查询 |
-| `smartbuilding_use_case_validate` | 校验 prompt ↔ schema 一致性 |
+| `smartbuilding_alert_query` | 查询/确认告警（action: latest / by_date / ack / stats） |
+| `smartbuilding_state_query` | 读写 per-monitor JSON state store（action: get / set / delete） |
+| `smartbuilding_scene_query` | 实时 VLM 画面分析（读 latest.jpg → VLM） |
+| `smartbuilding_generate_report` | 生成日/周/月/自定义报告（表源由 use_case_dict.reports 决定） |
+| `smartbuilding_monitor_ctl` | Monitor 生命周期（action: register_source / unregister / start / stop / status / list） |
+| `smartbuilding_monitors_compose` | 基于 monitors.yaml 的批量管理（action: validate / up / down / restart / ps） |
+| `smartbuilding_plan_ctl` | Per-monitor plan 管理，rule engine 可读 today's plan（action: list / upsert / delete） |
+| `smartbuilding_rule_eval` | 手动触发 rule 评估（dry-run 或 create_alert=true） |
+| `smartbuilding_video_db` | 底层只读 SQL 查询（仅 SELECT） |
+| `smartbuilding_use_case_validate` | 校验 use_case ↔ VLM task prompt ↔ schema 一致性 |
 
 ## 8. 可用 MCP Resources
 
