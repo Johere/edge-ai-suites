@@ -120,7 +120,7 @@ export async function evaluateWithOverride(
     const { stdout } = await execFileAsync("python3", [
       overridePath,
       JSON.stringify(context),
-    ]);
+    ], { timeout: 10_000 });
     const result = JSON.parse(stdout.trim());
     return {
       shouldAlert: Boolean(result.should_alert),
