@@ -258,14 +258,33 @@
 
 - Issue #1（integration-status.md）：`multilevel-video-understanding` `/v1/summary` 不指定 method 时 fallback 到非法 enum.name（下划线 vs 连字符）→ 手工 curl 打样必须显式传 `method: "SIMPLE"`
 
+### Done (WW27 cont. — 2026-07-03 晚，Plan §27 落地)
+
+**Design §5.2 兑现 —— 3 项 P1/P2 gap 一次性搞定**
+
+- [x] **P1-A 默认 evaluator 反推**：`defaultRuleEvaluator` 加 `requireEvent` / `requireDirection` / `excludeZones` / `alertMessageExtraField` 4 个 rules keys；删 `child_safety` / `parking_safety` / `high_altitude_safety` 的 Python override；alertMessage 格式与旧 override 完全一致；`U1/U2/U11a/U11b/U12a/U12b` 6 条 rule_eval 全 pass
+- [x] **P1-B `use_case_register` 加 `persist: true`**：`ServerConfig.configPath` 通过 `--config` CLI 参数带入；`persistUseCaseDictEntry` 用 yaml `parseDocument` + `setIn`/`deleteIn` + `toString` comment-preserving 写回 `config.yaml.example`；写盘失败降级为 warning 不阻断；`config_yaml: "written" | "removed" | "skipped"` 三态；`pet_safety_persisted` 端到端 register + unregister 磁盘校验 pass
+- [x] **P2 `smartbuilding_video_summary_task` MCP tool 家族**：`list` / `get` / `delete` 三 action；`delete` 处理 403（builtin_immutable warning）+ 404（not_found error）；端到端 pass
+
+**"零代码"承诺兑现进度**（5 维度对照）：
+- ✅ 零 TypeScript
+- ✅ 零 curl 手工
+- ✅ **零 YAML 手工**（P1-B 兑现）
+- ⚠️ 零 prompt 手工（未做，需 P3 LLM autogen）
+- ✅ **零 Python 手工**（P1-A 兑现；仅 elder_wakeup 时间比较 + fridge stub 保留 override）
+
 ### Next Steps (WW28+)
 
-- [x] WW28–WW29：Use Case Adapter — register new use case 主流程（本 WW27 提前完成）
-- [x] WW30：Use Case Adapter wrapper（本 WW26 已完成）
-- [x] WW31：Customize post-proc — summary parser + rule engine override 路径（本 WW26 已完成）
-- [x] 与 Jiaojiao 联调 MCP Server 的 events webhook → pending task → VLM → rule eval → alert 链路（本 WW27 集成测试 3 阶段全 pass）
+- [x] WW28–WW29：Use Case Adapter — register new use case 主流程（WW27 提前完成 + WW27 晚 persist=true 补齐）
+- [x] WW30：Use Case Adapter wrapper（WW26 已完成）
+- [x] WW31：Customize post-proc — summary parser + rule engine override 路径（WW26 已完成 + WW27 晚 3 UC 反推到 default）
+- [x] 与 Jiaojiao 联调 MCP Server 的 events webhook → pending task → VLM → rule eval → alert 链路（WW27 集成测试 3 阶段全 pass）
+- [x] P1 默认 evaluator 反推（WW27 晚完成）
+- [x] P1 `persist: true`（WW27 晚完成）
+- [x] P2 `smartbuilding_video_summary_task` tool 家族（WW27 晚完成）
 - [ ] WW28+：跟 jiaojiao 沟通 5 项跨模块改动（integration-status.md §A）—— review 决定是否合并 / 迁移
 - [ ] WW28+：与上游 `edge-ai-libraries/multilevel-video-understanding` 沟通 Issue #1（method fallback bug）
-- [ ] P1（可选，Design §5.2 兑现）：`smartbuilding_use_case_register` 加 `persist: true` 参数，写回 `config.yaml.example` 让重启不丢
+- [ ] P2（可选）：Design doc 一次性修订 —— 名字对齐（cooldownSec → cooldownSeconds）+ 加 `use_case_register` / `video_summary_task` / `parse_summary_path` 章节 + S1/S3/S4 结构性说明
 - [ ] P3（可选，Design §5.2 Step 3 承诺）：LLM prompt autogen（`use_case_register` 传 event_types + description → 调 vLLM 生成 prompt.md 骨架）
-- [ ] P1（可选，Design §5.2 承诺）：默认 evaluator 反推 —— 把 `child_safety` / `parking_safety` 从 override 迁回 `defaultRuleEvaluator + rules dict`，兑现"零 Python"承诺
+- [ ] P3（可选）：`smartbuilding_use_case_wizard` MCP tool（agent 交互式）
+- [ ] P3（可选）：Prompt lint tool（静态检 `A|B|C` / code fence）

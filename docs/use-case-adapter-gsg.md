@@ -1083,7 +1083,8 @@ jq -n \
         prompt_text: $pt,
         schema_extensions: [
           { name: "pet_zone", type: "text", required: false }
-        ]
+        ],
+        persist: true
       }
     }
   }' | curl -s -X POST http://localhost:3100/mcp \
@@ -1092,6 +1093,12 @@ jq -n \
         --data-binary @- \
      | grep "^data:" | head -1 | sed 's/^data: //' | jq '.result.content[0].text | fromjson'
 ```
+
+> **`persist: true`** — 让 tool 用 yaml Document API 把 use case 条目写回
+> `config.yaml.example`，注释和字段顺序保留。这样 MCP 重启后 use case 依然
+> 在磁盘 config 里；引用它的 monitor 也能在重启后继续加载。
+> 前提：MCP 启动时用了 `--config <path>` 参数。若省略 `persist` 参数，只改
+> 内存（`steps.config_yaml: "skipped"` 会出现在返回体里）。
 
 **期望输出**（关键字段）：
 
@@ -1104,6 +1111,7 @@ jq -n \
     "schema": { "added": ["video_summary_tasks.pet_zone"], "warnings": [] },
     "vlm_task": "registered",
     "use_case_dict": "added",
+    "config_yaml": "written",
     "validate": {
       "valid": true,
       "use_case": "pet_safety",
@@ -1122,6 +1130,7 @@ jq -n \
 
 如果 `pet_zone` 列已经存在（例如你重跑），`schema.added` 会是空数组；如果 task
 已经注册过，`vlm_task` 会是 `"updated"`（自动走了 PATCH 分支）。
+`config_yaml: "written"` 表示 `config.yaml.example` 已同步落盘（配了 `persist:true` 且 MCP 启动时带了 `--config`）；不传 `persist:true` 或 MCP 未带 `--config` 时值为 `"skipped"`。
 
 #### 步骤 C — 加 monitor 并让它开始跑
 
