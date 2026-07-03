@@ -1,12 +1,20 @@
 # Use Case Adapter Validation Log — high_altitude_safety
 
-**日期**: 2026-07-01
+**日期**: 2026-07-01（原始验证）· 2026-07-03（VLM stack 路径更新）
 **负责人**: Jie
 **目的**: 用真实生成的视频 + 真实 VLM 服务，端到端验证 use case adapter 框架
 是否达到 design §5 声称的"零代码、纯配置驱动"的用户友好目标。选择"高空抛物"作为
 测试 case，因为它涉及**新 schema 字段**（`motion_direction`）+**新 rules 语义**
 （`requireDirection`）+**新 cooldown 配置**（30s vs 默认 60s），能全面检验框架
 的可扩展性。
+
+> **2026-07-03 路径更新**：原始验证跑在 `agent-ai.smarthome/start-video-summary-service/end2end`
+> 那套旧 stack 上，容器名是 `end2end-multilevel-video-understanding-1`、host 数据
+> 目录是 `~/.openclaw/smarthome-demo/data`。现在 VLM 已迁到本仓的
+> `smart-community/docker/multilevel-video-understanding/`，容器名变成
+> `multilevel-video-understanding-1`、host 数据目录变成 `${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}`。
+> 下面 §2.2 / §2.3 / §3 里的命令已经改到新 stack；4.x 章节的历史 log 保留原文（仅
+> 供参考"当时"的现象）。参考 [vlm-integration-gsg.md](../vlm-integration-gsg.md) 起 VLM。
 
 ---
 
@@ -44,15 +52,19 @@
 | VSA | `:8999` | 本次不涉及（跳过 motion 层，直接手工塞 DB） |
 | MCP server | `:3100 / :3101` | 每次测试起干净 data dir |
 
-### 2.2 启动 VLM
+### 2.2 启动 VLM（**2026-07-03 更新：迁到 smart-community/docker**）
 
 ```bash
-cd /home/user/jie/smarthome/agent-ai.smarthome/start-video-summary-service/end2end
+cd /home/user/jie/smarthome/smart-community/docker/multilevel-video-understanding
 source set_env.sh                            # 关键：docker compose 需要环境变量
 docker compose up -d
 docker ps --format "table {{.Names}}\t{{.Status}}"
-# 等两个容器都 healthy
+# 等 vllm-ipex-serving-1 + multilevel-video-understanding-1 两个容器都 healthy
 ```
+
+> 若之前跑过旧 stack `agent-ai.smarthome/start-video-summary-service/end2end`，
+> 需要先到那个目录 `source set_env.sh && docker compose down` 停掉，否则端口
+> 8192 / 41091 会占用。详见 [vlm-integration-gsg.md](../vlm-integration-gsg.md)。
 
 ### 2.3 关联文件
 
@@ -111,17 +123,29 @@ curl -sS -X PATCH http://localhost:8192/v1/tasks/${TASK} \
   --data-binary @/tmp/register-${UC}.json | jq '.description'
 ```
 
-### Step 2 — 拷视频到 VLM 容器可访问目录
+### Step 2 — 拷视频到 VLM 容器可访问目录（**2026-07-03 更新：路径变了**）
+
+新 stack 容器 mount 的是 `${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}` →
+容器内 `/data`。容器名从 `end2end-multilevel-video-understanding-1` 改为
+`multilevel-video-understanding-1`。
 
 ```bash
-mkdir -p ~/.openclaw/smarthome-demo/data/test-videos/high_altitude
-cp /home/user/jie/smarthome/smart-community/building-throwing-2.mp4 \
-   ~/.openclaw/smarthome-demo/data/test-videos/high_altitude/
+export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
+
+mkdir -p "$SMARTBUILDING_DATA_DIR/test-videos/high_altitude"
+cp /home/user/jie/smarthome/smart-community/demo-videos/cam_ha_test/building-throwing-2.mp4 \
+   "$SMARTBUILDING_DATA_DIR/test-videos/high_altitude/"
 
 # 校验容器内路径
-docker exec end2end-multilevel-video-understanding-1 \
+docker exec multilevel-video-understanding-1 \
   ls /data/test-videos/high_altitude/
 ```
+
+> 关键 invariant：三方 host 目录必须一致 —— MCP 端 `SMARTBUILDING_DATA_DIR` +
+> `docker/multilevel-video-understanding/set_env.sh` 里同名变量 +
+> `config.yaml.example` 的 `summary_service.path_remap.host_prefix`。任一处不
+> 一致，容器内 `/data/test-videos/...` 读不到（`/v1/summary` 返 400
+> `Local file not found`）。
 
 ### Step 3 — 打样 VLM 输出
 
@@ -384,7 +408,8 @@ schema extension 列被剥离**。修复：rule_eval **直接查 raw SQLite row*
 
 ## 视频参数
 
-`/home/user/jie/smarthome/smart-community/false-parking.mp4`
+`/home/user/jie/smarthome/smart-community/demo-videos/cam_parking/false-parking.mp4`
+（2026-07-03 起统一收纳到 `demo-videos/<monitor_id>/`）
 - 4.02s / 1280×720 / 60fps / h264 / 4.3 MB
 
 ## 一次成型（Round 4 经验直接复用）

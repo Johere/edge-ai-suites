@@ -49,7 +49,7 @@
 │                                               │ (c) HTTP     │
 │  ┌────────────────────────────────────────────▼───────────┐   │
 │  │ multilevel-video-understanding :8192                    │   │
-│  │ (agent-ai.smarthome 仓，Docker compose 起两个容器)     │   │
+│  │ (smart-community/docker/, Docker compose 起两个容器)   │   │
 │  │  - VLM 推理                                            │   │
 │  │  - Dynamic Task Registry                               │   │
 │  └────────────────────────────────────────────────────────┘   │
@@ -132,24 +132,30 @@ smart-community MCP server 独立跑，两边通过 HTTP 联调。
 
 ### 3.1 起底层服务（VLM + vLLM）
 
+**2026-07-03 更新**：VLM stack 从 `agent-ai.smarthome/start-video-summary-service/end2end`
+迁到 `smart-community/docker/multilevel-video-understanding/`；容器名从
+`end2end-*` 改为 `<service>-1`。旧 stack 起过的话需要先 `docker compose down`
+腾出端口 8192 / 41091。
+
 ```bash
-# 从 agent-ai.smarthome 起 VLM 服务（依赖 vLLM）
-cd /home/user/jie/smarthome/agent-ai.smarthome/start-video-summary-service/end2end
+# 从 smart-community 起 VLM 服务（依赖 vLLM）
+cd /home/user/jie/smarthome/smart-community/docker/multilevel-video-understanding
 source set_env.sh
 docker compose up -d
 
 # 等所有容器 healthy
 docker ps --format "table {{.Names}}\t{{.Status}}"
 # 期望：
-# end2end-multilevel-video-understanding-1   Up X seconds (healthy)
-# end2end-vllm-ipex-serving-1                Up X seconds (healthy)
+# multilevel-video-understanding-1   Up X seconds (healthy)
+# vllm-ipex-serving-1                Up X seconds (healthy)
 
 # 健康检查
-curl -sS http://localhost:8192/v1/health && echo OK
+curl -sS http://localhost:8192/v1/tasks | jq '.tasks|length'   # 期望 ≥6 builtin
 curl -sS http://localhost:41091/v1/models | head
 ```
 
-首次 FP8 编译 3-20 min，之后重启只要 30-60s。
+首次 FP8 编译 3-20 min，之后重启只要 30-60s。详细起停 / dynamic task 注册见
+[vlm-integration-gsg.md](../vlm-integration-gsg.md)。
 
 ### 3.2 起 VSA（可选，如果要真实 RTSP 联调）
 
@@ -300,19 +306,19 @@ curl -sS -X POST http://localhost:3100/mcp \
 
 | # | 服务 | 端口 | 起自 | 用途 |
 |---|------|------|------|------|
-| 1 | mediamtx | 8554 | agent-ai.smarthome/scripts | RTSP 服务器 |
-| 2 | ffmpeg RTSP pusher | — | 手工 / 脚本 | 把 mp4 推成 RTSP |
-| 3 | VSA | 8999 | smart-community/videostream-analytics | 动态视频源管理 + prefilter |
-| 4 | vLLM | 41091 | agent-ai.smarthome docker | LLM 推理后端 |
-| 5 | multilevel-video-understanding | 8192 | 同上 docker | VLM 视频摘要 |
-| 6 | MCP server | 3100 / 3101 | smart-community | tool 分发 + task-poller + rule engine |
+| 1 | mediamtx | 8554 | `smart-community/demo-videos/start-streams.sh`（内嵌起停）| RTSP 服务器 |
+| 2 | ffmpeg RTSP pusher | — | 同上 script | 把 mp4 推成 RTSP |
+| 3 | VSA | 8999 | `smart-community/videostream-analytics` | 动态视频源管理 + prefilter |
+| 4 | vLLM | 41091 | `smart-community/docker/multilevel-video-understanding/` | LLM 推理后端 |
+| 5 | multilevel-video-understanding | 8192 | 同上 docker（同一 compose）| VLM 视频摘要 |
+| 6 | MCP server | 3100 / 3101 | `smart-community/packages/mcp-server` | tool 分发 + task-poller + rule engine |
 | 7 | MCP client | — | Claude Desktop / Inspector | 用户交互 |
 
 ### 4.3 最小联调步骤（单 use case: parking_safety）
 
 ```bash
-# 1. 起底层
-cd /home/user/jie/smarthome/agent-ai.smarthome/start-video-summary-service/end2end
+# 1. 起底层（2026-07-03 更新：VLM 迁到 smart-community/docker）
+cd /home/user/jie/smarthome/smart-community/docker/multilevel-video-understanding
 source set_env.sh && docker compose up -d
 
 # 2. 注册 VLM task（一次性）
@@ -343,7 +349,7 @@ curl -sS -X POST http://localhost:3100/mcp \
     }}}'
 
 # 6. 推流触发 pipeline
-ffmpeg -re -stream_loop -1 -i false-parking.mp4 \
+ffmpeg -re -stream_loop -1 -i demo-videos/cam_parking/false-parking.mp4 \
   -c copy -f rtsp rtsp://localhost:8554/live/parking &
 
 # 7. 观察 alerts

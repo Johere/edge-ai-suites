@@ -6,9 +6,9 @@
 |---|---|---|---|---|---|
 | 1 | SmartBuilding Video MCP Server | Jiaojiao | WW24–WW28 | In progress | WW24 完成 monorepo + 8 tools + 4 resources + DB + 测试框架 (82/82 pass)；WW25 推 MCP Server 主链路 |
 | 2 | Agent Framework Adapter | Jiaojiao | WW29–WW30 | Not started | 含 wrapper + OpenClaw plugin |
-| 3 | Use Case Adapter | Jie | WW28–WW31 | Not started | wrapper + register new use case + 自定义 post-proc |
+| 3 | Use Case Adapter | Jie | WW28–WW31 | **In progress (集成测试全 pass)** | wrapper + register new use case + 自定义 post-proc；WW27 提前完成 5 UC adapter；WW28 完成 `smartbuilding_use_case_register` tool + 零重启注册 + Phase 2/3/4 集成测试 |
 | 4 | SmartBuilding Video Skills & Workspace | Jiaojiao | WW31–WW32 | Not started | smartbuilding-toolkit / video-understanding skill 调优 + 3 个 assistant workspace |
-| 5 | Video Stream Analytics Microservice | Jie | WW24–WW27 | In progress | 微服务结构、motion + NPU prefilter 已迁移完成；动态视频源管理 WW27 收尾 |
+| 5 | Video Stream Analytics Microservice | Jie | WW24–WW27 | **Done (联调集成中)** | 微服务结构、motion + NPU prefilter、动态视频源管理全部完成；顶层 roi block + segment.max_duration 重命名（§24.1）；status webhook 与 MCP 端 events-endpoint 已对齐 |
 | 6 | Multi-level Video Understanding Microservice | Jiaojiao | WW25, WW27 | Not started | Caption only + Dynamic Task |
 | 7 | Integration & Documents | Jiaojiao + Jie + Zhonghua | WW31–WW32 | Not started | 联调 + bug fix + E2E validation + 用户文档 |
 
@@ -65,9 +65,9 @@
 
 | # | Task | Effort | Schedule | Status |
 |---|------|--------|----------|--------|
-| 4 | Register new use case | 2W | WW28–WW29 | Not started |
-| 5 | Use case adapter wrapper | 1W | WW30 | Not started |
-| 6 | Customize post-proc (summary-parser / rule engine) | 1W | WW31 | Not started |
+| 4 | Register new use case | 2W | WW28–WW29 | **Done (提前，WW27)** — `smartbuilding_use_case_register` MCP tool 实现 + schema hot-ALTER + VLM POST /v1/tasks + useCaseDict inject + validate 复核；用户指南 [gsg §10](../use-case-adapter-gsg.md#10-零重启动态注册新-use-case)；手动验证单 [use-case-register-verification.md](./use-case-register-verification.md) |
+| 5 | Use case adapter wrapper | 1W | WW30 | **Done (WW26)** — parseSummaryFields + evaluateWithOverride + on_task_completed 三种 Python callback 全通 |
+| 6 | Customize post-proc (summary-parser / rule engine) | 1W | WW31 | **Done (WW26)** — `parse_summary.py` / `evaluate_rules.py` / `on_task_completed.py` 三层 override 全通；见 [gap-analysis §5.3](./use-case-adapter-gap-analysis.md) 逐项对照 |
 
 ---
 
@@ -230,9 +230,42 @@
 - [ ] Dynamic video source management：register/unregister/pause/resume/pipeline hot-update API 已实现并联通 `SourceManager`，剩余 health monitoring + recovery_strategy (retry/pause/remove) 自动恢复路径联调
 - [ ] `recovery_strategy: remove` 自动注销 + unhealthy 事件投递（`sources/{id}` 状态变更广播）
 
+### Done (WW27 cont. — 2026-07-03)
+
+**Use Case Adapter 提前完成 + 集成测试全 pass**
+
+- [x] `smartbuilding_use_case_register` MCP tool（Design §5.2 P2 gap）：一次调用完成 schema ALTER + VLM `POST /v1/tasks`（409 → PATCH）+ 内存 `useCaseDict` 注入 + `useCaseValidate` 复核；零重启加 use case
+- [x] `parseMarkdownSections` 段名正则 `[A-Z_]+` → `[A-Z0-9_]+`（不然 `T_MINUS_1_PROMPT` 段名匹配不到，会被吞进 LOCAL_PROMPT）
+- [x] `evaluateWithOverride` 加 execFile `timeout: 10_000`（跟 `parseSummary` / `runOnTaskCompleted` 对齐，避免 broken override 挂死 rule_eval）
+- [x] `events-endpoint.ts` 加 `case "status"` 支持 VSA status webhook（选项 A 静默吞 200，不落 DB）
+- [x] `config.yaml.example` schema 里 `severity` 改 `required: false`（避免 elder_wakeup 天然不产 severity 造成 warn 噪声）
+
+**集成测试 3 阶段全 pass**（详见 [smarthome_arch2_dev.md §26](/home/user/jie/smarthome/agent-ai.smarthome/docs/smarthome_new_arch/smarthome_arch2_dev.md)）
+
+- Phase 2：基线 U1-U10（3 内置 UC + cooldown），全 pass
+- Phase 3：U11 (HA) + U12 (Parking) 扩展 case（4/4 pass；rule_eval 手塞 task 路径绕过 VSA motion 对 5s loop 短视频不触发问题）
+- Phase 4：`smartbuilding_use_case_register` §0-§6 完整跑（`pet_safety` 零重启注册，alertMessage `zone=sofa` 拼接生效）
+
+**跨模块改动**（我在 vsa + adapter 集成时改了 MCP owner 领地代码，见 [integration-status.md §A](./integration-status.md)）
+
+- `packages/mcp-server/src/events-endpoint.ts` — `type: "status"` 支持
+- `packages/mcp-server/src/tools.ts` — 注册 `smartbuilding_use_case_register` tool
+- `packages/tools/src/rule-engine/index.ts` — execFile timeout
+- `packages/tools/src/use-case-register.ts` — 新建 useCaseRegister 函数
+- `docs/smart_community_mcp_gsg.md` — 补齐 §0 VLM 启动 + §6 完整 config 示例 + §7 10 tool 表
+
+**发现并记录的上游 bug**
+
+- Issue #1（integration-status.md）：`multilevel-video-understanding` `/v1/summary` 不指定 method 时 fallback 到非法 enum.name（下划线 vs 连字符）→ 手工 curl 打样必须显式传 `method: "SIMPLE"`
+
 ### Next Steps (WW28+)
 
-- [ ] WW28–WW29：Use Case Adapter — register new use case 主流程（schema 校验、prompt autogen 入口、持久化到配置）
-- [ ] WW30：Use Case Adapter wrapper（统一对外 API，对接 MCP Server `use_case_register` tool）
-- [ ] WW31：Customize post-proc — summary parser + rule engine override 路径
-- [ ] 与 Jiaojiao 联调 MCP Server 的 events webhook → pending task → VLM → rule eval → alert 链路
+- [x] WW28–WW29：Use Case Adapter — register new use case 主流程（本 WW27 提前完成）
+- [x] WW30：Use Case Adapter wrapper（本 WW26 已完成）
+- [x] WW31：Customize post-proc — summary parser + rule engine override 路径（本 WW26 已完成）
+- [x] 与 Jiaojiao 联调 MCP Server 的 events webhook → pending task → VLM → rule eval → alert 链路（本 WW27 集成测试 3 阶段全 pass）
+- [ ] WW28+：跟 jiaojiao 沟通 5 项跨模块改动（integration-status.md §A）—— review 决定是否合并 / 迁移
+- [ ] WW28+：与上游 `edge-ai-libraries/multilevel-video-understanding` 沟通 Issue #1（method fallback bug）
+- [ ] P1（可选，Design §5.2 兑现）：`smartbuilding_use_case_register` 加 `persist: true` 参数，写回 `config.yaml.example` 让重启不丢
+- [ ] P3（可选，Design §5.2 Step 3 承诺）：LLM prompt autogen（`use_case_register` 传 event_types + description → 调 vLLM 生成 prompt.md 骨架）
+- [ ] P1（可选，Design §5.2 承诺）：默认 evaluator 反推 —— 把 `child_safety` / `parking_safety` 从 override 迁回 `defaultRuleEvaluator + rules dict`，兑现"零 Python"承诺
