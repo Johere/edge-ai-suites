@@ -352,6 +352,12 @@ export function registerTools(
       overwrite: z.boolean().optional().describe(
         "When true, replace an existing use_case entry. Default false."
       ),
+      persist: z.boolean().optional().describe(
+        "When true, mirror the mutation to the config.yaml the server was booted from " +
+        "(comment-preserving via yaml.Document). Requires MCP server to have been started " +
+        "with --config <path>. Failure to write only produces a warning; in-memory " +
+        "registration still stands."
+      ),
     },
   }, async (params) => {
     try {
@@ -362,6 +368,7 @@ export function registerTools(
         schema: config.schema,
         summaryServiceUrl: config.summaryService.url,
         db: (db as any).db,
+        configPath: config.configPath,
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],

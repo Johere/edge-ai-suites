@@ -70,6 +70,14 @@ export interface UseCaseConfig {
 }
 
 export interface ServerConfig {
+  /**
+   * Absolute path to the config.yaml the server was booted from. Present when
+   * `--config <path>` was passed on the command line. Consumed by tools that
+   * need to write back to the same file (e.g. `smartbuilding_use_case_register`
+   * with `persist: true`). Undefined when booted without --config.
+   */
+  configPath?: string;
+
   // Derived from SMARTBUILDING_DATA_DIR — not settable in config.yaml
   dataDir: string;        // root: ~/.mcp-smartbuilding (or $SMARTBUILDING_DATA_DIR)
   dbPath: string;         // dataDir/smartbuilding.db
@@ -140,6 +148,7 @@ export function loadConfig(configPath?: string): ServerConfig {
   }
 
   return {
+    configPath: configPath ? resolve(configPath) : undefined,
     dataDir,
     dbPath: join(dataDir, "smartbuilding.db"),
     segmentsDir: join(dataDir, "segments"),

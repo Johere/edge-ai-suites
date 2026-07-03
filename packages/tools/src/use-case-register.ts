@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import { parseDocument, isMap } from "yaml";
 import { SchemaManager, type SchemaDefinition, type SchemaExtension } from "@smartbuilding-video/db";
 import type { UseCaseValidateResult } from "./use-case-validate.js";
 import { useCaseValidate } from "./use-case-validate.js";
@@ -16,6 +18,14 @@ export interface UseCaseRegisterParams {
   prompt_text?: string;
   schema_extensions?: SchemaExtension[];
   overwrite?: boolean;
+  /**
+   * When true, mirror the mutation to `deps.configPath` on disk (comment-
+   * preserving via yaml.Document). Requires deps.configPath to be set.
+   * Failure writing does NOT fail the whole call — it is surfaced as a
+   * warning + `steps.config_yaml: "skipped"` so the in-memory registration
+   * still stands.
+   */
+  persist?: boolean;
 }
 
 export interface UseCaseRegisterDeps {
@@ -23,6 +33,12 @@ export interface UseCaseRegisterDeps {
   schema?: SchemaDefinition;
   summaryServiceUrl: string;
   db: any;
+  /**
+   * Absolute path to the config.yaml the server was booted from. Required
+   * when the caller passes `persist: true`. When undefined, persist requests
+   * degrade to `steps.config_yaml: "skipped"` with a warning.
+   */
+  configPath?: string;
 }
 
 export interface UseCaseRegisterResult {
@@ -37,6 +53,7 @@ export interface UseCaseRegisterResult {
       warnings: string[];
     };
     validate?: UseCaseValidateResult;
+    config_yaml?: "written" | "removed" | "skipped";
   };
   warnings: string[];
   errors: string[];
@@ -153,6 +170,15 @@ export async function useCaseRegister(
   deps.useCaseDict[params.use_case] = entry;
   result.steps.use_case_dict = alreadyExists ? "updated" : "added";
 
+  if (params.persist) {
+    result.steps.config_yaml = persistUseCaseDictEntry(
+      deps.configPath,
+      params.use_case,
+      entry,
+      result.warnings,
+    );
+  }
+
   try {
     result.steps.validate = await useCaseValidate(
       { use_case: params.use_case },
@@ -215,8 +241,54 @@ async function unregister(
   delete deps.useCaseDict[params.use_case];
   result.steps.use_case_dict = "removed";
 
+  if (params.persist) {
+    result.steps.config_yaml = persistUseCaseDictEntry(
+      deps.configPath,
+      params.use_case,
+      null,
+      result.warnings,
+    );
+  }
+
   result.ok = true;
   return result;
+}
+
+/**
+ * Mirror an in-memory use_case_dict mutation to `configPath` on disk.
+ * Uses yaml.Document API so comments and field ordering are preserved.
+ * `entry === null` → deleteIn (unregister). Non-throwing: on any error,
+ * pushes to warnings and returns "skipped".
+ */
+function persistUseCaseDictEntry(
+  configPath: string | undefined,
+  useCase: string,
+  entry: Record<string, unknown> | null,
+  warnings: string[],
+): "written" | "removed" | "skipped" {
+  if (!configPath) {
+    warnings.push("persist requested but configPath is unset (server booted without --config?); skipped");
+    return "skipped";
+  }
+  try {
+    const raw = readFileSync(configPath, "utf-8");
+    const doc = parseDocument(raw);
+    // Ensure `use_case_dict:` top-level key exists as a mapping.
+    const existing = doc.get("use_case_dict");
+    if (!existing || !isMap(existing)) {
+      doc.set("use_case_dict", doc.createNode({}));
+    }
+    if (entry === null) {
+      doc.deleteIn(["use_case_dict", useCase]);
+    } else {
+      doc.setIn(["use_case_dict", useCase], entry);
+    }
+    writeFileSync(configPath, doc.toString(), "utf-8");
+    return entry === null ? "removed" : "written";
+  } catch (err: any) {
+    warnings.push(`persist to ${configPath} failed: ${err.message}`);
+    return "skipped";
+  }
 }
 
 async function registerVlmTask(
