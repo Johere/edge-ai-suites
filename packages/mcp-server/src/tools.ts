@@ -379,6 +379,33 @@ export function registerTools(
     }
   });
 
+  // --- smartbuilding_video_summary_task ---
+  server.registerTool("smartbuilding_video_summary_task", {
+    description:
+      "Manage VLM tasks registered in multilevel-video-understanding via /v1/tasks. " +
+      "action=list: return all tasks with source (builtin|dynamic) + description. " +
+      "action=get: fetch full body of one task (4-const prompt content, description, source). " +
+      "action=delete: remove a dynamic task (builtins are immutable — request is acknowledged with a warning). " +
+      "Registration + prompt updates live in smartbuilding_use_case_register; this tool covers the remaining read / drop actions.",
+    inputSchema: {
+      action: z.enum(["list", "get", "delete"]).describe("list | get | delete"),
+      task_name: z.string().optional().describe("VLM task name (required for get / delete; ignored for list)"),
+    },
+  }, async (params) => {
+    try {
+      const { videoSummaryTask } = await import("@smartbuilding-video/tools");
+      const result = await videoSummaryTask(params as any, {
+        summaryServiceUrl: config.summaryService.url,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        isError: !result.ok,
+      };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  });
+
   // --- smartbuilding_rule_eval ---
   server.registerTool("smartbuilding_rule_eval", {
     description: "Manually re-run the rule evaluator against a completed task (defaults to the " +

@@ -51,6 +51,12 @@ export type {
   UseCaseRegisterDeps,
   UseCaseRegisterResult,
 } from "./use-case-register.js";
+export { videoSummaryTask } from "./video-summary-task.js";
+export type {
+  VideoSummaryTaskParams,
+  VideoSummaryTaskDeps,
+  VideoSummaryTaskResult,
+} from "./video-summary-task.js";
 export { ruleEval } from "./rule-eval.js";
 export type { RuleEvalParams, RuleEvalDeps, RuleEvalResult } from "./rule-eval.js";
 export { stateQuery } from "./state-query.js";
