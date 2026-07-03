@@ -3,9 +3,13 @@ import { parseDocument, isMap } from "yaml";
 import { SchemaManager, type SchemaDefinition, type SchemaExtension } from "@smartbuilding-video/db";
 import type { UseCaseValidateResult } from "./use-case-validate.js";
 import { useCaseValidate } from "./use-case-validate.js";
+import {
+  generatePrompt,
+  type PromptAutogenEventType,
+} from "./prompt-autogen.js";
 
 export interface UseCaseRegisterParams {
-  action: "register" | "unregister";
+  action: "register" | "unregister" | "generate_prompt";
   use_case: string;
   video_summary_task?: string;
   description?: string;
@@ -18,6 +22,13 @@ export interface UseCaseRegisterParams {
   prompt_text?: string;
   schema_extensions?: SchemaExtension[];
   overwrite?: boolean;
+  /**
+   * Only used by `action=generate_prompt`. Semantic input triples that the
+   * autogen meta-prompt turns into a `## LOCAL_PROMPT` draft.
+   */
+  event_types?: PromptAutogenEventType[];
+  /** Output language for autogen. Default `"zh"`. */
+  language?: "zh" | "en";
   /**
    * When true, mirror the mutation to `deps.configPath` on disk (comment-
    * preserving via yaml.Document). Requires deps.configPath to be set.
@@ -39,10 +50,17 @@ export interface UseCaseRegisterDeps {
    * degrade to `steps.config_yaml: "skipped"` with a warning.
    */
   configPath?: string;
+  /**
+   * vllm-serving-ipex base URL (e.g. `http://localhost:41091/v1`). Required
+   * for `action=generate_prompt`; ignored by register / unregister.
+   */
+  vlmUrl?: string;
+  /** vLLM model name for autogen. Default `"default"`. */
+  vlmModel?: string;
 }
 
 export interface UseCaseRegisterResult {
-  action: "register" | "unregister";
+  action: "register" | "unregister" | "generate_prompt";
   use_case: string;
   ok: boolean;
   steps: {
@@ -55,6 +73,10 @@ export interface UseCaseRegisterResult {
     validate?: UseCaseValidateResult;
     config_yaml?: "written" | "removed" | "skipped";
   };
+  /** Only present for `action=generate_prompt`. Draft `## LOCAL_PROMPT` text. */
+  generated_prompt?: string;
+  /** Only present for `action=generate_prompt`. Next-step hints. */
+  next_steps?: string[];
   warnings: string[];
   errors: string[];
 }
@@ -85,6 +107,10 @@ export async function useCaseRegister(
   if (!params.use_case || !TASK_NAME_RE.test(params.use_case)) {
     result.errors.push(`use_case "${params.use_case}" must match ${TASK_NAME_RE}`);
     return result;
+  }
+
+  if (params.action === "generate_prompt") {
+    return await generatePromptAction(params, deps, result);
   }
 
   if (params.action === "unregister") {
@@ -251,6 +277,51 @@ async function unregister(
   }
 
   result.ok = true;
+  return result;
+}
+
+async function generatePromptAction(
+  params: UseCaseRegisterParams,
+  deps: UseCaseRegisterDeps,
+  result: UseCaseRegisterResult,
+): Promise<UseCaseRegisterResult> {
+  if (!deps.vlmUrl) {
+    result.errors.push(
+      "generate_prompt requires vlm_service to be configured (deps.vlmUrl missing)",
+    );
+    return result;
+  }
+  if (!params.description) {
+    result.errors.push("description is required for action=generate_prompt");
+    return result;
+  }
+  if (!Array.isArray(params.event_types) || params.event_types.length === 0) {
+    result.errors.push("event_types must be a non-empty array for action=generate_prompt");
+    return result;
+  }
+
+  const autogenResult = await generatePrompt(
+    {
+      use_case: params.use_case,
+      description: params.description,
+      event_types: params.event_types,
+      schema_extensions: params.schema_extensions?.map((s) => ({
+        name: s.name,
+        type: s.type,
+        required: s.required,
+      })),
+      language: params.language,
+    },
+    { vlmUrl: deps.vlmUrl, model: deps.vlmModel },
+  );
+
+  result.warnings.push(...autogenResult.warnings);
+  result.errors.push(...autogenResult.errors);
+  if (autogenResult.ok) {
+    result.generated_prompt = autogenResult.generated_prompt;
+    result.next_steps = autogenResult.next_steps;
+    result.ok = true;
+  }
   return result;
 }
 
