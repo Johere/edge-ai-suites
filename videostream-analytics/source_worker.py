@@ -17,6 +17,7 @@ from shared.config import (
     MotionConfig,
     SegmentConfig,
     PrefilterConfig,
+    RoiConfig,
     RecordingConfig,
     HealthConfig,
     KeepaliveConfig,
@@ -171,6 +172,7 @@ class SourceManager:
         motion: MotionConfig | None = None,
         segment: SegmentConfig | None = None,
         prefilter: PrefilterConfig | None = None,
+        roi: RoiConfig | None = None,
         recording: RecordingConfig | None = None,
         health: HealthConfig | None = None,
     ) -> dict[str, Any]:
@@ -184,6 +186,7 @@ class SourceManager:
             motion=motion,
             segment=segment,
             prefilter=prefilter,
+            roi=roi,
             health=health,
         )
         bundle.pipeline.start()

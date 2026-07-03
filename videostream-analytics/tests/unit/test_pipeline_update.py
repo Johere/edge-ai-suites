@@ -55,9 +55,9 @@ class TestPipelineUpdateConfig:
 
     def test_update_segment_config(self):
         pipeline = make_pipeline()
-        new_segment = SegmentConfig(interval=5.0, min_duration=2.0)
+        new_segment = SegmentConfig(max_duration=5.0, min_duration=2.0)
         pipeline.update_pipeline_config(segment=new_segment)
-        assert pipeline._segment_cfg.interval == 5.0
+        assert pipeline._segment_cfg.max_duration == 5.0
         assert pipeline._segment_cfg.min_duration == 2.0
         assert pipeline.source.segment == new_segment
 
@@ -146,6 +146,7 @@ class TestSourceManagerUpdate:
             motion=MotionConfig(diff_threshold=50),
             segment=None,
             prefilter=None,
+            roi=None,
             health=None,
         )
         # SourceManager.update_pipeline_config now also accepts `recording=`
@@ -170,7 +171,7 @@ class TestSourceManagerUpdate:
 
         manager.update_pipeline_config(
             source_id="cam1",
-            segment=SegmentConfig(interval=5.0),
+            segment=SegmentConfig(max_duration=5.0),
         )
 
         calls = instance.method_calls

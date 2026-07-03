@@ -25,6 +25,7 @@ from shared.config import (
     MotionConfig,
     SegmentConfig,
     PrefilterConfig,
+    RoiConfig,
     HealthConfig,
     SourceConfig,
     DefaultsConfig,
@@ -61,6 +62,7 @@ class StreamPipeline(BaseMonitor):
         self._segment_cfg = source.segment or defaults.segment
         self._recording_cfg = source.recording or defaults.recording
         self._prefilter_cfg = source.prefilter or defaults.prefilter
+        self._roi_cfg = source.roi or defaults.roi
         self._health_cfg = source.health or defaults.health
 
         # `data_dir` is already the per-source root (resolved by SourceManager).
@@ -142,6 +144,7 @@ class StreamPipeline(BaseMonitor):
                     target_classes=self._prefilter_cfg.target_classes,
                     min_confidence=self._prefilter_cfg.min_confidence,
                     device=self._prefilter_cfg.device,
+                    long_side=self._prefilter_cfg.long_side,
                 )
                 self._prefilter = FramePrefilter(
                     yolo=yolo,
@@ -157,6 +160,7 @@ class StreamPipeline(BaseMonitor):
         motion: MotionConfig | None = None,
         segment: SegmentConfig | None = None,
         prefilter: PrefilterConfig | None = None,
+        roi: RoiConfig | None = None,
         health: HealthConfig | None = None,
     ):
         """Update pipeline configuration. Caller must stop/start for changes to take effect."""
@@ -170,6 +174,9 @@ class StreamPipeline(BaseMonitor):
             self._prefilter_cfg = prefilter
             self.source.prefilter = prefilter
             self._init_prefilter()
+        if roi:
+            self._roi_cfg = roi
+            self.source.roi = roi
         if health:
             self._health_cfg = health
             self.source.health = health
@@ -398,13 +405,13 @@ class StreamPipeline(BaseMonitor):
     def _should_split_segment(self) -> bool:
         """Return True when the active prefilter wants an early segment cut.
 
-        Honors `pipeline.prefilter.roi_crop.auto_split_area`. With value <=0 or
-        roi_crop disabled, never splits.
+        Honors `pipeline.roi.auto_split_area`. With value <=0 or roi disabled,
+        never splits.
         """
         if self._prefilter is None:
             return False
-        roi_cfg = getattr(self._prefilter_cfg, "roi_crop", None)
-        if roi_cfg is None or not roi_cfg.enabled or roi_cfg.auto_split_area <= 0:
+        roi_cfg = self._roi_cfg
+        if not roi_cfg.enabled or roi_cfg.auto_split_area <= 0:
             return False
         return self._prefilter.should_split(roi_cfg.auto_split_area)
 
@@ -441,14 +448,13 @@ class StreamPipeline(BaseMonitor):
         summary_clip_input = clip_path  # default: original clip
 
         # Phase 9: optionally produce <clip>_input.mp4 via ROI crop. Only when
-        # prefilter passed AND roi_crop is enabled AND we have a trajectory
-        # region. Failure falls back to the original clip — never raises.
-        roi_cfg = getattr(self._prefilter_cfg, "roi_crop", None)
+        # prefilter passed AND roi is enabled AND we have a trajectory region.
+        # Failure falls back to the original clip — never raises.
+        roi_cfg = self._roi_cfg
         traj = getattr(pf_result, "trajectory_region_xyxy", None) if pf_result else None
         if (
             pf_result is not None
             and pf_result.passed
-            and roi_cfg is not None
             and roi_cfg.enabled
             and traj is not None
         ):

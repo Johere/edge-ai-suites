@@ -30,7 +30,7 @@ class SegmentExtractor:
         fps: float = 15.0,
         frame_size: tuple[int, int] = (640, 480),
     ):
-        self.interval = config.interval
+        self.max_duration = config.max_duration
         self.min_duration = config.min_duration
         self.output_dir = output_dir
         self.source_id = source_id
@@ -73,7 +73,7 @@ class SegmentExtractor:
         self._frame_count += 1
 
         duration = self._frame_count / self.fps
-        if duration >= self.interval:
+        if duration >= self.max_duration:
             return self.finish()
         return None
 

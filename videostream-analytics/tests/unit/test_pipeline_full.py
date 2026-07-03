@@ -39,7 +39,7 @@ class TestFullPipeline:
         )
         defaults = DefaultsConfig(
             motion=MotionConfig(diff_threshold=25, area_ratio=0.015, stable_frames=30),
-            segment=SegmentConfig(interval=10.0, min_duration=1.0),
+            segment=SegmentConfig(max_duration=10.0, min_duration=1.0),
         )
         p = StreamPipeline(
             source=source,

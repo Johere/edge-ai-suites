@@ -18,7 +18,15 @@ class MotionConfig(BaseModel):
 
 
 class SegmentConfig(BaseModel):
-    interval: float = 10.0
+    """Segment cut-over rule.
+
+    `max_duration` — hard ceiling on segment length in seconds; when a running
+    segment reaches this, it is closed and a new one starts.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_duration: float = 10.0
     min_duration: float = 1.0
 
 
@@ -37,9 +45,10 @@ class RecordingConfig(BaseModel):
     retention_days: int = 5
 
 
-class RoiCropConfig(BaseModel):
-    """ROI crop configuration for prefilter (Phase 9, child_safety).
+class RoiConfig(BaseModel):
+    """ROI crop configuration (Phase 9, child_safety).
 
+    Top-level pipeline block, at the same nesting depth as `prefilter`.
     When enabled and prefilter accumulates a `trajectory_region_xyxy`, the
     pipeline writes a `<clip>_input.mp4` next to the original segment and
     points `summary_clip_input` there. `auto_split_area` triggers early
@@ -61,7 +70,9 @@ class PrefilterConfig(BaseModel):
     min_frames_hit: int = 2
     detect_fps: float = 2.0
     device: str = "CPU"
-    roi_crop: RoiCropConfig | None = None
+    # Long-side resize target for pre-inference frame downscaling (0 disables).
+    # Consumed by prefilter_yolo._resize_long_side when > 0.
+    long_side: int = 0
 
 
 class HealthConfig(BaseModel):
@@ -102,6 +113,7 @@ class DefaultsConfig(BaseModel):
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
     prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
+    roi: RoiConfig = Field(default_factory=RoiConfig)
     health: HealthConfig = Field(default_factory=HealthConfig)
     keepalive: KeepaliveConfig = Field(default_factory=KeepaliveConfig)
 
@@ -121,6 +133,7 @@ class SourceConfig(BaseModel):
     segment: Optional[SegmentConfig] = None
     recording: Optional[RecordingConfig] = None
     prefilter: Optional[PrefilterConfig] = None
+    roi: Optional[RoiConfig] = None
     health: Optional[HealthConfig] = None
     keepalive: Optional[KeepaliveConfig] = None
 
