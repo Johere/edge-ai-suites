@@ -71,3 +71,25 @@ monitors:
       motion: { enabled: true, diff_threshold: 25 }
       recording: { enabled: true, interval_seconds: 60 }
       segment: { max_duration: 10 }
+
+  cam_high_altitude:
+    enabled: true
+    name: "High Altitude Safety Camera"
+    source_url: rtsp://localhost:8554/live/high_altitude
+    use_case: high_altitude_safety
+    pipeline_config:
+      motion: { enabled: true, diff_threshold: 25 }
+      prefilter: { enabled: false }
+      recording: { enabled: true, interval_seconds: 60 }
+      segment: { max_duration: 10 }
+
+  cam_parking:
+    enabled: true
+    name: "Parking Safety Camera"
+    source_url: rtsp://localhost:8554/live/parking
+    use_case: parking_safety
+    pipeline_config:
+      motion: { enabled: true, diff_threshold: 25 }
+      prefilter: { enabled: false }
+      recording: { enabled: true, interval_seconds: 60 }
+      segment: { max_duration: 10 }

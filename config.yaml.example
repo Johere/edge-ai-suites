@@ -71,9 +71,13 @@ events_webhook:
 schema:
   video_summary_tasks:
     extensions:
-      - { name: "event",      type: "text", required: true }   # use-case event type
-      - { name: "severity",   type: "text", required: true }   # critical / warn / info
-      - { name: "desc",       type: "text", required: true }   # one-sentence description
+      # `event` + `desc` are used by every use case (event drives rule logic;
+      # desc is the human-readable alert message tail). `severity` is
+      # optional because time-based use cases like elder_wakeup judge by event
+      # + payload.rules alone (no severity ordering).
+      - { name: "event",      type: "text", required: true }
+      - { name: "severity",   type: "text", required: false }  # critical / warn / info — used by threshold-based UCs (child_safety / parking_safety / ...)
+      - { name: "desc",       type: "text", required: true }
       - { name: "confidence", type: "real", required: false }  # optional VLM confidence
       - { name: "motion_direction", type: "text", required: false }  # high_altitude_safety: downward | upward | horizontal | none
       - { name: "parking_zone", type: "text", required: false }        # parking_safety: fire_lane | entrance | handicapped | double_yellow_line | normal | unknown
@@ -89,7 +93,7 @@ use_case_dict:
   fridge:
     description: "Fridge content tracking"
     video_summary_task: refrigerator_monitor_en
-    # No evaluate_rules_path → defaultRuleEvaluator handles it
+    evaluate_rules_path: ./use-cases/fridge/evaluate_rules.py
     summarize:
       method: SIMPLE
       processor_kwargs:
@@ -107,6 +111,7 @@ use_case_dict:
     evaluate_rules_path: ./use-cases/child_safety/evaluate_rules.py
     rules:
       severityThreshold: warn        # "info" | "warn" | "critical" — override script fires at or above this
+      cooldownSeconds: 60            # suppress duplicate alerts within N seconds per (monitor, use_case)
     # Per-clip summarize tuning. Defaults (single LOCAL_PROMPT pass) suit most use cases;
     # override only when you need multi-level roll-up or T-1 temporal context.
     summarize:
