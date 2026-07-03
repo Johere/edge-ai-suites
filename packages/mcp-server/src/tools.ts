@@ -311,6 +311,67 @@ export function registerTools(
     }
   });
 
+  // --- smartbuilding_use_case_register ---
+  server.registerTool("smartbuilding_use_case_register", {
+    description:
+      "Dynamically add or remove a use_case at runtime without restarting the MCP server. " +
+      "action=register: (1) apply schema_extensions via ALTER TABLE (idempotent), " +
+      "(2) POST /v1/tasks to multilevel-video-understanding (auto-PATCH on 409), " +
+      "(3) inject the entry into in-memory use_case_dict so task-poller / other tools see it, " +
+      "(4) re-run use_case_validate. action=unregister: DELETE /v1/tasks/<name> and remove from use_case_dict. " +
+      "Changes are live in memory only — the caller is expected to sync config.yaml manually if persistence is needed.",
+    inputSchema: {
+      action: z.enum(["register", "unregister"]).describe("register or unregister"),
+      use_case: z.string().describe("Use case key (lowercase ascii, matches /^[a-z][a-z0-9_]{1,63}$/)"),
+      video_summary_task: z.string().optional().describe(
+        "VLM task name (default: <use_case>_monitor). Must not collide with VLM builtins."
+      ),
+      description: z.string().optional().describe("Human description shown by /v1/tasks"),
+      evaluate_rules_path: z.string().optional().describe(
+        "Path to Python evaluate_rules.py override (absolute or relative to cwd of MCP server)"
+      ),
+      on_task_completed_path: z.string().optional().describe("Path to on_task_completed.py override"),
+      parse_summary_path: z.string().optional().describe("Path to custom parse_summary.py override"),
+      rules: z.record(z.unknown()).optional().describe(
+        "Free-form rules dict passed verbatim to evaluate_rules.py at payload.rules"
+      ),
+      reports: z.record(z.unknown()).optional().describe("Report config: {data_source, default_type, filter}"),
+      summarize: z.record(z.unknown()).optional().describe("Per-clip summarize config: {method, processor_kwargs}"),
+      prompt_text: z.string().optional().describe(
+        "Full prompt text (Markdown with ## LOCAL_PROMPT sections, OR a raw 4-const Python source). " +
+        "Omit to skip VLM task registration (you'll register it out-of-band)."
+      ),
+      schema_extensions: z.array(z.object({
+        name: z.string(),
+        type: z.enum(["text", "integer", "real"]),
+        required: z.boolean(),
+      })).optional().describe(
+        "Additional video_summary_tasks columns this use_case needs (e.g. motion_direction, parking_zone). " +
+        "Applied via ALTER TABLE ADD COLUMN if missing (idempotent). Also merged into config.schema in memory."
+      ),
+      overwrite: z.boolean().optional().describe(
+        "When true, replace an existing use_case entry. Default false."
+      ),
+    },
+  }, async (params) => {
+    try {
+      const { useCaseRegister } = await import("@smartbuilding-video/tools");
+      if (!config.schema) config.schema = {};
+      const result = await useCaseRegister(params as any, {
+        useCaseDict: config.useCaseDict,
+        schema: config.schema,
+        summaryServiceUrl: config.summaryService.url,
+        db: (db as any).db,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        isError: !result.ok,
+      };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  });
+
   // --- smartbuilding_rule_eval ---
   server.registerTool("smartbuilding_rule_eval", {
     description: "Manually re-run the rule evaluator against a completed task (defaults to the " +
