@@ -651,11 +651,11 @@ DESC: 工地内 1 名工人未佩戴安全帽
 ```bash
 cd /home/user/jie/smarthome/smart-community
 mkdir -p use-cases/high_altitude_safety
-mkdir -p tests/videos/use_cases/high_altitude_safety
+mkdir -p demo-videos/cam_ha_test
 
 # 放入你生成的视频
 cp ~/Downloads/ha01_falling_object.mp4 \
-   tests/videos/use_cases/high_altitude_safety/
+   demo-videos/cam_ha_test/
 ```
 
 #### 步骤 1：创建 `evaluate_rules.py`
@@ -854,7 +854,7 @@ sleep 3
 
 # 推视频
 ffmpeg -re -stream_loop -1 \
-  -i tests/videos/use_cases/high_altitude_safety/ha01_falling_object.mp4 \
+  -i demo-videos/cam_ha_test/ha01_falling_object.mp4 \
   -c copy -f rtsp rtsp://localhost:8554/live/ha_test &
 
 sleep 60   # 让 clip 触发 + VLM 处理 + rule 判定

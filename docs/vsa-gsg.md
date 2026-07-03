@@ -331,7 +331,7 @@ docker run -d --rm --name vsa-test --network host \
 
 ```bash
 ffmpeg -re -stream_loop -1 -ss 40 \
-  -i /path/to/child_safety_demo.mp4 \
+  -i /home/user/jie/smarthome/smart-community/demo-videos/cam_child/child_safety_demo.mp4 \
   -c copy -f rtsp rtsp://localhost:8554/live/child
 ```
 
@@ -702,7 +702,7 @@ curl -i -X POST http://localhost:8999/sources/no_such/keepalive | head -5
 
 **前置条件**：NPU YOLO 模型文件（默认路径
 `/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.xml`），以及一段含
-person 的视频（如 `child_safety_demo.mp4`）。
+person 的视频（如 `demo-videos/cam_child/child_safety_demo.mp4`）。
 
 #### Step 1 — 启动支撑服务（4 个终端）
 
@@ -721,7 +721,7 @@ WEBHOOK_URL=http://localhost:9999/events \
   .venv/bin/videostream-analytics serve --config config/config.yaml
 
 # T4 ffmpeg 推流 —— 以本地 mp4 作为 RTSP 源推送给 MediaMTX
-ffmpeg -re -stream_loop -1 -i /path/to/child_safety_demo.mp4 \
+ffmpeg -re -stream_loop -1 -i /home/user/jie/smarthome/smart-community/demo-videos/cam_child/child_safety_demo.mp4 \
   -c copy -f rtsp rtsp://localhost:8554/live/child
 ```
 
@@ -936,10 +936,10 @@ bash tools/run_eval.sh --scenario child      # 仅儿童安全
 
 | 场景 | 视频 | use case 标签 |
 |---|---|---|
-| child | `videos/phase2/child-care/composed/child_safety_demo.mp4` | child_safety |
-| fridge | `videos/demo006-2_expanded.mp4` | fridge |
-| elder_day1 | `videos/phase2/elder_wakeup/composed/day1_elder_wakeup.mp4` | elder_wakeup |
-| elder_day2 | `videos/phase2/elder_wakeup/composed/day2_elder_wakeup.mp4` | elder_wakeup |
+| child | `demo-videos/cam_child/child_safety_demo.mp4` | child_safety |
+| fridge | `demo-videos/cam_fridge/demo006-2_expanded_20min_v2.mp4` | fridge |
+| elder_day1 | `demo-videos/cam_elder_bedroom/day1_elder_wakeup.mp4` | elder_wakeup |
+| elder_day2 | `demo-videos/cam_elder_bedroom_2/day2_elder_wakeup.mp4` | elder_wakeup |
 
 > "use case 标签" 仅作为评估工具内部分组，**不传给 VSA `register_source`**（Phase 7 起 VSA 注册体不再接受 `use_case` 字段，use case 归属在 MCP 端管理）。
 

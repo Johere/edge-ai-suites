@@ -240,7 +240,7 @@ json.dumps(ctx)])`, then assert on the parsed stdout.
 |----------|---------------------|-----------------|
 | `child_safety` | present | Fires when `severity ≥ severityThreshold` (default `warn`); `info`-severity clips never fire. |
 | `elder_wakeup` | present | Fires `late_wakeup` when `event=get_up` AND current local time > `expectedWakeupLocal + graceMinutes`. |
-| `fridge` | absent | Uses `defaultRuleEvaluator` (`severity ∈ {critical, warn}`); the fridge VLM prompt normally emits `info`, so alerts are suppressed. |
+| `fridge` | present | Uses `use-cases/fridge/evaluate_rules.py` no-alert stub; even if a task is manually edited to `severity=critical`, it still returns `should_alert=false`. |
 
 `rules` block defaults are documented in each `evaluate_rules.py` header and
 in [config.yaml.example](../config.yaml.example).
