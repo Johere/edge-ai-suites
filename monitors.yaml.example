@@ -80,7 +80,7 @@ monitors:
     pipeline_config:
       motion: { enabled: true, diff_threshold: 25 }
       prefilter: { enabled: false }
-      recording: { enabled: true, interval_seconds: 60 }
+      recording: { enabled: false, interval_seconds: 60, retention_days: 1 }
       segment: { max_duration: 10 }
 
   cam_parking:
@@ -91,5 +91,5 @@ monitors:
     pipeline_config:
       motion: { enabled: true, diff_threshold: 25 }
       prefilter: { enabled: false }
-      recording: { enabled: true, interval_seconds: 60 }
+      recording: { enabled: false, interval_seconds: 60, retention_days: 1 }
       segment: { max_duration: 10 }

@@ -9,6 +9,14 @@
 
 对应的用户使用指南：[use-case-adapter-gsg.md §10](../use-case-adapter-gsg.md)。
 
+**Tool 覆盖**（`smartbuilding_use_case_register` 3 个 action，本文档全部验证）：
+
+| Action | 语义 | 本文档节 |
+|---|---|---|
+| `generate_prompt` | 从 3 个语义输入让 vLLM 生成 `## LOCAL_PROMPT` 骨架（不 mutate 任何状态）| §3.0 |
+| `register` | schema ALTER + VLM POST /v1/tasks + inject useCaseDict（可选 `persist=true` 写回 config.yaml）| §3.1-§3.4 |
+| `unregister` | 反向清除（可选 `persist=true` 从 config.yaml 删条目）| §7 |
+
 ---
 
 ## 0. 环境准备
@@ -133,9 +141,92 @@ curl -sf -X POST http://localhost:3100/mcp \
 
 ---
 
+## 3.0. `action=generate_prompt`：让 vLLM 生成 prompt.md 骨架（2026-07-03 晚新增）
+
+**目的**：验证"零 prompt 手工"入口——从 3 个语义输入让 vLLM 生成 `## LOCAL_PROMPT` 骨架，不 mutate 任何状态。
+
+```bash
+curl -sS -X POST http://localhost:3100/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"smartbuilding_use_case_register",
+    "arguments":{
+      "action":"generate_prompt",
+      "use_case":"pet_safety",
+      "description":"监控家里的宠物是否处于危险状态",
+      "event_types":[
+        {"name":"pet_stuck","severity":"critical","desc":"宠物被卡住/困在狭窄处"},
+        {"name":"pet_escape","severity":"warn","desc":"宠物尝试跳门/翻窗逃跑"},
+        {"name":"pet_normal","severity":"info","desc":"宠物正常休息/玩耍/进食"},
+        {"name":"no_incident","severity":"info","desc":"画面无宠物"}
+      ],
+      "schema_extensions":[{"name":"pet_zone","type":"text","required":false}],
+      "language":"zh"
+    }}}' \
+  | grep "^data:" | head -1 | sed 's/^data: //' \
+  | jq '.result.content[0].text | fromjson | {ok, warnings, has_prompt: (.generated_prompt|length>0), preview: (.generated_prompt|.[0:500]), next_steps}'
+```
+
+**期望**：
+
+```json
+{
+  "ok": true,
+  "warnings": [],
+  "has_prompt": true,
+  "preview": "## LOCAL_PROMPT\n\n你是一个家庭宠物看护摄像头...\n\n输出示例 1 (positive case):\n    SEVERITY: critical\n    EVENT: pet_stuck\n    DESC: 宠物被卡在两个家具之间\n    PET_ZONE: sofa\n\n字段取值范围:\n- SEVERITY 只能是: critical, warn, info\n...",
+  "next_steps": [
+    "1. Save 'generated_prompt' to use-cases/pet_safety/prompt.md",
+    "2. Manually refine business boundaries — spell out concrete edge cases (see Convention 3 in use-case-adapter.md)",
+    "3. Call smartbuilding_use_case_register action=register with prompt_text=$(cat use-cases/pet_safety/prompt.md) persist=true"
+  ]
+}
+```
+
+**如果 `warnings` 里出现下面 3 类之一**（vLLM 违反 Convention）：
+
+- `contains triple-backtick code fence` → **必须手动删掉** ```，否则 POST /v1/tasks 会被 `banned_token` 拒收
+- `contains A | B | C pipe-separated enum` → **建议手动改** 成"输出示例"块 + 独立"字段取值范围"列表（Convention 1）
+- `event names missing: <list>` → **必须手动补齐**遗漏的 event，否则 downstream rule engine 会短路
+
+**存盘 + 手工 refine**：
+
+```bash
+mkdir -p use-cases/pet_safety
+curl -sS ... generate_prompt ... \
+  | grep "^data:" | head -1 | sed 's/^data: //' \
+  | jq -r '.result.content[0].text | fromjson | .generated_prompt' \
+  > use-cases/pet_safety/prompt.md
+
+vim use-cases/pet_safety/prompt.md   # 加业务细节（Convention 3 强调具体案例）
+```
+
+**验证 side effect（不应有任何 mutation）**：
+
+```bash
+# VLM 端不应出现 pet_safety_monitor
+curl -sf http://localhost:8192/v1/tasks | jq '.tasks[].name' | grep -c pet_safety_monitor
+# 期望：0
+
+# 内存 useCaseDict 里也不应有 pet_safety
+curl -sf -X POST http://localhost:3100/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"smartbuilding_use_case_validate",
+    "arguments":{"use_case":"pet_safety"}}}' \
+  | grep "^data:" | head -1 | sed 's/^data: //' | jq '.result.content[0].text | fromjson | .valid'
+# 期望：false（尚未 register）
+```
+
+`generate_prompt` 是**纯 vLLM 咨询**，不落 DB、不改 useCaseDict、不 POST /v1/tasks。是 `register` 的 pre-step。
+
+---
+
 ## 3. 完整注册（正例）
 
-先在磁盘上准备 evaluate_rules.py（**这是磁盘 side effect，MCP 不会替你建**）：
+先在磁盘上准备 evaluate_rules.py（**这是磁盘 side effect，MCP 不会替你建**）。
+
+**注意**：以下 prompt.md 是**简化占位**（Convention 1 反例，仅示例用）。生产环境用 §3.0 的 `generate_prompt` + `vim refine` 得到合规版；或参考现有 `use-cases/child_safety/prompt.md` 手写。
 
 ```bash
 cd /home/user/jie/smarthome/smart-community
@@ -146,10 +237,10 @@ cat > use-cases/pet_safety/prompt.md <<'EOF'
 
 You are a home pet-safety camera. Watch the 10-second clip and output EXACTLY these fields:
 
-SEVERITY: critical | warn | info
-EVENT: <one of: pet_stuck, pet_escape, pet_normal, no_incident>
-DESC: <one sentence>
-PET_ZONE: <one of: cage, sofa, floor, door, unknown>
+SEVERITY: (one of critical, warn, info)
+EVENT: (one of pet_stuck, pet_escape, pet_normal, no_incident)
+DESC: (one sentence)
+PET_ZONE: (one of cage, sofa, floor, door, unknown)
 
 Rules:
 - pet_stuck = animal trapped / immobile in unnatural position → critical
@@ -158,18 +249,21 @@ Rules:
 - no visible pet = no_incident, info
 EOF
 
+# ⚠️ 关键：override 必须从 argv[1] 读 ctx，不能用 sys.stdin（会挂死 rule_eval，已知 Issue #3）
+# ⚠️ 关键：fields / rules 都在 ctx.payload.<...> 下，不在 ctx 顶层
 cat > use-cases/pet_safety/evaluate_rules.py <<'EOF'
 import sys, json
 
 def main():
-    ctx = json.load(sys.stdin)
-    fields = (ctx.get("fields") or {})
+    ctx = json.loads(sys.argv[1])
+    payload = ctx.get("payload") or {}
+    fields = payload.get("fields") or {}
     event = fields.get("event", "")
     severity = fields.get("severity", "info")
     desc = fields.get("desc", "")
     zone = fields.get("pet_zone", "unknown")
 
-    rules = (ctx.get("payload", {}).get("rules") or {})
+    rules = payload.get("rules") or {}
     threshold = rules.get("severityThreshold", "warn")
     order = {"info": 0, "warn": 1, "critical": 2}
 
@@ -185,6 +279,18 @@ if __name__ == "__main__":
     main()
 EOF
 ```
+
+**替代方案：完全不写 evaluate_rules.py**（用 `defaultRuleEvaluator + rules dict`）。参考 `child_safety` / `parking_safety` / `high_altitude_safety` 已经迁到这个模式：
+
+```yaml
+# config.yaml.example use_case_dict.pet_safety.rules:
+severityThreshold: warn
+excludeEvents: [no_incident, pet_normal]
+alertMessageExtraField: pet_zone   # 拼 "(zone=X)" 尾缀
+cooldownSeconds: 300
+```
+
+`defaultRuleEvaluator` 完全等价上面 Python 逻辑，且不用写文件。
 
 然后调 register：
 
@@ -256,9 +362,109 @@ jq -n \
 关键点：
 - `steps.schema.added` 有且只有 `video_summary_tasks.pet_zone`
 - `steps.vlm_task = "registered"`（不是 `"updated"`——第一次注册）
+- `steps.use_case_dict = "added"`
+- `steps.config_yaml` **不存在**（本轮没传 `persist: true`，见 §3.5 单独测）
 - `steps.validate.valid = true`
 - `missing_required_in_prompt = []`（prompt 里有 EVENT / SEVERITY / DESC）
 - `pet_zone` 应该出现在 `optional_fields` 但**不**出现在 `missing_optional_in_prompt`（因为 prompt 里显式写了 `PET_ZONE:`）
+
+**注意**：`severity` 在 `config.yaml.example` 的 schema 里已从 `required: true` 改为 `required: false`（2026-07-03 修 Issue #5），所以最新的 `required_fields` 应该是 `["event", "desc"]`（**不含** `severity`），`optional_fields` 里应含 `severity`。
+
+---
+
+## 3.5. `persist: true`：register 时同步写回 config.yaml（2026-07-03 晚新增）
+
+**目的**：验证"零 YAML 手工"——`persist: true` 让 tool 用 yaml `Document` API 把 use_case 条目**写回**磁盘 `config.yaml.example`，注释和字段顺序保留。MCP 重启后仍在。
+
+**前置**：MCP 必须以 `--config config.yaml.example` 启动（否则 `ServerConfig.configPath` 是 undefined，persist 会 skip）。
+
+**为了独立测 persist（不干扰 §3 已 register 的 pet_safety）**，用不同的 `use_case` 名 `pet_safety_persisted`：
+
+```bash
+PROMPT_TEXT=$(cat use-cases/pet_safety/prompt.md)
+
+jq -n \
+  --arg pt "$PROMPT_TEXT" \
+  --arg erp "$(pwd)/use-cases/pet_safety/evaluate_rules.py" \
+  '{
+    jsonrpc: "2.0", id: 1, method: "tools/call",
+    params: {
+      name: "smartbuilding_use_case_register",
+      arguments: {
+        action: "register",
+        use_case: "pet_safety_persisted",
+        video_summary_task: "pet_safety_persisted_monitor",
+        description: "Pet safety (with persist=true test)",
+        evaluate_rules_path: $erp,
+        rules: { severityThreshold: "warn", cooldownSeconds: 300 },
+        prompt_text: $pt,
+        schema_extensions: [{ name: "pet_zone", type: "text", required: false }],
+        persist: true,
+        overwrite: true
+      }
+    }
+  }' | curl -sS -X POST http://localhost:3100/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        --data-binary @- \
+     | grep "^data:" | head -1 | sed 's/^data: //' \
+     | jq '.result.content[0].text | fromjson | {ok, config_yaml: .steps.config_yaml, use_case_dict: .steps.use_case_dict, vlm_task: .steps.vlm_task, warnings}'
+```
+
+**期望**：
+
+```json
+{
+  "ok": true,
+  "config_yaml": "written",
+  "use_case_dict": "added",
+  "vlm_task": "registered",
+  "warnings": []
+}
+```
+
+**磁盘校验**（关键）：
+
+```bash
+grep -A6 "^  pet_safety_persisted:" config.yaml.example
+```
+
+**期望**：能看到条目 + `video_summary_task` / `evaluate_rules_path` / `rules` / `description` 字段。同时**其他 use case 的注释和字段顺序应该保留**（yaml Document API 是 comment-preserving，虽然 stringify 后 `#` 前空格、`[ ]` 数组间距会做 normalize，但语义等价）：
+
+```bash
+# 校验 child_safety 的注释还在
+grep -B1 -A3 "^  child_safety:" config.yaml.example
+```
+
+**期望**：看到 `severityThreshold: warn` 后面的 `# ... — fires at or above this` 注释还在。
+
+**若 `config_yaml: "skipped"`** + 出现 warning：
+- `"persist requested but configPath is unset..."` → MCP 启动没带 `--config`，只能改内存，磁盘不落
+- `"persist to <path> failed: <err>"` → 写盘 IO 报错（权限 / 磁盘满等），in-memory 依然生效
+
+**MCP 重启验证磁盘写回真正生效**（可选，用 §7 unregister 前跑一次）：
+
+```bash
+# 停 MCP
+pkill -f "packages/mcp-server/dist/index.js"
+sleep 2
+# 重启（磁盘上 pet_safety_persisted 条目应该还在）
+grep pet_safety_persisted config.yaml.example
+# 期望：看到条目（重启前 persist=true 写下的）
+# 重启 MCP
+cd /home/user/jie/smarthome/smart-community
+node packages/mcp-server/dist/index.js --http \
+  --config config.yaml.example --monitors monitors.yaml.example &
+sleep 3
+# 校验 pet_safety_persisted 从磁盘加载到了内存
+curl -sf -X POST http://localhost:3100/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"smartbuilding_use_case_validate",
+    "arguments":{"use_case":"pet_safety_persisted"}}}' \
+  | grep "^data:" | head -1 | sed 's/^data: //' | jq '.result.content[0].text | fromjson | {valid, checks}'
+# 期望：valid=true 且 checks 三段都 true —— 重启后 use case 从磁盘恢复
+```
 
 ---
 
@@ -410,6 +616,8 @@ curl -sf -X POST http://localhost:3100/mcp \
 
 ## 7. Unregister
 
+### 7.1 不带 persist（只清内存，磁盘 config 里的条目保留）
+
 ```bash
 curl -sf -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
@@ -450,6 +658,38 @@ curl -sf -X POST http://localhost:3100/mcp \
 # 期望：{ "valid": false, "error": "unknown use_case \"pet_safety\". Known: [...]" }
 ```
 
+### 7.2 带 persist=true（同时清磁盘 config 里的条目）
+
+针对 §3.5 里落盘的 `pet_safety_persisted`：
+
+```bash
+curl -sf -X POST http://localhost:3100/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"smartbuilding_use_case_register",
+    "arguments":{"action":"unregister","use_case":"pet_safety_persisted","persist":true}}}' \
+  | grep "^data:" | head -1 | sed 's/^data: //' \
+  | jq '.result.content[0].text | fromjson | {ok, config_yaml: .steps.config_yaml, use_case_dict: .steps.use_case_dict, vlm_task: .steps.vlm_task}'
+```
+
+**期望**：
+
+```json
+{
+  "ok": true,
+  "config_yaml": "removed",
+  "use_case_dict": "removed",
+  "vlm_task": "deleted"
+}
+```
+
+**磁盘校验**：
+
+```bash
+grep pet_safety_persisted config.yaml.example
+# 期望：无输出（条目已从磁盘删除，其他 use case 条目和注释保留）
+```
+
 **注意**：`pet_zone` schema 列**不会**被 drop（sqlite 限制 + 数据安全）。想清理：手动 `sqlite3 ... ALTER TABLE ... DROP COLUMN pet_zone`（sqlite ≥ 3.35）。
 
 ---
@@ -458,12 +698,14 @@ curl -sf -X POST http://localhost:3100/mcp \
 
 | Gap | 表现 | 缓解方式 |
 |---|---|---|
-| **重启丢失** | 重启 MCP 后 `smartbuilding_use_case_validate use_case=pet_safety` 返回 `unknown use_case`；如果 monitor `cam_pet` 还在 DB，MCP 启动会因 `monitors reference unknown use_case keys` 直接 exit | 手改 `config.yaml.example` 追加 `use_case_dict.pet_safety`；或在重启前先 unregister monitor |
-| **`config.yaml` 不写回** | 磁盘上的 config.yaml 永远只有启动时的内容 | 目前只能手抄一份到 `config.yaml.example`；P3 计划加 `persist: true` |
-| **`evaluate_rules.py` 需手写** | Tool 不生成 Python 脚本，只登记路径 | 用文档里的模板照抄；后续可加"生成骨架"参数 |
+| ~~**重启丢失**~~ | ~~重启 MCP 后 `smartbuilding_use_case_validate use_case=pet_safety` 返回 `unknown use_case`~~ | ✅ **已修**（Plan §27 Step 2）：register 时传 `persist: true` 让 tool 用 yaml Document API 写回 config.yaml；MCP 重启后自动从磁盘加载。见 §3.5 |
+| ~~**`config.yaml` 不写回**~~ | ~~磁盘上的 config.yaml 永远只有启动时的内容~~ | ✅ **已修**（Plan §27 Step 2）：`persist: true` 参数上线 |
+| ~~**`prompt.md` 需手写**~~ | ~~Tool 不生成 prompt，用户从空白起步~~ | ✅ **已缓解**（Plan §29）：`action=generate_prompt` 让 vLLM 从 3 个语义输入生成骨架，见 §3.0；用户仍需 refine 业务边界（Convention 3），human-in-the-loop 设计 |
+| **`evaluate_rules.py` 需手写** | Tool 不生成 Python 脚本，只登记路径 | ✅ **已缓解**（Plan §27 Step 1）：`defaultRuleEvaluator` 加 4 keys（`requireEvent` / `requireDirection` / `excludeZones` / `alertMessageExtraField`）后，简单 UC 完全用 rules dict 表达，**无需 evaluate_rules.py**。见 §3 结尾的"替代方案" |
 | **schema 列不能撤销** | `unregister` 保留 `pet_zone` 列 | 手动 `ALTER TABLE ... DROP COLUMN`（sqlite 3.35+） |
 | **prompt_text 换行处理** | Markdown 里含 `'''` 会污染 Python 源码字符串 | 目前用 `'''` 作 heredoc；如 prompt 里有三单引号需要人工 escape。P3 改用 `"""` + smart quoting |
 | **并发写入** | 两个客户端同时 register 同一个 use_case，最后写入者赢 | MCP 单进程；实际不会并发；如担心可加分布式锁（超出当前范围）|
+| **VLM 端 dynamic task delete 不清 monitors 表** | unregister 时如果对应 monitor 还 registered，DELETE /v1/tasks 成功但 monitors 表引用悬空 | 先 `smartbuilding_monitor_ctl unregister monitor_id=<x>` 再 use_case_register unregister |
 
 ---
 

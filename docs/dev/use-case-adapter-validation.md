@@ -1,6 +1,5 @@
 # Use Case Adapter Validation Log — high_altitude_safety
 
-**日期**: 2026-07-01（原始验证）· 2026-07-03（VLM stack 路径更新）
 **负责人**: Jie
 **目的**: 用真实生成的视频 + 真实 VLM 服务，端到端验证 use case adapter 框架
 是否达到 design §5 声称的"零代码、纯配置驱动"的用户友好目标。选择"高空抛物"作为
@@ -8,7 +7,7 @@
 （`requireDirection`）+**新 cooldown 配置**（30s vs 默认 60s），能全面检验框架
 的可扩展性。
 
-> **2026-07-03 路径更新**：原始验证跑在 `agent-ai.smarthome/start-video-summary-service/end2end`
+> 路径说明：原始验证跑在 `agent-ai.smarthome/start-video-summary-service/end2end`
 > 那套旧 stack 上，容器名是 `end2end-multilevel-video-understanding-1`、host 数据
 > 目录是 `~/.openclaw/smarthome-demo/data`。现在 VLM 已迁到本仓的
 > `smart-community/docker/multilevel-video-understanding/`，容器名变成
@@ -52,7 +51,7 @@
 | VSA | `:8999` | 本次不涉及（跳过 motion 层，直接手工塞 DB） |
 | MCP server | `:3100 / :3101` | 每次测试起干净 data dir |
 
-### 2.2 启动 VLM（**2026-07-03 更新：迁到 smart-community/docker**）
+### 2.2 启动 VLM（当前 stack：smart-community/docker）
 
 ```bash
 cd /home/user/jie/smarthome/smart-community/docker/multilevel-video-understanding
@@ -123,7 +122,7 @@ curl -sS -X PATCH http://localhost:8192/v1/tasks/${TASK} \
   --data-binary @/tmp/register-${UC}.json | jq '.description'
 ```
 
-### Step 2 — 拷视频到 VLM 容器可访问目录（**2026-07-03 更新：路径变了**）
+### Step 2 — 拷视频到 VLM 容器可访问目录（当前路径）
 
 新 stack 容器 mount 的是 `${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}` →
 容器内 `/data`。容器名从 `end2end-multilevel-video-understanding-1` 改为
@@ -371,12 +370,29 @@ schema extension 列被剥离**。修复：rule_eval **直接查 raw SQLite row*
 
 ## 8. 下一步 (建议)
 
+建议项：
+
 1. **拿 v3 prompt.md 再验证 video v1 (4s)** —— 确认 prompt 优化是普适的
 2. **加 `smartbuilding_prompt_lint` tool** —— 静态扫 prompt.md，检测 `|`
    枚举语法、code fence 等已知陷阱，early warning
 3. **use_case_validate 支持 dynamic task** —— 补 §5 里 check E 的 gap
 4. **对齐 `parseSummaryFields` 与 VLM 输出的缩进容差** —— 目前虽然通过，
    但缩进本质是 prompt.md 写法缺陷，可以在 prompt 里明确要求"顶格输出"
+
+当前状态：
+
+| 建议 | 状态 | 落地位置 |
+|---|---|---|
+| #2 `smartbuilding_prompt_lint` tool | ⚠️ **部分实现** — 3 项 post-processing lint（code fence / pipe enum / missing event）已内嵌到 `smartbuilding_use_case_register action=generate_prompt` 里；独立 tool 尚未抽出（gap-analysis §5 剩余 P3 项）| [prompt-autogen.ts](../../packages/tools/src/prompt-autogen.ts) |
+| #3 `use_case_validate` 支持 dynamic task | ✅ **已完成** —— `useCaseValidate` 里 `GET /v1/tasks/<name>` 对 dynamic 和 builtin 一视同仁；`register` tool 内部第 4 步也调 validate 复核 | [use-case-validate.ts](../../packages/tools/src/use-case-validate.ts) |
+| #4 `parseSummaryFields` 缩进容差 | ✅ **已在 §Round 2 验证过** —— 现有 `^\s*KEY:` 正则容忍前导空白 + 开场白；实际 5 UC 都能 parse |  |
+| #1 v3 prompt 再验证 4s 视频 | 未特意跑 | — |
+
+补充建议（gap-analysis §5 优先级表 P3 项）：
+
+5. **真实 vLLM 对 3 个已实现 UC 做 `generate_prompt` 保真度抽检（dogfood）** —— Plan §29 新加的 autogen 骨架能否覆盖 child_safety / parking_safety / high_altitude_safety 的原 prompt 语义？人肉 diff meta-prompt 生成结果 vs 磁盘上现有 prompt.md
+6. **`smartbuilding_prompt_lint` 独立 tool** —— 把已内嵌到 `generate_prompt` 的 3 项 lint 抽成独立 MCP tool，用户可 pre-flight 检查手写的 prompt.md
+7. **rule_eval `create_alert=true` MCP `resources/updated` broadcast e2e 测试** —— 消除 gap-analysis §5.3 #7 的 "未测"
 
 ---
 
@@ -397,7 +413,7 @@ schema extension 列被剥离**。修复：rule_eval **直接查 raw SQLite row*
 
 ---
 
-# Round 2 Validation — `parking_safety` (违章停车) — 2026-07-01 下午
+# Round 2 Validation — `parking_safety` (违章停车)
 
 第二个新 use case 验证，考察 adapter 框架**通用性**。选择"违章停车"因为它与高空抛物差异明显：
 
@@ -409,7 +425,7 @@ schema extension 列被剥离**。修复：rule_eval **直接查 raw SQLite row*
 ## 视频参数
 
 `/home/user/jie/smarthome/smart-community/demo-videos/cam_parking/false-parking.mp4`
-（2026-07-03 起统一收纳到 `demo-videos/<monitor_id>/`）
+（统一收纳到 `demo-videos/<monitor_id>/`）
 - 4.02s / 1280×720 / 60fps / h264 / 4.3 MB
 
 ## 一次成型（Round 4 经验直接复用）
