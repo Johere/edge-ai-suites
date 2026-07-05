@@ -760,7 +760,7 @@ Schema 扩展列：`parking_zone`（`text`, `required: false`）。
 
 | 参数 | 值 | 原因 |
 |------|-----|------|
-| 时长 | **10 s** | 与 VSA 默认 `segment.interval=10.0` 对齐，正好一个 clip |
+| 时长 | **10 s** | 与 VSA 默认 `segment.max_duration=10.0` 对齐，正好一个 clip |
 | 分辨率 | **1280×720** 或 1920×1080 | prefilter 用的 YOLO 模型 `shape_static_1280x704`；越接近训练分辨率精度越高 |
 | 帧率 | **15 fps**（不低于） | VSA 默认 `recording.fps=15`；再高也会被抽帧到 `detect_fps=2.0` |
 | 编码 | **H.264 / mp4** | ffmpeg `-c copy` 可以零转码推 RTSP |

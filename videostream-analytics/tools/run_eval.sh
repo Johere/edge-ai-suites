@@ -25,7 +25,7 @@
 #
 # Env overrides
 #   VIDEOS_DIR  — root of the phase-2 video corpus.
-#                 Default: <repo>/videos (the MP4 binaries are .gitignore'd;
+#                 Default: <repo>/demo-videos (the MP4 binaries are .gitignore'd;
 #                 GT SRT files live alongside and stay tracked).
 #   MEDIAMTX_CONFIG — defaults to tools/mediamtx.yml in this repo.
 #   MEDIAMTX_BIN, RTSP_PORT, WEBHOOK_PORT, ANALYTICS_PORT — see code below.
@@ -37,7 +37,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$PROJECT_DIR")"
 PYTHON="${PROJECT_DIR}/.venv/bin/python"
 
-VIDEOS_DIR="${VIDEOS_DIR:-$REPO_DIR/videos}"
+VIDEOS_DIR="${VIDEOS_DIR:-$REPO_DIR/demo-videos}"
 
 MEDIAMTX_BIN="${MEDIAMTX_BIN:-$HOME/.local/bin/mediamtx}"
 MEDIAMTX_CONFIG="${MEDIAMTX_CONFIG:-$SCRIPT_DIR/mediamtx.yml}"
@@ -45,17 +45,17 @@ RTSP_PORT="${RTSP_PORT:-8554}"
 WEBHOOK_PORT="${WEBHOOK_PORT:-9999}"
 ANALYTICS_PORT="${ANALYTICS_PORT:-8999}"
 
-VIDEO_CHILD="$VIDEOS_DIR/phase2/child-care/composed/child_safety_demo.mp4"
-GT_CHILD="$VIDEOS_DIR/phase2/child-care/composed/child_safety_demo_groundtruth.srt"
+VIDEO_CHILD="$VIDEOS_DIR/cam_child/child_safety_demo.mp4"
+GT_CHILD="$VIDEOS_DIR/cam_child/child_safety_demo_groundtruth.srt"
 
-VIDEO_FRIDGE="$VIDEOS_DIR/demo006-2_expanded_20min_v2.mp4"
-GT_FRIDGE="$VIDEOS_DIR/demo006-2_expanded_20min_v2_groundtruth.srt"
+VIDEO_FRIDGE="$VIDEOS_DIR/cam_fridge/demo006-2_expanded_20min_v2.mp4"
+GT_FRIDGE="$VIDEOS_DIR/cam_fridge/demo006-2_expanded_20min_v2_groundtruth.srt"
 
-VIDEO_ELDER_DAY1="$VIDEOS_DIR/phase2/elder_wakeup/composed/day1_elder_wakeup.mp4"
-GT_ELDER_DAY1="$VIDEOS_DIR/phase2/elder_wakeup/composed/day1_elder_wakeup_groundtruth.srt"
+VIDEO_ELDER_DAY1="$VIDEOS_DIR/cam_elder_bedroom/day1_elder_wakeup.mp4"
+GT_ELDER_DAY1="$VIDEOS_DIR/cam_elder_bedroom/day1_elder_wakeup_groundtruth.srt"
 
-VIDEO_ELDER_DAY2="$VIDEOS_DIR/phase2/elder_wakeup/composed/day2_elder_wakeup.mp4"
-GT_ELDER_DAY2="$VIDEOS_DIR/phase2/elder_wakeup/composed/day2_elder_wakeup_groundtruth.srt"
+VIDEO_ELDER_DAY2="$VIDEOS_DIR/cam_elder_bedroom_2/day2_elder_wakeup.mp4"
+GT_ELDER_DAY2="$VIDEOS_DIR/cam_elder_bedroom_2/day2_elder_wakeup_groundtruth.srt"
 
 SCENARIOS=("child" "fridge" "elder_day1" "elder_day2")
 WAIT_MODE="full"
@@ -182,9 +182,9 @@ register_source() {
     local sid="$1" path="$2" use_case="$3" prefilter_enabled="$4"
     local body
     if [[ "$prefilter_enabled" == "false" ]]; then
-        body="{\"source_id\":\"$sid\",\"rtsp_url\":\"rtsp://localhost:$RTSP_PORT/$path\",\"use_case\":\"$use_case\",\"prefilter\":{\"enabled\":false}}"
+        body="{\"source_id\":\"$sid\",\"source_url\":\"rtsp://localhost:$RTSP_PORT/$path\",\"pipeline\":{\"prefilter\":{\"enabled\":false}}}"
     else
-        body="{\"source_id\":\"$sid\",\"rtsp_url\":\"rtsp://localhost:$RTSP_PORT/$path\",\"use_case\":\"$use_case\"}"
+        body="{\"source_id\":\"$sid\",\"source_url\":\"rtsp://localhost:$RTSP_PORT/$path\"}"
     fi
     curl -sf -X POST "http://localhost:$ANALYTICS_PORT/register_source" \
         -H 'Content-Type: application/json' -d "$body" || return 1

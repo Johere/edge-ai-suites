@@ -888,7 +888,7 @@ curl -s -X POST http://localhost:3100/mcp \
 
 | 参数 | 值 | 原因 |
 |------|-----|------|
-| 时长 | 10 s | 对齐 VSA `segment.interval=10.0` |
+| 时长 | 10 s | 对齐 VSA `segment.max_duration=10.0` |
 | 分辨率 | **1280×720** 或 1920×1080 | 匹配 YOLO `shape_static_1280x704` |
 | 帧率 | ≥ 15 fps | 匹配 VSA `recording.fps=15` |
 | 编码 | H.264 mp4 | ffmpeg `-c copy` 直转 RTSP |

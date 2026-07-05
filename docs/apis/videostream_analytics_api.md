@@ -157,7 +157,8 @@ The nested pipeline object (`extra="forbid"`). Every sub-block is optional; when
 |-----------|-------|---------|
 | `motion` | `MotionConfig` | Frame-difference motion detector parameters. |
 | `segment` | `SegmentConfig` | Motion-clip segmentation parameters. |
-| `prefilter` | `PrefilterConfig` | Optional NPU / OpenVINO YOLO prefilter, including the Phase 9 `roi_crop` sub-block. |
+| `prefilter` | `PrefilterConfig` | Optional NPU / OpenVINO YOLO prefilter. |
+| `roi` | `RoiConfig` | Phase 9 ROI crop and trajectory-region emission. |
 | `recording` | `RecordingConfig` | Fixed-cadence continuous recording branch. |
 | `health` | `HealthConfig` | RTSP failure-handling policy. |
 | `keepalive` | `KeepaliveConfig` | Phase 8 keepalive protocol. |
@@ -175,7 +176,7 @@ The nested pipeline object (`extra="forbid"`). Every sub-block is optional; when
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `interval` | `float` | `10.0` | Segment cut interval, in seconds. |
+| `max_duration` | `float` | `10.0` | Hard ceiling on segment length, in seconds. |
 | `min_duration` | `float` | `1.0` | Minimum clip duration; shorter clips are discarded. |
 
 ##### `PrefilterConfig`
@@ -189,9 +190,8 @@ The nested pipeline object (`extra="forbid"`). Every sub-block is optional; when
 | `min_frames_hit` | `int` | `2` | Number of hits within a clip required for PASS. |
 | `detect_fps` | `float` | `2.0` | YOLO inference rate; inference does not run on every frame. |
 | `device` | `string` | `"CPU"` | OpenVINO device (`CPU`, `GPU`, `NPU`). |
-| `roi_crop` | `RoiCropConfig \| null` | `null` | Phase 9 ROI crop and trajectory-region emission; see below. |
 
-##### `RoiCropConfig` (Phase 9)
+##### `RoiConfig` (Phase 9)
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -236,15 +236,15 @@ The nested pipeline object (`extra="forbid"`). Every sub-block is optional; when
   "data_dir":    "/data/cam_child",
   "pipeline": {
     "motion":    { "diff_threshold": 15, "area_ratio": 0.005, "stable_frames": 45 },
-    "segment":   { "interval": 10, "min_duration": 1.0 },
+    "segment":   { "max_duration": 10, "min_duration": 1.0 },
     "prefilter": {
       "enabled": true,
       "model_path": "/models/openvino/yolo11s/FP16/yolo11s.xml",
       "target_classes": ["person"],
       "detect_fps": 2.0,
-      "device": "NPU",
-      "roi_crop": { "enabled": true, "mode": "crop", "expand": 0.25, "auto_split_area": 0.35 }
+      "device": "NPU"
     },
+    "roi":       { "enabled": true, "mode": "crop", "expand": 0.25, "auto_split_area": 0.35 },
     "recording": { "enabled": true, "interval_seconds": 60, "retention_days": 5 },
     "health":    { "max_failures": 30, "recovery_strategy": "retry" },
     "keepalive": { "enabled": true, "timeout_seconds": 90.0, "check_interval_seconds": 10.0 }
@@ -439,7 +439,7 @@ Emitted by [`_emit_segment`](../../videostream-analytics/stream_monitor/rtsp_mon
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `event_file_path` | `string` | ✅ | Absolute path of the original motion clip, under `<data_dir>/motion_events/<YYYY-MM-DD>/`. |
-| `summary_clip_input` | `string` | ✅ | Path of the clip to feed into the video-summary service. When prefilter passes and `roi_crop.enabled=true`, this points to `<stem>_input.mp4`; otherwise it equals `event_file_path`. |
+| `summary_clip_input` | `string` | ✅ | Path of the clip to feed into the video-summary service. When prefilter passes and `pipeline.roi.enabled=true`, this points to `<stem>_input.mp4`; otherwise it equals `event_file_path`. |
 | `start_time` | `string` (ISO 8601) | ✅ | Clip start time. |
 | `end_time` | `string` (ISO 8601) | Optional | Clip end time. |
 | `duration_seconds` | `float` | ✅ | Clip duration in seconds. |
@@ -561,7 +561,7 @@ Ports used by the integration test harness and local verification recipes (see [
 |-------|------------|------------|
 | Phase 7 | Nested `pipeline` request schema; renamed `rtsp_url` → `source_url`; dropped `use_case`; `/sources` returns a bare array; added `/sources/{id}/status`; nested webhook envelope. | §3.3, §3.4, §4 |
 | Phase 8 | Keepalive endpoint and watchdog; `SourceStatus` gains `keepalive_enabled` and `last_keepalive_at`. | §3.8 |
-| Phase 9 | `PrefilterConfig.roi_crop` sub-block; `trajectory_region` in the motion payload; automatic `<clip>_input.mp4` production; `summary_clip_input` retargeting; `auto_split_area` early-split. | §3.4 (RoiCropConfig), §4.2 |
+| Phase 9 | `pipeline.roi` sub-block; `trajectory_region` in the motion payload; automatic `<clip>_input.mp4` production; `summary_clip_input` retargeting; `auto_split_area` early-split. | §3.4 (RoiConfig), §4.2 |
 
 ---
 
