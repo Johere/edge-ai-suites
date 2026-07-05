@@ -164,11 +164,9 @@ videostream-analytics stream \
   "data_dir":    "/data/cam_demo",
   "pipeline": {
     "motion":    { "enabled": true, "diff_threshold": 15, "area_ratio": 0.005, "stable_frames": 45 },
-    "segment":   { "interval": 10, "min_duration": 1.0 },
-    "prefilter": {
-      "enabled": false,
-      "roi_crop": { "enabled": false, "mode": "crop", "expand": 0.25, "auto_split_area": 0.0 }
-    },
+    "segment":   { "max_duration": 10, "min_duration": 1.0 },
+    "prefilter": { "enabled": false },
+    "roi": { "enabled": false, "mode": "crop", "expand": 0.25, "auto_split_area": 0.0 },
     "recording": { "enabled": true, "interval_seconds": 60, "retention_days": 5 },
     "health":    { "max_failures": 30, "recovery_strategy": "retry" },
     "keepalive": { "enabled": false, "timeout_seconds": 90.0, "check_interval_seconds": 10.0 }
@@ -180,7 +178,7 @@ videostream-analytics stream \
 
 **`pipeline.keepalive`（Phase 8）**：MCP 端开启后每 ~30s 调 `POST /sources/{id}/keepalive`；VSA 后台 watchdog 每 `check_interval_seconds` 巡检一次，超过 `timeout_seconds` 没收到心跳就**自动 pause** 该 source（不删除，需要 MCP 显式 resume）。默认 OFF — V1–V10 联调脚本无需关心；MCP 实际部署时显式打开。
 
-**`pipeline.prefilter.roi_crop`（Phase 9，child_safety）**：当 prefilter PASS 且 `roi_crop.enabled=true` 时，VSA 用 prefilter 累计的轨迹 union bbox 生成 `<clip>_input.mp4`，并把 `summary_clip_input` 指向该裁剪片段。`mode` ∈ `crop | highlight | crop_and_concat`（默认 `crop`），`expand` 把 bbox 向外延伸（默认 0.25），`auto_split_area > 0` 时若 union 面积超阈值则提前切 segment（避免大轨迹下 crop 失效，child_safety 建议 0.35）。失败（ffmpeg 缺失 / region 过小 / clip 无法读）自动 fallback 到原片，不抛异常。
+**`pipeline.roi`（Phase 9，child_safety）**：当 prefilter PASS 且 `roi.enabled=true` 时，VSA 用 prefilter 累计的轨迹 union bbox 生成 `<clip>_input.mp4`，并把 `summary_clip_input` 指向该裁剪片段。`mode` ∈ `crop | highlight | crop_and_concat`（默认 `crop`），`expand` 把 bbox 向外延伸（默认 0.25），`auto_split_area > 0` 时若 union 面积超阈值则提前切 segment（避免大轨迹下 crop 失效，child_safety 建议 0.35）。失败（ffmpeg 缺失 / region 过小 / clip 无法读）自动 fallback 到原片，不抛异常。
 
 ### Source 生命周期状态机
 
@@ -331,7 +329,7 @@ docker run -d --rm --name vsa-test --network host \
 
 ```bash
 ffmpeg -re -stream_loop -1 -ss 40 \
-  -i /path/to/child_safety_demo.mp4 \
+  -i /home/user/jie/smarthome/smart-community/demo-videos/cam_child/child_safety_demo.mp4 \
   -c copy -f rtsp rtsp://localhost:8554/live/child
 ```
 
@@ -535,12 +533,14 @@ done
 **步骤 1：启动 MCP server（替换 T2 mock webhook）**
 
 ```bash
-# 干净的 MCP 数据目录
-rm -rf /tmp/mcp-data && mkdir -p /tmp/mcp-data
+# MCP 数据目录（默认是 ~/.mcp-smartbuilding；如需隔离测试可改成 /tmp/...）
+export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
+mkdir -p "$SMARTBUILDING_DATA_DIR"
 
 cd /home/user/jie/smarthome/smart-community
-SMARTBUILDING_DATA_DIR=/tmp/mcp-data \
-  node packages/mcp-server/dist/index.js --http
+node packages/mcp-server/dist/index.js --http \
+  --config config.yaml.example \
+  --monitors monitor_cam_child.yaml
 
 # 启动日志含：
 #   [mcp-server] Streamable HTTP on http://localhost:3100/mcp
@@ -556,9 +556,25 @@ MCP 监听两个端口：
 杀掉 T3 旧 VSA，重启时 `WEBHOOK_URL` 改成 MCP 的 events 端口：
 
 ```bash
+# A) VSA 在 host 进程里跑
 cd /home/user/jie/smarthome/smart-community/videostream-analytics
 WEBHOOK_URL=http://localhost:3101/events \
   .venv/bin/videostream-analytics serve --config config/config.yaml
+
+# B) VSA 在 Docker 跑（推荐 host network，容器内 localhost 就是宿主机）
+docker run -d --rm --name vsa-test --network host \
+  -e WEBHOOK_URL="http://localhost:3101/events" \
+  -v /tmp/vsa-test:/tmp/vsa-test \
+  videostream-analytics:latest
+
+# C) 若不能用 --network host（bridge 网络），改用 host.docker.internal
+# Linux 需要显式映射 host-gateway
+docker run -d --rm --name vsa-test \
+  --add-host=host.docker.internal:host-gateway \
+  -p 8999:8999 \
+  -e WEBHOOK_URL="http://host.docker.internal:3101/events" \
+  -v /tmp/vsa-test:/tmp/vsa-test \
+  videostream-analytics:latest
 ```
 
 **步骤 3：用 MCP 风格 body 注册 source（`data_dir` 指向 MCP 的 segments dir）**
@@ -570,10 +586,10 @@ curl -s -X POST http://localhost:8999/register_source \
     "source_id":   "cam_demo",
     "source_url":  "rtsp://localhost:8554/live/child",
     "webhook_url": "http://localhost:3101/events",
-    "data_dir":    "/tmp/mcp-data/segments/cam_demo",
+    "data_dir":    "'"$SMARTBUILDING_DATA_DIR"'/segments/cam_demo",
     "pipeline": {
       "motion":    {"diff_threshold": 15, "area_ratio": 0.005, "stable_frames": 45},
-      "segment":   {"interval": 10, "min_duration": 1.0},
+      "segment":   {"max_duration": 10, "min_duration": 1.0},
       "prefilter": {"enabled": false},
       "recording": {"enabled": true, "interval_seconds": 30, "retention_days": 1},
       "health":    {"max_failures": 30, "recovery_strategy": "retry"}
@@ -592,7 +608,8 @@ cd /home/user/jie/smarthome/smart-community/videostream-analytics
 .venv/bin/python <<'EOF'
 import os, sqlite3
 
-con = sqlite3.connect('/tmp/mcp-data/smartbuilding.db')
+data_root = os.environ.get("SMARTBUILDING_DATA_DIR", os.path.expanduser("~/.mcp-smartbuilding"))
+con = sqlite3.connect(f"{data_root}/smartbuilding.db")
 con.row_factory = sqlite3.Row
 
 print("===== Row counts =====")
@@ -627,7 +644,7 @@ for r in con.execute("""
     print(f"  {d}")
 
 print("\n===== latest.jpg =====")
-snap = '/tmp/mcp-data/segments/cam_demo/latest.jpg'
+snap = f"{data_root}/segments/cam_demo/latest.jpg"
 if os.path.exists(snap):
     import time
     age = int(time.time() - os.path.getmtime(snap))
@@ -702,7 +719,7 @@ curl -i -X POST http://localhost:8999/sources/no_such/keepalive | head -5
 
 **前置条件**：NPU YOLO 模型文件（默认路径
 `/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.xml`），以及一段含
-person 的视频（如 `child_safety_demo.mp4`）。
+person 的视频（如 `demo-videos/cam_child/child_safety_demo.mp4`）。
 
 #### Step 1 — 启动支撑服务（4 个终端）
 
@@ -721,7 +738,7 @@ WEBHOOK_URL=http://localhost:9999/events \
   .venv/bin/videostream-analytics serve --config config/config.yaml
 
 # T4 ffmpeg 推流 —— 以本地 mp4 作为 RTSP 源推送给 MediaMTX
-ffmpeg -re -stream_loop -1 -i /path/to/child_safety_demo.mp4 \
+ffmpeg -re -stream_loop -1 -i /home/user/jie/smarthome/smart-community/demo-videos/cam_child/child_safety_demo.mp4 \
   -c copy -f rtsp rtsp://localhost:8554/live/child
 ```
 
@@ -740,13 +757,13 @@ curl -s -X POST http://localhost:8999/register_source \
         "model_path": "/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.xml",
         "target_classes": ["person"],
         "detect_fps": 2.0,
-        "device": "NPU",
-        "roi_crop": {
-          "enabled": true,
-          "mode": "crop",
-          "expand": 0.25,
-          "auto_split_area": 0.35
-        }
+        "device": "NPU"
+      },
+      "roi": {
+        "enabled": true,
+        "mode": "crop",
+        "expand": 0.25,
+        "auto_split_area": 0.35
       },
       "recording": {"enabled": false}
     }
@@ -763,10 +780,10 @@ curl -s -X POST http://localhost:8999/register_source \
 | `prefilter.model_path` | OpenVINO 模型绝对路径；文件缺失时 prefilter 降级为禁用，pipeline 继续运行 |
 | `prefilter.detect_fps=2.0` | YOLO 推理频率上限（Hz） |
 | `prefilter.device=NPU` | OpenVINO device，可选 `NPU` / `GPU` / `CPU` |
-| `roi_crop.enabled=true` | Phase 9 开关；启用后生成 `_input.mp4` 并在 payload 附加 `trajectory_region` |
-| `roi_crop.mode=crop` | ROI 模式：`crop`（裁剪 union bbox 区域）/ `highlight`（原图 + 高亮框）/ `crop_and_concat`（原图与逐帧人像并排，需要 YOLO 每帧推理） |
-| `roi_crop.expand=0.25` | union bbox 向外扩展 25% |
-| `roi_crop.auto_split_area=0.35` | 当 union 面积超过 35% 帧面积时，提前切 segment，避免长 clip 上 crop 失效 |
+| `roi.enabled=true` | Phase 9 开关；启用后生成 `_input.mp4` 并在 payload 附加 `trajectory_region` |
+| `roi.mode=crop` | ROI 模式：`crop`（裁剪 union bbox 区域）/ `highlight`（原图 + 高亮框）/ `crop_and_concat`（原图与逐帧人像并排，需要 YOLO 每帧推理） |
+| `roi.expand=0.25` | union bbox 向外扩展 25% |
+| `roi.auto_split_area=0.35` | 当 union 面积超过 35% 帧面积时，提前切 segment，避免长 clip 上 crop 失效 |
 | `recording.enabled=false` | 关闭固定时长录像分支，仅验证 motion 路径 |
 
 期望响应：`{"status": "started", "source_id": "cam_child_roi", "source_url": "...", "data_dir": "/tmp/vsa-test/cam_child_roi"}`。
@@ -936,10 +953,10 @@ bash tools/run_eval.sh --scenario child      # 仅儿童安全
 
 | 场景 | 视频 | use case 标签 |
 |---|---|---|
-| child | `videos/phase2/child-care/composed/child_safety_demo.mp4` | child_safety |
-| fridge | `videos/demo006-2_expanded.mp4` | fridge |
-| elder_day1 | `videos/phase2/elder_wakeup/composed/day1_elder_wakeup.mp4` | elder_wakeup |
-| elder_day2 | `videos/phase2/elder_wakeup/composed/day2_elder_wakeup.mp4` | elder_wakeup |
+| child | `demo-videos/cam_child/child_safety_demo.mp4` | child_safety |
+| fridge | `demo-videos/cam_fridge/demo006-2_expanded_20min_v2.mp4` | fridge |
+| elder_day1 | `demo-videos/cam_elder_bedroom/day1_elder_wakeup.mp4` | elder_wakeup |
+| elder_day2 | `demo-videos/cam_elder_bedroom_2/day2_elder_wakeup.mp4` | elder_wakeup |
 
 > "use case 标签" 仅作为评估工具内部分组，**不传给 VSA `register_source`**（Phase 7 起 VSA 注册体不再接受 `use_case` 字段，use case 归属在 MCP 端管理）。
 

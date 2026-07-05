@@ -136,9 +136,11 @@ class YoloPrefilter:
         target_classes: list[str] | None = None,
         min_confidence: float = 0.4,
         device: str = "CPU",
+        long_side: int = 0,
     ):
         self.target_classes = set(target_classes or [])
         self.min_confidence = min_confidence
+        self.long_side = long_side
 
         import openvino as ov
 
@@ -172,7 +174,7 @@ class YoloPrefilter:
     def predict(self, frame: np.ndarray) -> list[dict]:
         """Run inference on a single BGR frame. Returns target-class detections."""
         if self._is_dynamic:
-            infer_frame = _resize_long_side(frame, 0)
+            infer_frame = _resize_long_side(frame, self.long_side)
         else:
             infer_frame = cv2.resize(frame, (self._static_w, self._static_h))
         infer_h, infer_w = infer_frame.shape[:2]

@@ -4,7 +4,7 @@ import { logger } from "./logger.js";
 
 export interface VideoEvent {
   sourceId: string;
-  type: "motion" | "static" | "recording";
+  type: "motion" | "static" | "recording" | "status";
   timestamp: string;
   payload: Record<string, unknown>;
 }
@@ -17,7 +17,7 @@ export interface EventsEndpointOptions {
 }
 
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
-const KNOWN_TYPES = new Set<VideoEvent["type"]>(["motion", "static", "recording"]);
+const KNOWN_TYPES = new Set<VideoEvent["type"]>(["motion", "static", "recording", "status"]);
 
 type DispatchOutcome =
   | { kind: "ok"; body: Record<string, unknown> }
@@ -253,6 +253,11 @@ export class EventsEndpoint {
           fileSizeBytes: p.file_size_bytes !== undefined ? Number(p.file_size_bytes) : undefined,
         });
         return { kind: "ok", body: { recording_id: rec.id } };
+      }
+
+      case "status": {
+        logger.debug(`[events-endpoint] status "${p.status ?? "?"}" from ${monitorId}`);
+        return { kind: "ok", body: { acknowledged: true } };
       }
 
       default:

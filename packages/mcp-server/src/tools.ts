@@ -310,4 +310,171 @@ export function registerTools(
       return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
     }
   });
+
+  // --- smartbuilding_use_case_register ---
+  server.registerTool("smartbuilding_use_case_register", {
+    description:
+      "Manage use_case lifecycle at runtime without restarting the MCP server. Three actions: " +
+      "action=generate_prompt: given description + event_types (+ optional schema_extensions), ask vLLM " +
+      "to draft a `## LOCAL_PROMPT` for use-cases/<uc>/prompt.md. Human-in-the-loop — the caller reviews " +
+      "and refines the draft, then re-invokes with action=register. Nothing else is touched. " +
+      "action=register: (1) apply schema_extensions via ALTER TABLE (idempotent), " +
+      "(2) POST /v1/tasks to multilevel-video-understanding (auto-PATCH on 409), " +
+      "(3) inject the entry into in-memory use_case_dict so task-poller / other tools see it, " +
+      "(4) re-run use_case_validate. When persist=true, also writes the entry back to config.yaml " +
+      "(comment-preserving via yaml.Document). action=unregister: DELETE /v1/tasks/<name> and remove " +
+      "from use_case_dict; also deletes the yaml entry if persist=true.",
+    inputSchema: {
+      action: z.enum(["register", "unregister", "generate_prompt"]).describe("register | unregister | generate_prompt"),
+      use_case: z.string().describe("Use case key (lowercase ascii, matches /^[a-z][a-z0-9_]{1,63}$/)"),
+      video_summary_task: z.string().optional().describe(
+        "VLM task name (default: <use_case>_monitor). Must not collide with VLM builtins."
+      ),
+      description: z.string().optional().describe("Human description shown by /v1/tasks"),
+      evaluate_rules_path: z.string().optional().describe(
+        "Path to Python evaluate_rules.py override (absolute or relative to cwd of MCP server)"
+      ),
+      on_task_completed_path: z.string().optional().describe("Path to on_task_completed.py override"),
+      parse_summary_path: z.string().optional().describe("Path to custom parse_summary.py override"),
+      rules: z.record(z.unknown()).optional().describe(
+        "Free-form rules dict passed verbatim to evaluate_rules.py at payload.rules"
+      ),
+      reports: z.record(z.unknown()).optional().describe("Report config: {data_source, default_type, filter}"),
+      summarize: z.record(z.unknown()).optional().describe("Per-clip summarize config: {method, processor_kwargs}"),
+      prompt_text: z.string().optional().describe(
+        "Full prompt text (Markdown with ## LOCAL_PROMPT sections, OR a raw 4-const Python source). " +
+        "Omit to skip VLM task registration (you'll register it out-of-band)."
+      ),
+      schema_extensions: z.array(z.object({
+        name: z.string(),
+        type: z.enum(["text", "integer", "real"]),
+        required: z.boolean(),
+      })).optional().describe(
+        "Additional video_summary_tasks columns this use_case needs (e.g. motion_direction, parking_zone). " +
+        "Applied via ALTER TABLE ADD COLUMN if missing (idempotent). Also merged into config.schema in memory."
+      ),
+      overwrite: z.boolean().optional().describe(
+        "When true, replace an existing use_case entry. Default false."
+      ),
+      persist: z.boolean().optional().describe(
+        "When true, mirror the mutation to the config.yaml the server was booted from " +
+        "(comment-preserving via yaml.Document). Requires MCP server to have been started " +
+        "with --config <path>. Failure to write only produces a warning; in-memory " +
+        "registration still stands."
+      ),
+      event_types: z.array(z.object({
+        name: z.string(),
+        severity: z.string(),
+        desc: z.string(),
+      })).optional().describe(
+        "Only used by action=generate_prompt. Semantic input triples that the autogen " +
+        "meta-prompt turns into a ## LOCAL_PROMPT draft. Each event: name (event id), " +
+        "severity (critical|warn|info), desc (one-sentence Chinese/English description)."
+      ),
+      language: z.enum(["zh", "en"]).optional().describe(
+        "Only used by action=generate_prompt. Output language for the generated prompt (default: zh)."
+      ),
+    },
+  }, async (params) => {
+    try {
+      const { useCaseRegister } = await import("@smartbuilding-video/tools");
+      if (!config.schema) config.schema = {};
+      const result = await useCaseRegister(params as any, {
+        useCaseDict: config.useCaseDict,
+        schema: config.schema,
+        summaryServiceUrl: config.summaryService.url,
+        db: (db as any).db,
+        configPath: config.configPath,
+        vlmUrl: config.vlmService.url,
+        vlmModel: config.vlmService.model,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        isError: !result.ok,
+      };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  });
+
+  // --- smartbuilding_video_summary_task ---
+  server.registerTool("smartbuilding_video_summary_task", {
+    description:
+      "Manage VLM tasks registered in multilevel-video-understanding via /v1/tasks. " +
+      "action=list: return all tasks with source (builtin|dynamic) + description. " +
+      "action=get: fetch full body of one task (4-const prompt content, description, source). " +
+      "action=delete: remove a dynamic task (builtins are immutable — request is acknowledged with a warning). " +
+      "Registration + prompt updates live in smartbuilding_use_case_register; this tool covers the remaining read / drop actions.",
+    inputSchema: {
+      action: z.enum(["list", "get", "delete"]).describe("list | get | delete"),
+      task_name: z.string().optional().describe("VLM task name (required for get / delete; ignored for list)"),
+    },
+  }, async (params) => {
+    try {
+      const { videoSummaryTask } = await import("@smartbuilding-video/tools");
+      const result = await videoSummaryTask(params as any, {
+        summaryServiceUrl: config.summaryService.url,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        isError: !result.ok,
+      };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  });
+
+  // --- smartbuilding_rule_eval ---
+  server.registerTool("smartbuilding_rule_eval", {
+    description: "Manually re-run the rule evaluator against a completed task (defaults to the " +
+      "monitor's latest completed task). Rebuilds the same RuleContext task-poller uses. " +
+      "By default runs dry (returns shouldAlert without persisting); pass create_alert=true to " +
+      "actually insert a row (cooldown honoured).",
+    inputSchema: {
+      monitor_id: z.string().describe("Monitor ID"),
+      task_id: z.number().optional().describe(
+        "Task to re-evaluate (default: latest completed for the monitor)",
+      ),
+      create_alert: z.boolean().optional().describe(
+        "When true, insert an alert row on shouldAlert (default false — dry run)",
+      ),
+    },
+  }, async (params) => {
+    try {
+      const { ruleEval } = await import("@smartbuilding-video/tools");
+      const result = await ruleEval(
+        db,
+        {
+          useCaseDict: config.useCaseDict,
+          schemaExtensions: config.schema?.video_summary_tasks?.extensions,
+        },
+        params as any,
+      );
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  });
+
+  // --- smartbuilding_state_query ---
+  server.registerTool("smartbuilding_state_query", {
+    description: "Read or write the per-monitor JSON state store. action=get returns one key " +
+      "(or the whole state map when `key` is omitted); action=set upserts one key; action=delete " +
+      "removes one key. Rule-engine overrides and on_task_completed callbacks use this store to " +
+      "persist state across task boundaries.",
+    inputSchema: {
+      monitor_id: z.string().describe("Monitor ID"),
+      action: z.enum(["get", "set", "delete"]).describe("Action to perform"),
+      key: z.string().optional().describe("State key (required for set/delete; optional for get)"),
+      value: z.unknown().optional().describe("Any JSON value (required for set)"),
+    },
+  }, async (params) => {
+    try {
+      const { stateQuery } = await import("@smartbuilding-video/tools");
+      const result = stateQuery(db, params as any);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  });
 }

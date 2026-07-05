@@ -137,8 +137,8 @@ class TestRegisterSource:
         assert resp.status_code == 200
         assert resp.json()["status"] == "started"
 
-    def test_register_accepts_roi_crop_nested(self, client, mock_mgr):
-        """Phase 9: prefilter.roi_crop nested config must be accepted."""
+    def test_register_accepts_roi_block(self, client, mock_mgr):
+        """Phase 9: pipeline.roi top-level block must be accepted."""
         mock_mgr.register_source.return_value = {
             "status": "started",
             "source_id": "cam_child",
@@ -152,23 +152,22 @@ class TestRegisterSource:
                     "enabled": True,
                     "model_path": "/models/yolo11s.xml",
                     "target_classes": ["person"],
-                    "roi_crop": {
-                        "enabled": True,
-                        "mode": "crop",
-                        "expand": 0.25,
-                        "auto_split_area": 0.35,
-                    },
+                },
+                "roi": {
+                    "enabled": True,
+                    "mode": "crop",
+                    "expand": 0.25,
+                    "auto_split_area": 0.35,
                 },
             },
         })
         assert resp.status_code == 200
-        # Verify the nested roi_crop survived into the SourceConfig hand-off.
+        # Verify the roi block survived into the SourceConfig hand-off.
         ((source_arg,), _) = mock_mgr.register_source.call_args
-        assert source_arg.prefilter is not None
-        assert source_arg.prefilter.roi_crop is not None
-        assert source_arg.prefilter.roi_crop.enabled is True
-        assert source_arg.prefilter.roi_crop.mode == "crop"
-        assert source_arg.prefilter.roi_crop.auto_split_area == 0.35
+        assert source_arg.roi is not None
+        assert source_arg.roi.enabled is True
+        assert source_arg.roi.mode == "crop"
+        assert source_arg.roi.auto_split_area == 0.35
 
     def test_register_already_running(self, client, mock_mgr):
         mock_mgr.register_source.return_value = {
