@@ -291,6 +291,11 @@ pytest tests/integration/test_motion_to_webhook.py -m integration -v -s
 
 启动顺序：MediaMTX → mock webhook → videostream-analytics → ffmpeg 推流 → 在另一个终端逐条执行下方 curl。
 
+```bash
+export PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"               # smart-community 根目录
+export VSA_TEST_DATA_DIR="${VSA_TEST_DATA_DIR:-/tmp/vsa-test}"
+```
+
 ### 准备：启动支撑服务（4 个终端）
 
 **T1 — MediaMTX（host）**
@@ -329,7 +334,7 @@ docker run -d --rm --name vsa-test --network host \
 
 ```bash
 ffmpeg -re -stream_loop -1 -ss 40 \
-  -i /home/user/jie/smarthome/smart-community/demo-videos/cam_child/child_safety_demo.mp4 \
+  -i "${PROJECT_ROOT}/demo-videos/cam_child/child_safety_demo.mp4" \
   -c copy -f rtsp rtsp://localhost:8554/live/child
 ```
 
@@ -352,17 +357,28 @@ curl -sf http://localhost:8999/health | python3 -m json.tool
 ```bash
 curl -s -X POST http://localhost:8999/register_source \
   -H "Content-Type: application/json" \
-  -d '{
-    "source_id":   "cam_demo",
-    "source_url":  "rtsp://localhost:8554/live/child",
-    "data_dir":    "/tmp/vsa-test/cam_demo",
-    "pipeline": {
-      "prefilter": {"enabled": false}
-    }
-  }' | python3 -m json.tool
+  --data-binary @- <<JSON | python3 -m json.tool
+{
+  "source_id":   "cam_demo",
+  "source_url":  "rtsp://localhost:8554/live/child",
+  "data_dir":    "${VSA_TEST_DATA_DIR}/cam_demo",
+  "pipeline": {
+    "prefilter": {"enabled": false}
+  }
+}
+JSON
 ```
 
-期望：`{"status": "started", "source_id": "cam_demo", "data_dir": "/tmp/vsa-test/cam_demo", ...}`
+期望（首次注册）：`{"status": "started", "source_id": "cam_demo", "data_dir": "${VSA_TEST_DATA_DIR}/cam_demo", ...}`
+
+期望（重复注册同一个 `source_id`）：`{"status": "already_running", "source_id": "cam_demo"}`。
+
+如果需要让新的 `webhook_url` / `data_dir` / `pipeline` 全量生效，先删除再注册：
+
+```bash
+curl -s -X DELETE http://localhost:8999/sources/cam_demo | python3 -m json.tool
+# 然后重跑 V2 的 register_source
+```
 
 ### V3. `GET /sources` + `GET /sources/{id}/status`
 
@@ -378,7 +394,7 @@ curl -sf http://localhost:8999/sources/cam_demo/status | python3 -m json.tool
 {
   "source_id": "cam_demo",
   "source_url": "rtsp://localhost:8554/live/child",
-  "data_dir": "/tmp/vsa-test/cam_demo",
+  "data_dir": "${VSA_TEST_DATA_DIR}/cam_demo",
   "status": "online",
   "running": true,
   "recording_enabled": true,
@@ -406,7 +422,7 @@ curl -sf http://localhost:9999/recorded_events/motion | python3 -m json.tool | h
 # recording 事件 — envelope: {sourceId, type:"recording", timestamp, payload:{recording_path, recording_start, ...}}
 curl -sf http://localhost:9999/recorded_events/recording | python3 -m json.tool | head -40
 
-DATA_DIR=/tmp/vsa-test/cam_demo   # 与 V2 register body 中的 data_dir 一致
+DATA_DIR="${VSA_TEST_DATA_DIR}/cam_demo"   # 与 V2 register body 中的 data_dir 一致
 ls -la "$DATA_DIR/latest.jpg"
 ls -la "$DATA_DIR/motion_events/$(date +%Y-%m-%d)/"
 ls -la "$DATA_DIR/recordings/$(date +%Y-%m-%d)/"
@@ -468,21 +484,23 @@ curl -s -X DELETE http://localhost:9999/recorded_events > /dev/null
 
 curl -s -X POST http://localhost:8999/register_source \
   -H "Content-Type: application/json" \
-  -d '{
-    "source_id":   "cam_bad",
-    "source_url":  "rtsp://localhost:8554/live/__nonexistent__",
-    "data_dir":    "/tmp/vsa-test/cam_bad",
-    "pipeline": {
-      "prefilter": {"enabled": false},
-      "recording": {"enabled": false},
-      "health": {
-        "max_failures": 3,
-        "recovery_strategy": "remove",
-        "backoff_base": 1.0,
-        "backoff_max": 2.0
-      }
+  --data-binary @- <<JSON | python3 -m json.tool
+{
+  "source_id":   "cam_bad",
+  "source_url":  "rtsp://localhost:8554/live/__nonexistent__",
+  "data_dir":    "${VSA_TEST_DATA_DIR}/cam_bad",
+  "pipeline": {
+    "prefilter": {"enabled": false},
+    "recording": {"enabled": false},
+    "health": {
+      "max_failures": 3,
+      "recovery_strategy": "remove",
+      "backoff_base": 1.0,
+      "backoff_max": 2.0
     }
-  }' | python3 -m json.tool
+  }
+}
+JSON
 
 sleep 15
 curl -sf http://localhost:8999/sources                | python3 -m json.tool
@@ -522,7 +540,7 @@ V1–V9 的 mock webhook 只能验证 VSA **单边**输出契约；V10 把 mock 
 **前置：构建 MCP server（仅首次）**
 
 ```bash
-cd /home/user/jie/smarthome/smart-community
+cd "$PROJECT_ROOT"
 npm install
 for pkg in db rule-engine tools mcp-server; do
   (cd packages/$pkg && npx tsc)
@@ -537,7 +555,7 @@ done
 export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
 mkdir -p "$SMARTBUILDING_DATA_DIR"
 
-cd /home/user/jie/smarthome/smart-community
+cd "$PROJECT_ROOT"
 node packages/mcp-server/dist/index.js --http \
   --config config.yaml.example \
   --monitors monitor_cam_child.yaml
@@ -557,14 +575,14 @@ MCP 监听两个端口：
 
 ```bash
 # A) VSA 在 host 进程里跑
-cd /home/user/jie/smarthome/smart-community/videostream-analytics
+cd "$PROJECT_ROOT/videostream-analytics"
 WEBHOOK_URL=http://localhost:3101/events \
   .venv/bin/videostream-analytics serve --config config/config.yaml
 
 # B) VSA 在 Docker 跑（推荐 host network，容器内 localhost 就是宿主机）
 docker run -d --rm --name vsa-test --network host \
   -e WEBHOOK_URL="http://localhost:3101/events" \
-  -v /tmp/vsa-test:/tmp/vsa-test \
+  -v "${VSA_TEST_DATA_DIR}:${VSA_TEST_DATA_DIR}" \
   videostream-analytics:latest
 
 # C) 若不能用 --network host（bridge 网络），改用 host.docker.internal
@@ -573,28 +591,36 @@ docker run -d --rm --name vsa-test \
   --add-host=host.docker.internal:host-gateway \
   -p 8999:8999 \
   -e WEBHOOK_URL="http://host.docker.internal:3101/events" \
-  -v /tmp/vsa-test:/tmp/vsa-test \
+  -v "${VSA_TEST_DATA_DIR}:${VSA_TEST_DATA_DIR}" \
   videostream-analytics:latest
 ```
 
 **步骤 3：用 MCP 风格 body 注册 source（`data_dir` 指向 MCP 的 segments dir）**
 
+若 `cam_demo` 已存在，先清理旧 source（避免返回 `already_running`，并确保新的 `data_dir/webhook_url` 生效）：
+
+```bash
+curl -s -X DELETE http://localhost:8999/sources/cam_demo | python3 -m json.tool || true
+```
+
 ```bash
 curl -s -X POST http://localhost:8999/register_source \
   -H "Content-Type: application/json" \
-  -d '{
-    "source_id":   "cam_demo",
-    "source_url":  "rtsp://localhost:8554/live/child",
-    "webhook_url": "http://localhost:3101/events",
-    "data_dir":    "'"$SMARTBUILDING_DATA_DIR"'/segments/cam_demo",
-    "pipeline": {
-      "motion":    {"diff_threshold": 15, "area_ratio": 0.005, "stable_frames": 45},
-      "segment":   {"max_duration": 10, "min_duration": 1.0},
-      "prefilter": {"enabled": false},
-      "recording": {"enabled": true, "interval_seconds": 30, "retention_days": 1},
-      "health":    {"max_failures": 30, "recovery_strategy": "retry"}
-    }
-  }' | python3 -m json.tool
+  --data-binary @- <<JSON | python3 -m json.tool
+{
+  "source_id":   "cam_demo",
+  "source_url":  "rtsp://localhost:8554/live/child",
+  "webhook_url": "http://localhost:3101/events",
+  "data_dir":    "${SMARTBUILDING_DATA_DIR}/segments/cam_demo",
+  "pipeline": {
+    "motion":    {"diff_threshold": 15, "area_ratio": 0.005, "stable_frames": 45},
+    "segment":   {"max_duration": 10, "min_duration": 1.0},
+    "prefilter": {"enabled": false},
+    "recording": {"enabled": true, "interval_seconds": 30, "retention_days": 1},
+    "health":    {"max_failures": 30, "recovery_strategy": "retry"}
+  }
+}
+JSON
 ```
 
 `data_dir` 必须落到 `${SMARTBUILDING_DATA_DIR}/segments/<source_id>/` —— 这是 MCP 的存储清理器假定的布局。MCP 端 `monitor-ctl.ts` 注入这个字段时也用同样的拼接。
@@ -604,7 +630,7 @@ curl -s -X POST http://localhost:8999/register_source \
 ```bash
 sleep 90   # 让 ~3 个 motion 事件 + ~2 个 recording 落 DB
 
-cd /home/user/jie/smarthome/smart-community/videostream-analytics
+cd "$PROJECT_ROOT/videostream-analytics"
 .venv/bin/python <<'EOF'
 import os, sqlite3
 
@@ -681,16 +707,18 @@ tail -20 /tmp/.../mcp.log   # 看你 redirect 到的文件
 # 注册一个开启 keepalive 的 source，timeout 设短让验证快速完成
 curl -s -X POST http://localhost:8999/register_source \
   -H "Content-Type: application/json" \
-  -d '{
-    "source_id":   "cam_ka",
-    "source_url":  "rtsp://localhost:8554/live/child",
-    "data_dir":    "/tmp/vsa-test/cam_ka",
-    "pipeline": {
-      "prefilter": {"enabled": false},
-      "recording": {"enabled": false},
-      "keepalive": {"enabled": true, "timeout_seconds": 3.0, "check_interval_seconds": 1.0}
-    }
-  }' | python3 -m json.tool
+  --data-binary @- <<JSON | python3 -m json.tool
+{
+  "source_id":   "cam_ka",
+  "source_url":  "rtsp://localhost:8554/live/child",
+  "data_dir":    "${VSA_TEST_DATA_DIR}/cam_ka",
+  "pipeline": {
+    "prefilter": {"enabled": false},
+    "recording": {"enabled": false},
+    "keepalive": {"enabled": true, "timeout_seconds": 3.0, "check_interval_seconds": 1.0}
+  }
+}
+JSON
 
 # 立刻 ping 一次 keepalive — 应返回 200 + last_keepalive_at
 curl -s -X POST http://localhost:8999/sources/cam_ka/keepalive | python3 -m json.tool
@@ -738,7 +766,7 @@ WEBHOOK_URL=http://localhost:9999/events \
   .venv/bin/videostream-analytics serve --config config/config.yaml
 
 # T4 ffmpeg 推流 —— 以本地 mp4 作为 RTSP 源推送给 MediaMTX
-ffmpeg -re -stream_loop -1 -i /home/user/jie/smarthome/smart-community/demo-videos/cam_child/child_safety_demo.mp4 \
+ffmpeg -re -stream_loop -1 -i "${PROJECT_ROOT}/demo-videos/cam_child/child_safety_demo.mp4" \
   -c copy -f rtsp rtsp://localhost:8554/live/child
 ```
 
@@ -747,27 +775,29 @@ ffmpeg -re -stream_loop -1 -i /home/user/jie/smarthome/smart-community/demo-vide
 ```bash
 curl -s -X POST http://localhost:8999/register_source \
   -H "Content-Type: application/json" \
-  -d '{
-    "source_id":   "cam_child_roi",
-    "source_url":  "rtsp://localhost:8554/live/child",
-    "data_dir":    "/tmp/vsa-test/cam_child_roi",
-    "pipeline": {
-      "prefilter": {
-        "enabled": true,
-        "model_path": "/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.xml",
-        "target_classes": ["person"],
-        "detect_fps": 2.0,
-        "device": "NPU"
-      },
-      "roi": {
-        "enabled": true,
-        "mode": "crop",
-        "expand": 0.25,
-        "auto_split_area": 0.35
-      },
-      "recording": {"enabled": false}
-    }
-  }' | python3 -m json.tool
+  --data-binary @- <<JSON | python3 -m json.tool
+{
+  "source_id":   "cam_child_roi",
+  "source_url":  "rtsp://localhost:8554/live/child",
+  "data_dir":    "${VSA_TEST_DATA_DIR}/cam_child_roi",
+  "pipeline": {
+    "prefilter": {
+      "enabled": true,
+      "model_path": "/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.xml",
+      "target_classes": ["person"],
+      "detect_fps": 2.0,
+      "device": "NPU"
+    },
+    "roi": {
+      "enabled": true,
+      "mode": "crop",
+      "expand": 0.25,
+      "auto_split_area": 0.35
+    },
+    "recording": {"enabled": false}
+  }
+}
+JSON
 ```
 
 字段说明：
@@ -786,7 +816,7 @@ curl -s -X POST http://localhost:8999/register_source \
 | `roi.auto_split_area=0.35` | 当 union 面积超过 35% 帧面积时，提前切 segment，避免长 clip 上 crop 失效 |
 | `recording.enabled=false` | 关闭固定时长录像分支，仅验证 motion 路径 |
 
-期望响应：`{"status": "started", "source_id": "cam_child_roi", "source_url": "...", "data_dir": "/tmp/vsa-test/cam_child_roi"}`。
+期望响应：`{"status": "started", "source_id": "cam_child_roi", "source_url": "...", "data_dir": "${VSA_TEST_DATA_DIR}/cam_child_roi"}`。
 
 #### Step 3 — 等待 motion 事件累积
 
@@ -828,7 +858,7 @@ print('prefilter_passed  :', p.get('prefilter_passed'))
 #### Step 5 — 验证磁盘上的 `_input.mp4`
 
 ```bash
-DATA_DIR=/tmp/vsa-test/cam_child_roi
+DATA_DIR="${VSA_TEST_DATA_DIR}/cam_child_roi"
 TODAY=$(date +%Y-%m-%d)
 
 # 5.1 文件存在
@@ -856,9 +886,9 @@ VSA 默认仅通过 `StreamHandler(sys.stdout)` 输出日志。启动 VSA 时重
 ```bash
 WEBHOOK_URL=http://localhost:9999/events \
   .venv/bin/videostream-analytics serve --config config/config.yaml \
-  > /tmp/vsa-test/vsa.log 2>&1 &
+  > "${VSA_TEST_DATA_DIR}/vsa.log" 2>&1 &
 
-grep "Segment early-split by trajectory union" /tmp/vsa-test/vsa.log
+grep "Segment early-split by trajectory union" "${VSA_TEST_DATA_DIR}/vsa.log"
 ```
 
 当画面动作幅度大、union 面积超过 `auto_split_area`（本例为 `0.35`）时会记录该日志。未触发不视为失败；如需强制触发，将 `auto_split_area` 调低至 `0.05` 后重新注册。

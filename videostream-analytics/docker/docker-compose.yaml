@@ -1,5 +1,6 @@
 services:
   videostream-analytics:
+    image: videostream-analytics:latest
     build:
       context: ..
       dockerfile: docker/Dockerfile
