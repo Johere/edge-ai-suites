@@ -59,7 +59,7 @@
 |---|------|--------|----------|--------|
 | 1 | Microservice structure dev | 2W | WW24–WW25 | Done |
 | 2 | Motion detection + NPU Prefilter (migrate from demo) | 1W | WW26 | Done |
-| 3 | Dynamic video source management | 1W | WW27 | In progress |
+| 3 | Dynamic video source management | 1W | WW27 | Done |
 
 ## Jie's Tasks — Use Case Adapter
 
@@ -225,22 +225,23 @@
 - [x] Prefilter 配置契约测试 `tests/unit/test_prefilter_config_contract.py` (9 cases)：source override 全量替换、坏 model_path 优雅降级
 - [x] phase2 dashboard baseline 验证：child 100/100、elder_day1+2 100/100、fridge 75（边界对齐，--tolerance 2.0 后 100）
 
-### In progress (WW27)
+### Done (WW27)
 
-- [ ] Dynamic video source management：register/unregister/pause/resume/pipeline hot-update API 已实现并联通 `SourceManager`，剩余 health monitoring + recovery_strategy (retry/pause/remove) 自动恢复路径联调
-- [ ] `recovery_strategy: remove` 自动注销 + unhealthy 事件投递（`sources/{id}` 状态变更广播）
+- [x] Dynamic video source management：`register/unregister/pause/resume/pipeline hot-update` API 已实现并联通 `SourceManager`
+- [x] health monitoring + recovery_strategy (`retry/pause/remove`) 自动恢复路径已联通
+- [x] `recovery_strategy: remove` 自动注销 + unhealthy 事件投递（`sources/{id}` 状态变更广播）
 
-### Done (WW27 cont. — 2026-07-03)
+### Done (WW27 cont.)
 
 **Use Case Adapter 提前完成 + 集成测试全 pass**
 
-- [x] `smartbuilding_use_case_register` MCP tool（Design §5.2 P2 gap）：一次调用完成 schema ALTER + VLM `POST /v1/tasks`（409 → PATCH）+ 内存 `useCaseDict` 注入 + `useCaseValidate` 复核；零重启加 use case
+- [x] `smartbuilding_use_case_register` MCP tool（[smartbuilding-video-design-2026.2.md §5.2](../smartbuilding-video-design-2026.2.md) P2 gap）：一次调用完成 schema ALTER + VLM `POST /v1/tasks`（409 → PATCH）+ 内存 `useCaseDict` 注入 + `useCaseValidate` 复核；零重启加 use case
 - [x] `parseMarkdownSections` 段名正则 `[A-Z_]+` → `[A-Z0-9_]+`（不然 `T_MINUS_1_PROMPT` 段名匹配不到，会被吞进 LOCAL_PROMPT）
 - [x] `evaluateWithOverride` 加 execFile `timeout: 10_000`（跟 `parseSummary` / `runOnTaskCompleted` 对齐，避免 broken override 挂死 rule_eval）
 - [x] `events-endpoint.ts` 加 `case "status"` 支持 VSA status webhook（选项 A 静默吞 200，不落 DB）
 - [x] `config.yaml.example` schema 里 `severity` 改 `required: false`（避免 elder_wakeup 天然不产 severity 造成 warn 噪声）
 
-**集成测试 3 阶段全 pass**（详见 [smarthome_arch2_dev.md §26](/home/user/jie/smarthome/agent-ai.smarthome/docs/smarthome_new_arch/smarthome_arch2_dev.md)）
+**集成测试 3 阶段全 pass（记录保留在本仓）**
 
 - Phase 2：基线 U1-U10（3 内置 UC + cooldown），全 pass
 - Phase 3：U11 (HA) + U12 (Parking) 扩展 case（4/4 pass；rule_eval 手塞 task 路径绕过 VSA motion 对 5s loop 短视频不触发问题）
@@ -258,9 +259,9 @@
 
 - Issue #1（integration-status.md）：`multilevel-video-understanding` `/v1/summary` 不指定 method 时 fallback 到非法 enum.name（下划线 vs 连字符）→ 手工 curl 打样必须显式传 `method: "SIMPLE"`
 
-### Done (WW27 cont. — 2026-07-03 晚，Plan §27 落地)
+### Done (WW27 cont. — P1/P2 gap closure)
 
-**Design §5.2 兑现 —— 3 项 P1/P2 gap 一次性搞定**
+**[smartbuilding-video-design-2026.2.md §5.2](../smartbuilding-video-design-2026.2.md) 兑现 —— 3 项 P1/P2 gap 一次性搞定**
 
 - [x] **P1-A 默认 evaluator 反推**：`defaultRuleEvaluator` 加 `requireEvent` / `requireDirection` / `excludeZones` / `alertMessageExtraField` 4 个 rules keys；删 `child_safety` / `parking_safety` / `high_altitude_safety` 的 Python override；alertMessage 格式与旧 override 完全一致；`U1/U2/U11a/U11b/U12a/U12b` 6 条 rule_eval 全 pass
 - [x] **P1-B `use_case_register` 加 `persist: true`**：`ServerConfig.configPath` 通过 `--config` CLI 参数带入；`persistUseCaseDictEntry` 用 yaml `parseDocument` + `setIn`/`deleteIn` + `toString` comment-preserving 写回 `config.yaml.example`；写盘失败降级为 warning 不阻断；`config_yaml: "written" | "removed" | "skipped"` 三态；`pet_safety_persisted` 端到端 register + unregister 磁盘校验 pass
@@ -275,13 +276,13 @@
 
 ### Next Steps (WW28+)
 
-- [x] WW28–WW29：Use Case Adapter — register new use case 主流程（WW27 提前完成 + WW27 晚 persist=true 补齐）
+- [x] WW28–WW29：Use Case Adapter — register new use case 主流程（WW27 提前完成 + WW27 persist=true 补齐）
 - [x] WW30：Use Case Adapter wrapper（WW26 已完成）
-- [x] WW31：Customize post-proc — summary parser + rule engine override 路径（WW26 已完成 + WW27 晚 3 UC 反推到 default）
+- [x] WW31：Customize post-proc — summary parser + rule engine override 路径（WW26 已完成 + WW27 3 UC 反推到 default）
 - [x] 与 Jiaojiao 联调 MCP Server 的 events webhook → pending task → VLM → rule eval → alert 链路（WW27 集成测试 3 阶段全 pass）
-- [x] P1 默认 evaluator 反推（WW27 晚完成）
-- [x] P1 `persist: true`（WW27 晚完成）
-- [x] P2 `smartbuilding_video_summary_task` tool 家族（WW27 晚完成）
+- [x] P1 默认 evaluator 反推（WW27 完成）
+- [x] P1 `persist: true`（WW27 完成）
+- [x] P2 `smartbuilding_video_summary_task` tool 家族（WW27 完成）
 - [ ] WW28+：跟 jiaojiao 沟通 5 项跨模块改动（integration-status.md §A）—— review 决定是否合并 / 迁移
 - [ ] WW28+：与上游 `edge-ai-libraries/multilevel-video-understanding` 沟通 Issue #1（method fallback bug）
 - [ ] P2（可选）：Design doc 一次性修订 —— 名字对齐（cooldownSec → cooldownSeconds）+ 加 `use_case_register` / `video_summary_task` / `parse_summary_path` 章节 + S1/S3/S4 结构性说明
