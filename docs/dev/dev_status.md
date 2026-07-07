@@ -271,7 +271,7 @@
 - ✅ 零 TypeScript
 - ✅ 零 curl 手工
 - ✅ **零 YAML 手工**（P1-B 兑现）
-- ⚠️ 零 prompt 手工（未做，需 P3 LLM autogen）
+- ✅/⚠️ **零 prompt 从空白手写**（P3 core 兑现）：`smartbuilding_use_case_register action=generate_prompt` 调 vLLM 生成 `## LOCAL_PROMPT` 骨架；`smartbuilding_prompt_lint` 独立预检 code fence / pipe enum / event / required schema field；仍保留 human-in-the-loop review/refine 业务边界
 - ✅ **零 Python 手工**（P1-A 兑现；仅 elder_wakeup 时间比较 + fridge stub 保留 override）
 
 ### Next Steps (WW28+)
@@ -286,6 +286,6 @@
 - [ ] WW28+：跟 jiaojiao 沟通 5 项跨模块改动（integration-status.md §A）—— review 决定是否合并 / 迁移
 - [ ] WW28+：与上游 `edge-ai-libraries/multilevel-video-understanding` 沟通 Issue #1（method fallback bug）
 - [ ] P2（可选）：Design doc 一次性修订 —— 名字对齐（cooldownSec → cooldownSeconds）+ 加 `use_case_register` / `video_summary_task` / `parse_summary_path` 章节 + S1/S3/S4 结构性说明
-- [ ] P3（可选，Design §5.2 Step 3 承诺）：LLM prompt autogen（`use_case_register` 传 event_types + description → 调 vLLM 生成 prompt.md 骨架）
+- [x] P3 core（Design §5.2 Step 3 承诺）：LLM prompt autogen（`use_case_register` 传 event_types + description → 调 vLLM 生成 prompt.md 骨架）+ 独立 `smartbuilding_prompt_lint` 质量门禁 + contract test
 - [ ] P3（可选）：`smartbuilding_use_case_wizard` MCP tool（agent 交互式）
-- [ ] P3（可选）：Prompt lint tool（静态检 `A|B|C` / code fence）
+- [ ] P3 validation：真实 vLLM 对 child_safety / parking_safety / high_altitude_safety 做 dogfood 保真度抽检，并补 Phase 4 E2E 证据

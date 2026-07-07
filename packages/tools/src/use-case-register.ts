@@ -5,6 +5,7 @@ import type { UseCaseValidateResult } from "./use-case-validate.js";
 import { useCaseValidate } from "./use-case-validate.js";
 import {
   generatePrompt,
+  type GeneratePromptResult,
   type PromptAutogenEventType,
 } from "./prompt-autogen.js";
 
@@ -75,6 +76,8 @@ export interface UseCaseRegisterResult {
   };
   /** Only present for `action=generate_prompt`. Draft `## LOCAL_PROMPT` text. */
   generated_prompt?: string;
+  /** Only present for `action=generate_prompt`. Structured lint report for the draft. */
+  lint?: GeneratePromptResult["lint"];
   /** Only present for `action=generate_prompt`. Next-step hints. */
   next_steps?: string[];
   warnings: string[];
@@ -319,6 +322,7 @@ async function generatePromptAction(
   result.errors.push(...autogenResult.errors);
   if (autogenResult.ok) {
     result.generated_prompt = autogenResult.generated_prompt;
+    result.lint = autogenResult.lint;
     result.next_steps = autogenResult.next_steps;
     result.ok = true;
   }

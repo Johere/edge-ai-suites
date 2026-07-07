@@ -1,3 +1,5 @@
+import { promptLint, type PromptLintResult } from "./prompt-lint.js";
+
 /**
  * LLM-assisted prompt generation for new use cases (Design §5.2 Step 3).
  *
@@ -48,6 +50,8 @@ export interface GeneratePromptResult {
   ok: boolean;
   use_case: string;
   generated_prompt?: string;
+  /** Structured lint report for the generated draft. */
+  lint?: PromptLintResult;
   /** Non-fatal lint findings (e.g. detected code fence, pipe enum, missing field). */
   warnings: string[];
   errors: string[];
@@ -55,9 +59,6 @@ export interface GeneratePromptResult {
 }
 
 const REQUEST_TIMEOUT_MS = 120_000;
-const CODE_FENCE_RE = /```/;
-const PIPE_ENUM_RE = /\b\w+\s*\|\s*\w+\s*\|\s*\w+\b/;
-
 export async function generatePrompt(
   params: GeneratePromptParams,
   deps: GeneratePromptDeps,
@@ -127,23 +128,14 @@ export async function generatePrompt(
     cleaned = `## LOCAL_PROMPT\n\n${cleaned}`;
   }
 
-  // Post-processing lint checks
-  if (CODE_FENCE_RE.test(cleaned)) {
-    result.warnings.push(
-      "generated prompt contains triple-backtick code fence — POST /v1/tasks will reject with banned_token; edit manually before register",
-    );
-  }
-  if (PIPE_ENUM_RE.test(cleaned)) {
-    result.warnings.push(
-      "generated prompt contains `A | B | C` pipe-separated enum — small VLMs may echo the whole line verbatim (see Convention 1); consider refining",
-    );
-  }
-  const eventNames = params.event_types.map((e) => e.name);
-  const missingEvents = eventNames.filter((n) => !cleaned.includes(n));
-  if (missingEvents.length > 0) {
-    result.warnings.push(
-      `event names missing from generated prompt: ${missingEvents.join(", ")} — model may have hallucinated / dropped events; verify before register`,
-    );
+  const lint = promptLint({
+    prompt_text: cleaned,
+    event_types: params.event_types,
+    schema_extensions: params.schema_extensions,
+  });
+  result.lint = lint;
+  for (const issue of lint.issues) {
+    result.warnings.push(`generated prompt lint ${issue.severity}: ${issue.message}`);
   }
 
   result.generated_prompt = cleaned;

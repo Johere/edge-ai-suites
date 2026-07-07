@@ -1034,12 +1034,37 @@ MCP server 启动时把 `config.yaml` 的 `use_case_dict` 一次性快照到 `Se
 
 **当 `persist: true`** 时，register 和 unregister 都会用 yaml `Document` API 把改动**写回 `--config` 指定的 config.yaml 文件**（注释和字段顺序保留）—— MCP 重启后仍在，不再是 in-memory-only。
 
-**`action=generate_prompt`**（本节主打）：**不 mutate 任何状态**，仅调 vLLM 生成 `## LOCAL_PROMPT` 骨架并返回；用户手工 review + refine 后再走 `action=register`。设计为 human-in-the-loop，兑现 Design §5.2 Step 3 "LLM 生成 VIDEO_SUMMARY prompt"。
+**`action=generate_prompt`**（本节主打）：**不 mutate 任何状态**，仅调 vLLM 生成 `## LOCAL_PROMPT` 骨架并返回；返回里包含结构化 `lint` 结果。用户 review + refine 后再走 `action=register`。设计为 human-in-the-loop，兑现 Design §5.2 Step 3 "LLM 生成 VIDEO_SUMMARY prompt"。
 
-### 10.3 零重启操作步骤（`pet_safety` 完整例子）
+**`smartbuilding_prompt_lint`**：独立 prompt 预检工具，可用于 LLM 生成稿或手写 `prompt.md`。它静态检查 `## LOCAL_PROMPT` 段、markdown code fence、`A | B | C` pipe enum、遗漏 event、遗漏 required schema field、残留 `<think>` 等问题；`strict=true` 时 warning 也会让 `ok=false`。
 
-假设已经在跑 §3 那套三服务（VSA / VLM / MCP），且没重启 MCP。以下所有步骤对已在跑的
-`cam_fridge` / `cam_child` / `cam_elder_bedroom(*)` 都无影响。
+### 10.3 零代码 + 零重启操作步骤（`pet_safety` 实测例子）
+
+本节是 2026-07-07 用 `pet_safety` 测试视频实际走通后的记录。目标是验证 Design §5.2 的承诺：**新增一个 use case 不改 TypeScript、不手写 YAML、不手工注册 VLM task、不写 Python override**。简单阈值类 use case 只靠 `rules` 字典和内置 `defaultRuleEvaluator` 完成规则判断。
+
+建议验证 `pet_safety` 时只注册 `cam_pet`，不要让完整 `monitors.yaml.example` 自动拉起所有内置 monitor。否则未推流的 `cam_high_altitude` / `cam_parking` 会制造 RTSP reconnect 噪声，甚至让 auto-register 超时。推荐启动顺序：
+
+1. 启动 MediaMTX 并推 `rtsp://localhost:8554/live/pet`
+2. 启动 VSA `:8999`
+3. 启动 VLM stack：multilevel `:8192` + vLLM `:41091`
+4. 启动 MCP：`node packages/mcp-server/dist/index.js --http --config config.yaml.example`
+5. 用 `smartbuilding_monitor_ctl register_source` 动态注册 `cam_pet`
+
+**vLLM 模型名必须与服务端一致**。`generate_prompt` 走 MCP 的 `vlm_service`，会调用 `http://localhost:41091/v1/chat/completions`。先查实际模型名：
+
+```bash
+curl -sS http://localhost:41091/v1/models | jq '.data[].id'
+```
+
+若返回 `Qwen/Qwen3.5-35B-A3B`，则 [config.yaml.example](../config.yaml.example) 里必须是：
+
+```yaml
+vlm_service:
+  url: http://localhost:41091/v1
+  model: Qwen/Qwen3.5-35B-A3B
+```
+
+如果仍是 `model: default`，`generate_prompt` 会失败：`The model default does not exist`。改完 config 后要重启 MCP。
 
 #### 步骤 A0 — （新推荐）用 `generate_prompt` 生成 prompt.md 骨架
 
@@ -1053,12 +1078,12 @@ curl -sS -X POST http://localhost:3100/mcp \
     "arguments":{
       "action":"generate_prompt",
       "use_case":"pet_safety",
-      "description":"监控家里的宠物是否处于危险状态",
+      "description":"监控家里的宠物是否处于危险状态，包括被卡住、困住、异常挣扎、尝试从门窗逃离，以及正常休息玩耍等情况",
       "event_types":[
-        {"name":"pet_stuck","severity":"critical","desc":"宠物被卡住/困在狭窄处"},
-        {"name":"pet_escape","severity":"warn","desc":"宠物尝试跳门/翻窗逃跑"},
-        {"name":"pet_normal","severity":"info","desc":"宠物正常休息/玩耍/进食"},
-        {"name":"no_incident","severity":"info","desc":"画面无宠物"}
+        {"name":"pet_stuck","severity":"critical","desc":"宠物被卡住、困在狭窄处、无法正常移动或明显挣扎"},
+        {"name":"pet_escape","severity":"warn","desc":"宠物尝试从门、窗、栏杆、阳台等位置逃离"},
+        {"name":"pet_normal","severity":"info","desc":"宠物正常休息、玩耍、进食或走动"},
+        {"name":"no_incident","severity":"info","desc":"画面中没有宠物或没有异常事件"}
       ],
       "schema_extensions":[
         {"name":"pet_zone","type":"text","required":false}
@@ -1066,7 +1091,7 @@ curl -sS -X POST http://localhost:3100/mcp \
       "language":"zh"
     }}}' \
   | grep "^data:" | head -1 | sed 's/^data: //' \
-  | jq '.result.content[0].text | fromjson | {ok, warnings, next_steps, preview: (.generated_prompt|.[0:400])}'
+  | jq '.result.content[0].text | fromjson | {ok, warnings, lint, next_steps, preview: (.generated_prompt|.[0:400])}'
 ```
 
 **期望输出**：
@@ -1075,6 +1100,7 @@ curl -sS -X POST http://localhost:3100/mcp \
 {
   "ok": true,
   "warnings": [],
+  "lint": {"ok": true, "errors": [], "warnings": [], "issues": []},
   "next_steps": [
     "1. Save 'generated_prompt' to use-cases/pet_safety/prompt.md",
     "2. Manually refine business boundaries — spell out concrete edge cases (see Convention 3 in use-case-adapter.md)",
@@ -1089,81 +1115,42 @@ curl -sS -X POST http://localhost:3100/mcp \
 - `contains A | B | C pipe-separated enum` → 小 VLM 可能照抄；**建议手工 refine**
 - `event names missing` → 某些 event 没进 prompt；**必须补上**
 
+也可以把生成稿或 refine 后的 `prompt.md` 单独跑一次严格预检：
+
+```bash
+PROMPT_TEXT=$(cat use-cases/pet_safety/prompt.md)
+curl -sS -X POST http://localhost:3100/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -d "$(jq -n --arg prompt "$PROMPT_TEXT" '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"smartbuilding_prompt_lint",arguments:{prompt_text:$prompt,strict:true,event_types:[{name:"pet_stuck"},{name:"pet_escape"},{name:"pet_normal"},{name:"no_incident"}],schema_extensions:[{name:"pet_zone",required:false}]}}}')" \
+  | grep "^data:" | head -1 | sed 's/^data: //' \
+  | jq '.result.content[0].text | fromjson'
+```
+
 保存骨架到磁盘：
 
 ```bash
 mkdir -p use-cases/pet_safety
-curl ... | jq -r '.result.content[0].text | fromjson | .generated_prompt' \
+curl -sS -X POST http://localhost:3100/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"smartbuilding_use_case_register","arguments":{"action":"generate_prompt","use_case":"pet_safety","description":"监控家里的宠物是否处于危险状态，包括被卡住、困住、异常挣扎、尝试从门窗逃离，以及正常休息玩耍等情况","event_types":[{"name":"pet_stuck","severity":"critical","desc":"宠物被卡住、困在狭窄处、无法正常移动或明显挣扎"},{"name":"pet_escape","severity":"warn","desc":"宠物尝试从门、窗、栏杆、阳台等位置逃离"},{"name":"pet_normal","severity":"info","desc":"宠物正常休息、玩耍、进食或走动"},{"name":"no_incident","severity":"info","desc":"画面中没有宠物或没有异常事件"}],"schema_extensions":[{"name":"pet_zone","type":"text","required":false}],"language":"zh"}}}' \
+  | grep "^data:" | head -1 | sed 's/^data: //' \
+  | jq -r '.result.content[0].text | fromjson | .generated_prompt' \
   > use-cases/pet_safety/prompt.md
 ```
 
-然后 **`vim use-cases/pet_safety/prompt.md`**——加业务细节（Convention 3，具体案例枚举，例如"宠物在门缝里挣扎"、"宠物爬向阳台栏杆"）。
+然后 review `use-cases/pet_safety/prompt.md`。允许人工 refine 业务边界，例如补充"宠物在门缝里挣扎"、"宠物爬向阳台栏杆"等具体例子；但不需要从空白手写 prompt。
 
 > **不想用 generate_prompt？** 完全跳过 §A0，直接进 §A（手写 prompt.md）。tool 不强制。
 
-#### 步骤 A — 写 evaluate_rules.py 和 prompt.md（磁盘上）
+#### 步骤 A — 注册 use case（不写 Python override）
 
-```bash
-cd /home/user/jie/smarthome/smart-community
-mkdir -p use-cases/pet_safety
-
-cat > use-cases/pet_safety/prompt.md <<'EOF'
-## LOCAL_PROMPT
-
-You are a home pet-safety camera. Watch the 10-second clip and output EXACTLY these fields:
-
-SEVERITY: critical | warn | info
-EVENT: <one of: pet_stuck, pet_escape, pet_normal, no_incident>
-DESC: <one sentence>
-PET_ZONE: <one of: cage, sofa, floor, door, unknown>
-
-Rules:
-- pet_stuck = animal trapped / immobile in unnatural position → critical
-- pet_escape = animal reaching for door/window in a way suggesting escape → warn
-- pet_normal = resting / playing / eating → info
-- no visible pet = no_incident, info
-EOF
-
-cat > use-cases/pet_safety/evaluate_rules.py <<'EOF'
-import sys, json
-
-def main():
-    ctx = json.load(sys.stdin)
-    fields = (ctx.get("fields") or {})
-    event = fields.get("event", "")
-    severity = fields.get("severity", "info")
-    desc = fields.get("desc", "")
-    zone = fields.get("pet_zone", "unknown")
-
-    rules = (ctx.get("payload", {}).get("rules") or {})
-    threshold = rules.get("severityThreshold", "warn")
-    order = {"info": 0, "warn": 1, "critical": 2}
-
-    if event == "no_incident":
-        print(json.dumps({"should_alert": False})); return
-    if order.get(severity, 0) < order.get(threshold, 1):
-        print(json.dumps({"should_alert": False})); return
-
-    msg = f"[pet_safety] {event}: {severity} — {desc} (zone={zone})"
-    print(json.dumps({"should_alert": True, "alert_message": msg}))
-
-if __name__ == "__main__":
-    main()
-EOF
-```
-
-**期望输出**：两个文件被创建，`ls use-cases/pet_safety/` 显示 `evaluate_rules.py  prompt.md`。
-
-#### 步骤 B — 调 `smartbuilding_use_case_register` 一步搞定
-
-用 `jq` 组装参数并 POST：
+这一步体现零 Python：不要传 `evaluate_rules_path`。`defaultRuleEvaluator` 会按 `rules.severityThreshold`、`rules.excludeEvents`、`rules.alertMessageExtraField` 完成 pet_safety 的规则判断。
 
 ```bash
 PROMPT_TEXT=$(cat use-cases/pet_safety/prompt.md)
 
 jq -n \
   --arg pt "$PROMPT_TEXT" \
-  --arg erp "$(pwd)/use-cases/pet_safety/evaluate_rules.py" \
   '{
     jsonrpc: "2.0", id: 1, method: "tools/call",
     params: {
@@ -1173,14 +1160,23 @@ jq -n \
         use_case: "pet_safety",
         video_summary_task: "pet_safety_monitor",
         description: "Pet safety monitoring (dynamic)",
-        evaluate_rules_path: $erp,
-        rules: { severityThreshold: "warn", cooldownSeconds: 300 },
+        rules: {
+          severityThreshold: "warn",
+          excludeEvents: ["pet_normal", "no_incident"],
+          alertMessageExtraField: "pet_zone",
+          cooldownSeconds: 60
+        },
+        summarize: {
+          method: "SIMPLE",
+          processor_kwargs: { levels: 1, level_sizes: [-1], process_fps: 2 }
+        },
         reports: { data_source: "alerts", default_type: "daily", filter: {} },
         prompt_text: $pt,
         schema_extensions: [
           { name: "pet_zone", type: "text", required: false }
         ],
-        persist: true
+        persist: true,
+        overwrite: true
       }
     }
   }' | curl -s -X POST http://localhost:3100/mcp \
@@ -1228,15 +1224,15 @@ jq -n \
 已经注册过，`vlm_task` 会是 `"updated"`（自动走了 PATCH 分支）。
 `config_yaml: "written"` 表示 `config.yaml.example` 已同步落盘（配了 `persist:true` 且 MCP 启动时带了 `--config`）；不传 `persist:true` 或 MCP 未带 `--config` 时值为 `"skipped"`。
 
-#### 步骤 C — 加 monitor 并让它开始跑
+#### 步骤 B — 加 monitor 并让它开始跑
 
 现有 MCP 依然在跑，直接调 `smartbuilding_monitor_ctl register_source`——它内部会跑
 `use_case_validate`（此时 `use_case_dict` 里已经有 `pet_safety`，validate 通过）：
 
 ```bash
 # 先把宠物视频推到 mediamtx（生成一个新 stream path）
-# 这里假设你已经准备了 demo-videos/cam_pet/pet_demo.mp4
-ffmpeg -re -stream_loop -1 -i demo-videos/cam_pet/pet_demo.mp4 \
+# 这里假设你已经准备了 demo-videos/cam_pet/pet_safety.mp4
+ffmpeg -re -stream_loop -1 -i demo-videos/cam_pet/pet_safety.mp4 \
   -c copy -f rtsp -rtsp_transport tcp rtsp://localhost:8554/live/pet &
 
 # 用 MCP tool 添加 monitor
@@ -1250,9 +1246,10 @@ curl -s -X POST http://localhost:3100/mcp \
       "source_url":"rtsp://localhost:8554/live/pet",
       "use_case":"pet_safety",
       "pipeline_config":{
-        "motion":{"enabled":true,"diff_threshold":25},
+        "motion":{"enabled":true,"diff_threshold":15,"area_ratio":0.003,"stable_frames":30},
+        "prefilter":{"enabled":false},
         "recording":{"enabled":true,"interval_seconds":60},
-        "segment":{"max_duration":10}
+        "segment":{"max_duration":10,"min_duration":1.0}
       }
     }}}' | grep "^data:" | head -1 | sed 's/^data: //' | jq '.result.content[0].text | fromjson'
 ```
@@ -1262,22 +1259,118 @@ curl -s -X POST http://localhost:3100/mcp \
 约 20-40 秒后应能在 `alerts` 表 / `smartbuilding_alert_query` 里看到 pet_safety 的告警
 （如果视频里有 critical 事件）。
 
-#### 步骤 D — 反向操作：unregister
+#### 步骤 C — 验证 task / alert 落库
+
+查 VLM summary 结果是否被 parser 写入 `video_summary_tasks` 扩展列：
 
 ```bash
-# 先停 monitor（不 unregister 掉，只是 stop 或 unregister_source）
+export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
+
+sqlite3 "$SMARTBUILDING_DATA_DIR/smartbuilding.db" \
+  "SELECT id, monitor_id, status, event, severity, desc, pet_zone, created_at
+   FROM video_summary_tasks
+   WHERE monitor_id='cam_pet'
+   ORDER BY id DESC
+   LIMIT 10;"
+```
+
+本轮实测期望类似：
+
+```text
+1026|cam_pet|completed|pet_escape|warn|宠物从室内走向阳台，并攀爬上了阳台栏杆，存在高空坠落风险|阳台|2026-07-07 14:42:34
+```
+
+含义：`event=pet_escape` 是 VLM 识别的事件类型，`severity=warn` 达到告警阈值，`desc` 是描述，`pet_zone=阳台` 是动态 schema 扩展列落库结果。
+
+查 alert 推荐用 MCP tool：
+
+```bash
+curl -sS -X POST http://localhost:3100/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"smartbuilding_alert_query",
+    "arguments":{"monitor_id":"cam_pet","action":"latest","limit":5}
+  }}' \
+  | grep "^data:" | head -1 | sed 's/^data: //' \
+  | jq '.result.content[0].text | fromjson'
+```
+
+实测成功输出中应看到：
+
+```text
+[pet_safety] pet_escape: warn — 宠物从室内走向阳台，并攀爬上了阳台栏杆，存在高空坠落风险 (zone=阳台)
+```
+
+如果直接查 SQLite，注意 `alerts` 是 use-case-agnostic 瘦表，**没有** `source_id` / `event` / `severity` / `pet_zone` / `acked` 列。结构化字段在 `video_summary_tasks` 上，需要 JOIN：
+
+```bash
+sqlite3 "$SMARTBUILDING_DATA_DIR/smartbuilding.db" \
+  "SELECT
+     a.id,
+     a.monitor_id,
+     a.use_case,
+     t.event,
+     t.severity,
+     t.pet_zone,
+     a.description,
+     a.created_at,
+     CASE WHEN a.ack_at IS NULL THEN 0 ELSE 1 END AS acked
+   FROM alerts a
+   LEFT JOIN video_summary_tasks t ON t.id = a.task_id
+   WHERE a.monitor_id='cam_pet'
+   ORDER BY a.id DESC
+   LIMIT 5;"
+```
+
+#### 步骤 D — 定位常见实测错误
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `The model default does not exist` | `config.yaml.example` 的 `vlm_service.model` 与 `:41091/v1/models` 返回的真实模型名不一致 | 改成真实模型名（如 `Qwen/Qwen3.5-35B-A3B`）并重启 MCP |
+| `SyntaxError ... "task_id":}` | shell 变量 `TASK_ID` 为空，拼出的 JSON 非法 | 先 `echo "$TASK_ID"`；推荐用 `jq -n --argjson task_id "$TASK_ID"` 组请求 |
+| `task-poller task ... failed: fetch failed` | task-poller 调 `:8192/v1/summary` 时服务暂不可用或连接失败 | 查 `curl -sf http://localhost:8192/v1/health` 和 vLLM `/v1/models`；单条 failed 后有 completed task 一般不影响主链路 |
+| `FOREIGN KEY constraint failed` when `monitor_ctl unregister` | `cam_pet` 已有 events/tasks/alerts/recordings 引用，直接删除 monitors 被外键挡住 | 生产场景用 `stop` 保留历史；测试清场需先删关联表再删 monitor |
+
+#### 步骤 E — 停止或清场
+
+生产/演示场景只停止 monitor，保留历史数据：
+
+```bash
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
     "name":"smartbuilding_monitor_ctl",
-    "arguments":{"action":"unregister","monitor_id":"cam_pet"}}}'
+    "arguments":{"action":"stop","monitor_id":"cam_pet"}}}' \
+  | grep "^data:" | head -1 | sed 's/^data: //' | jq '.result.content[0].text | fromjson'
+```
 
-# 再 unregister use case
+如果是测试清场，先停 VSA source，再按依赖顺序删历史数据：
+
+```bash
+curl -sS -X DELETE http://localhost:8999/sources/cam_pet || true
+
+sqlite3 "$SMARTBUILDING_DATA_DIR/smartbuilding.db" <<'SQL'
+PRAGMA foreign_keys = ON;
+DELETE FROM alerts WHERE monitor_id = 'cam_pet';
+DELETE FROM reports WHERE monitor_id = 'cam_pet';
+DELETE FROM recordings WHERE monitor_id = 'cam_pet';
+DELETE FROM plans WHERE monitor_id = 'cam_pet';
+DELETE FROM monitor_state WHERE monitor_id = 'cam_pet';
+DELETE FROM video_summary_tasks WHERE monitor_id = 'cam_pet';
+DELETE FROM events WHERE monitor_id = 'cam_pet';
+DELETE FROM monitors WHERE id = 'cam_pet';
+SQL
+```
+
+最后再 unregister use case（会删除 VLM dynamic task，并在 `persist:true` 时从 config.yaml 删除 use_case_dict entry）：
+
+```bash
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
     "name":"smartbuilding_use_case_register",
-    "arguments":{"action":"unregister","use_case":"pet_safety"}}}' \
+    "arguments":{"action":"unregister","use_case":"pet_safety","persist":true}}}' \
   | grep "^data:" | head -1 | sed 's/^data: //' | jq '.result.content[0].text | fromjson'
 ```
 
@@ -1290,25 +1383,24 @@ curl -s -X POST http://localhost:3100/mcp \
   "ok": true,
   "steps": {
     "vlm_task": "deleted",
-    "use_case_dict": "removed"
+    "use_case_dict": "removed",
+    "config_yaml": "removed"
   },
   "warnings": [],
   "errors": []
 }
 ```
 
-### 10.4 已知限制（重启后会不会消失）
+### 10.4 重启后会不会消失
 
 | 层 | 重启后是否保留 |
 |---|---|
 | VLM `/v1/tasks/<name>` | ✅ 保留（写入容器 `~/.cache/.multilevel-video-understanding/tasks/`）|
 | DB schema 扩展列 | ✅ 保留（`ALTER TABLE` 已落盘）|
-| `config.useCaseDict[<name>]` | ❌ **丢失**（内存 only）|
+| `config.useCaseDict[<name>]` | ✅/❌ `persist:true` 时保留；不 persist 时只在内存里，MCP 重启会丢 |
 | Monitor（通过 monitor_ctl register_source 加的） | ✅ 保留（写入 SQLite `monitors` 表）|
 
-所以**重启后你会看到**：数据库里 `cam_pet` 还在、VLM task 还在、schema 列还在，
-但 MCP 会因为找不到 `pet_safety` use case 而抛
-`monitors reference unknown use_case keys` 并退出（[index.ts:64-68](../packages/mcp-server/src/index.ts#L64-L68)）。
+所以本节推荐的 `register persist:true` 路径下，MCP 重启后能从 `config.yaml.example` 重新加载 `pet_safety`。如果注册时没有 persist，数据库里 `cam_pet`、VLM task、schema 列仍在，但 MCP 重启后会因为找不到 `pet_safety` use case 而抛 `monitors reference unknown use_case keys` 并退出（[index.ts:64-68](../packages/mcp-server/src/index.ts#L64-L68)）。
 
 **修复方式**（两种）：
 - **推荐（`persist: true` 自动，已实现）**：register 时传 `persist: true`，tool 会用 yaml Document API 把条目**同步写回 `config.yaml.example`**（保留注释和字段顺序）。重启后 MCP 自动从磁盘加载，无缝继续
@@ -1326,4 +1418,18 @@ curl -s -X POST http://localhost:3100/mcp \
 | `smartbuilding_monitor_ctl` | `register_source` 等 | 加/减 monitor；`register_source` 内部自动跑 use_case_validate |
 | `smartbuilding_monitors_compose` | `up/down/...` | 批量按 `monitors.yaml` 起 monitor |
 | `smartbuilding_rule_eval` | — | dry-run 一个 completed task 看 rule 层判定，不写 DB；`create_alert=true` 时走 cooldown 落 alert |
+
+### 10.6 `pet_safety` 实测验收结论
+
+本轮实测结果证明动态注册链路已完成：
+
+| 层 | 实测证据 | 结论 |
+|---|---|---|
+| Prompt autogen | `use-cases/pet_safety/prompt.md` 由 `generate_prompt` 生成，并通过 `smartbuilding_prompt_lint` | 零 prompt 从空白手写成立 |
+| VLM task | `register` 返回 `vlm_task=registered/updated`，`use_case_validate.valid=true` | 零手工 VLM curl 成立 |
+| Schema | `video_summary_tasks.pet_zone` 可查询，值为 `阳台` | 动态 schema 扩展生效 |
+| Parser | `summaryText` 中 `pet_zone: 阳台` 被写入 DB `pet_zone` 列 | schema-aware parser 生效 |
+| Rules | 不传 `evaluate_rules_path`，alert 仍生成 `(zone=阳台)` | 零 Python override 成立 |
+| Alert | `smartbuilding_alert_query latest` 返回 `[pet_safety] pet_escape: warn — ... (zone=阳台)` | VSA → MCP → VLM → rule → alert 全链路通过 |
+| Persistence | `persist:true` 写回 config.yaml | 零 YAML 手工成立 |
 

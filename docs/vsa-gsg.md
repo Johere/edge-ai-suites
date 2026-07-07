@@ -504,7 +504,7 @@ JSON
 
 sleep 15
 curl -sf http://localhost:8999/sources                | python3 -m json.tool
-curl -sf http://localhost:9999/recorded_events/status | python3 -m json.tool | head -30
+curl -sf http://localhost:9999/recorded_events/status | python3 -m json.tool | head -40
 ```
 
 期望：`cam_bad` 不在 `/sources` 列表中；`recorded_events/status` 含 envelope `{"sourceId": "cam_bad", "type": "status", "payload": {"status": "unhealthy", "reason": "rtsp_timeout"}}` 和 `{"sourceId": "cam_bad", "type": "status", "payload": {"status": "stopped"}}`。

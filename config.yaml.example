@@ -34,7 +34,7 @@ summary_service:
 # vllm-serving-ipex (VLM for scene_query — single-frame queries)
 vlm_service:
   url: http://localhost:41091/v1
-  model: default
+  model: Qwen/Qwen3.5-35B-A3B
   max_edge_px: 720 # resize longest edge to this before sending to VLM (uses ffmpeg)
 
 # videostream-analytics microservice (motion detection, RTSP processing)
