@@ -121,7 +121,7 @@ smartbuilding_state_query
 ## 6. Outstanding Gaps
 
 - **Design document alignment**: 对齐设计文档中的过时命名与结构假设。
-- **Prompt lint tool**: 将 prompt 预检规则抽为独立 MCP 工具。
+- **Prompt lint tool**: Done for core static checks via `smartbuilding_prompt_lint`; remaining work is broader dogfood evidence and any future auto-fix suggestions.
 - **Wizard UX**: 提供与 Design §5.2 流程对应的交互式向导能力。
 - **Additional automation tests**: 扩展 register/unregister、task 管理、prompt 生成契约相关自动化覆盖。
 - **Broadcast E2E verification**: 增加 subscribe -> rule_eval -> notification 的显式 E2E 验证与回归保障。
@@ -133,6 +133,7 @@ Current Assessment:
 - Zero Manual API Registration: Supported
 - Zero Manual YAML Editing: Supported
 - Prompt Generation Assisted by LLM: Supported
+- Prompt Static Lint Gate: Supported
 - Python Override Optional for Advanced Logic: Supported
 
 Conclusion:

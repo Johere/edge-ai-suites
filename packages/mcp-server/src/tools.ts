@@ -397,6 +397,47 @@ export function registerTools(
     }
   });
 
+  // --- smartbuilding_prompt_lint ---
+  server.registerTool("smartbuilding_prompt_lint", {
+    description:
+      "Statically lint a VLM prompt before registering it as a video summary task. " +
+      "Checks for banned markdown code fences, pipe-separated enums, missing event names, " +
+      "missing required schema fields, missing ## LOCAL_PROMPT section, and Qwen-style <think> leftovers. " +
+      "Use this as a quality gate for both LLM-generated and hand-written prompt.md content.",
+    inputSchema: {
+      prompt_text: z.string().describe("Full prompt text to lint, typically prompt.md content"),
+      event_types: z.array(z.object({
+        name: z.string(),
+        severity: z.string().optional(),
+        desc: z.string().optional(),
+      })).optional().describe(
+        "Expected event names. The lint fails if any event name is missing from prompt_text."
+      ),
+      schema_extensions: z.array(z.object({
+        name: z.string(),
+        type: z.string().optional(),
+        required: z.boolean().optional(),
+        values: z.array(z.string()).optional(),
+      })).optional().describe(
+        "Schema extension fields. Required fields must appear in prompt_text."
+      ),
+      strict: z.boolean().optional().describe(
+        "When true, warning-level findings also make ok=false. Default false."
+      ),
+    },
+  }, async (params) => {
+    try {
+      const { promptLint } = await import("@smartbuilding-video/tools");
+      const result = promptLint(params as any);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        isError: !result.ok,
+      };
+    } catch (err: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
+    }
+  });
+
   // --- smartbuilding_video_summary_task ---
   server.registerTool("smartbuilding_video_summary_task", {
     description:
