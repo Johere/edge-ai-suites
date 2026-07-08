@@ -1,4 +1,6 @@
 import { mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -13,16 +15,21 @@ import { EventsEndpoint } from "./events-endpoint.js";
 import { logger } from "./logger.js";
 import { autoRegisterMonitors } from "./monitor-bootstrap.js";
 import { startStorageCleaner } from "./storage-cleaner.js";
+import { McpSubscriberRegistry } from "./mcp-subscriber-registry.js";
 
 /**
- * Build a per-request McpServer. HTTP stateless mode calls this for every request;
- * stdio mode calls it once. DB / config / workerService are shared across instances.
+ * Build an McpServer for a single MCP session. Stateful HTTP creates one per new sessionId;
+ * stdio creates one for the entire process. DB / config / workerService are shared across
+ * instances. `sessionId` is threaded into the subscribe/unsubscribe handlers so
+ * `notifications/resources/updated` can broadcast to the right sessions when alerts fire.
  */
 function createMcpServer(
   config: ServerConfig,
   db: SmartBuildingDB,
   workerService: WorkerService,
   summaryClient: VideoSummaryClient,
+  subscriberRegistry: McpSubscriberRegistry,
+  sessionId: string,
 ): McpServer {
   const server = new McpServer({
     name: "smartbuilding-video",
@@ -30,7 +37,7 @@ function createMcpServer(
   });
 
   registerTools(server, config, db, workerService, summaryClient);
-  registerResources(server, config, db);
+  registerResources(server, config, db, subscriberRegistry, sessionId);
 
   return server;
 }
@@ -92,36 +99,85 @@ async function main() {
     }
   }
 
+  const subscriberRegistry = new McpSubscriberRegistry();
+
+  // Broadcast `notifications/resources/updated` to every MCP session subscribed to this monitor's
+  // alerts uri. See docs/framework-adapters/README.md for the end-to-end contract.
   const onAlert = (monitorId: string) => {
-    logger.debug(`[worker] Alert triggered for monitor ${monitorId}`);
+    const uri = `smartbuilding://monitor/${monitorId}/alerts`;
+    const subs = subscriberRegistry.findSubscribers(uri);
+    if (subs.length === 0) {
+      logger.debug(`[worker] alert for ${monitorId} — no subscribers, dropped notification`);
+      return;
+    }
+    for (const { server } of subs) {
+      server.server.sendResourceUpdated({ uri }).catch((err) =>
+        logger.warn(`[worker] sendResourceUpdated ${uri} failed: ${err.message}`),
+      );
+    }
   };
 
   const summaryClient = new VideoSummaryClient(config.summaryService.url, config.summaryService.pathRemap);
   const workerService = new WorkerService(config, db, summaryClient, onAlert);
 
-  let mcpServer: McpServer | null = null;
-
   if (transportMode === "http") {
     const app = createMcpExpressApp();
 
-    // Stateless HTTP: new server + transport per request.
+    // Stateful HTTP: one McpServer + transport per sessionId. Required for `resources/subscribe`
+    // to persist across requests. Session lifetimes end when the transport closes (client DELETE
+    // or explicit close), at which point we unregister from the subscriber registry.
     app.all("/mcp", async (req, res) => {
       logger.debug(`[mcp] ${req.method} /mcp`);
 
-      const server = createMcpServer(config, db, workerService, summaryClient);
+      const providedSessionId = req.headers["mcp-session-id"] as string | undefined;
+      let entry = providedSessionId ? subscriberRegistry.get(providedSessionId) : undefined;
 
       try {
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: undefined,  // stateless
-        });
-        await server.connect(transport);
-        await transport.handleRequest(req, res, req.body);
+        if (!entry) {
+          // New session — the SDK's StreamableHTTPServerTransport allocates a sessionId
+          // during the initialize response when `sessionIdGenerator` is set.
+          const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (sid: string) => {
+              subscriberRegistry.register(sid, {
+                server,
+                transport,
+                subscriptions: new Set(),
+              });
+              logger.debug(`[mcp] session initialized sid=${sid}`);
+            },
+          });
 
-        res.on("close", () => {
-          logger.debug("[mcp] Request closed");
-          transport.close();
-          server.close();
-        });
+          // Session id isn't known at construction time — pass a callback that reads it after
+          // initialize. We stash a placeholder now and rebind subscribe/unsubscribe from
+          // the transport's sessionId once available.
+          const server = createMcpServer(
+            config,
+            db,
+            workerService,
+            summaryClient,
+            subscriberRegistry,
+            "__pending__",   // reassigned below via onsessioninitialized when we register
+          );
+
+          transport.onclose = () => {
+            const sid = transport.sessionId;
+            if (sid) {
+              subscriberRegistry.unregister(sid);
+              logger.debug(`[mcp] session closed sid=${sid}`);
+            }
+          };
+
+          await server.connect(transport);
+          await transport.handleRequest(req, res, req.body);
+          return;
+        }
+
+        // Existing session — reuse its transport.
+        if (!entry.transport) {
+          throw new Error(`stdio session ${providedSessionId} cannot serve HTTP requests`);
+        }
+        await entry.transport.handleRequest(req, res, req.body);
       } catch (error) {
         logger.error(`[mcp] ${error}`);
         if (!res.headersSent) {
@@ -136,12 +192,18 @@ async function main() {
 
     const port = config.mcp!.port;
     app.listen(port, () => {
-      logger.info(`[mcp-server] Streamable HTTP on http://localhost:${port}/mcp`);
+      logger.info(`[mcp-server] Streamable HTTP (stateful) on http://localhost:${port}/mcp`);
     });
 
   } else {
-    // stdio: single stateful server instance
-    mcpServer = createMcpServer(config, db, workerService, summaryClient);
+    // stdio: single long-lived server registered under a fixed sessionId so onAlert can find it.
+    const STDIO_SESSION_ID = "stdio";
+    const mcpServer = createMcpServer(config, db, workerService, summaryClient, subscriberRegistry, STDIO_SESSION_ID);
+    subscriberRegistry.register(STDIO_SESSION_ID, {
+      server: mcpServer,
+      transport: null,
+      subscriptions: new Set(),
+    });
     const transport = new StdioServerTransport();
     await mcpServer.connect(transport);
   }
