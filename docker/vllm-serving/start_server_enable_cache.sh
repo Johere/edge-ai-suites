@@ -1,4 +1,8 @@
 #!/bin/bash
+#
+# Copyright (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
 
 MODEL_PATH="${MODEL_PATH:-Qwen/Qwen3.5-9B}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-${MODEL_PATH}}"
@@ -17,18 +21,8 @@ echo "MAX_MODEL_LEN is $MAX_MODEL_LEN"
 
 
 python3 "$(dirname "$0")/patch_vllm_video.py"
-# Warning:: workaround for image: intel/llm-scaler-vllm:0.14.0-b8.2.1
-# `pip list | grep vllm` on that image prints:
-#   vllm  0.14.1.dev0+gb17039bcc.d20260430.xpu
-# Only that exact build needs the qwen2_vl.py min/max_pixels patch.
-VLLM_VERSION="$(pip list 2>/dev/null | awk '/^vllm /{print $2; exit}')"
-if [ "$VLLM_VERSION" = "0.14.1.dev0+gb17039bcc.d20260430.xpu" ]; then
-    echo "Detected llm-scaler-vllm b8.2.1 (vllm=$VLLM_VERSION); applying patch_llm_scaler_b8.2.1.py"
-    python3 "$(dirname "$0")/patch_llm_scaler_b8.2.1.py"
-else
-    echo "Skipping patch_llm_scaler_b8.2.1.py (vllm=$VLLM_VERSION)"
-fi
 
+VLLM_ALLOW_RUNTIME_LORA_UPDATING=True \
 TORCH_LLM_ALLREDUCE=1 \
 VLLM_USE_V1=1 \
 VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 \
@@ -53,15 +47,3 @@ python3 -m vllm.entrypoints.openai.api_server \
     --tool-call-parser qwen3_coder \
     --reasoning-parser qwen3 \
     --default-chat-template-kwargs '{"enable_thinking": false}'
-
-
-
-    # --allow-deprecated-quantization ipex_awq
-
-
-# remove `--disable-sliding-window` for VLM models
-# --disable-sliding-window \
-
-# when test performance: --no-enable-prefix-caching \
-
-# --kv-cache-dtype {auto,bfloat16,fp8,fp8_ds_mla,fp8_e4m3,fp8_e5m2,fp8_inc}
