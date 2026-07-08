@@ -13,15 +13,17 @@ import { logger } from "./logger.js";
  * request handlers so the McpServer can advertise `resources.subscribe: true` and update the
  * registry when a client subscribes.
  *
- * `sessionId` identifies the caller in the registry — pass "stdio" for the stdio singleton or
- * the streamable-HTTP session id for HTTP sessions.
+ * `getSessionId` identifies the caller in the registry — invoked lazily when a subscribe/
+ * unsubscribe request actually arrives (not at registration time), so it can return "stdio" for
+ * the stdio singleton or the streamable-HTTP transport's sessionId once the initialize handshake
+ * has assigned one.
  */
 export function registerResources(
   server: McpServer,
   _config: ServerConfig,
   db: SmartBuildingDB,
   registry?: McpSubscriberRegistry,
-  sessionId?: string,
+  getSessionId?: () => string,
 ): void {
   server.registerResource("monitors-list", "smartbuilding://monitors", {
     description: "All monitors with online status",
@@ -118,23 +120,25 @@ export function registerResources(
     }
   );
 
-  // Subscribe / unsubscribe wiring — only when a registry + sessionId are supplied by the caller.
-  if (registry && sessionId) {
+  // Subscribe / unsubscribe wiring — only when a registry + getSessionId are supplied by the caller.
+  if (registry && getSessionId) {
     // Advertise capability so clients know this server supports `resources/subscribe`.
     // McpServer's own registerCapabilities enables listChanged but not subscribe.
     server.server.registerCapabilities({ resources: { subscribe: true } });
 
     server.server.setRequestHandler(SubscribeRequestSchema, async (request) => {
       const uri = request.params.uri;
-      registry.addSubscription(sessionId, uri);
-      logger.debug(`[mcp] session=${sessionId} subscribed to ${uri}`);
+      const sid = getSessionId();
+      registry.addSubscription(sid, uri);
+      logger.debug(`[mcp] session=${sid} subscribed to ${uri}`);
       return {};
     });
 
     server.server.setRequestHandler(UnsubscribeRequestSchema, async (request) => {
       const uri = request.params.uri;
-      registry.removeSubscription(sessionId, uri);
-      logger.debug(`[mcp] session=${sessionId} unsubscribed from ${uri}`);
+      const sid = getSessionId();
+      registry.removeSubscription(sid, uri);
+      logger.debug(`[mcp] session=${sid} unsubscribed from ${uri}`);
       return {};
     });
   }

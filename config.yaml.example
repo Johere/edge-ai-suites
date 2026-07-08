@@ -82,7 +82,7 @@ schema:
 use_case_dict:
   fridge:
     description: "Fridge content tracking"
-    video_summary_task: refrigerator_monitor_en
+    video_summary_task: fridge_monitor
     # No evaluate_rules_path → defaultRuleEvaluator handles it
     summarize:
       method: SIMPLE

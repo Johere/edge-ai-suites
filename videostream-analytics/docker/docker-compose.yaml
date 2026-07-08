@@ -7,11 +7,14 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
+    image: ${REGISTRY:-}videostream-analytics:${TAG:-latest}
     ports:
       - "8999:8999"
     environment:
-      - WEBHOOK_URL=${WEBHOOK_URL:-http://host.docker.internal:18789/webhook/smarthome/event}
-      - RECORDINGS_DIR=/data
+      # - WEBHOOK_URL=${WEBHOOK_URL:-http://host.docker.internal:18789/webhook/smarthome/event}
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:3101/events}
+      # - RECORDINGS_DIR=/data
+      - VSA_TEST_DATA_DIR=${VSA_TEST_DATA_DIR}
       - http_proxy=
       - https_proxy=
       - no_proxy=localhost,127.0.0.1

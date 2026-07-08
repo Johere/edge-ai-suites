@@ -20,8 +20,10 @@ import { McpSubscriberRegistry } from "./mcp-subscriber-registry.js";
 /**
  * Build an McpServer for a single MCP session. Stateful HTTP creates one per new sessionId;
  * stdio creates one for the entire process. DB / config / workerService are shared across
- * instances. `sessionId` is threaded into the subscribe/unsubscribe handlers so
- * `notifications/resources/updated` can broadcast to the right sessions when alerts fire.
+ * instances. `getSessionId` is threaded into the subscribe/unsubscribe handlers so
+ * `notifications/resources/updated` can broadcast to the right sessions when alerts fire. It's a
+ * callback (not a plain string) because for stateful HTTP the transport's sessionId isn't known
+ * until the `initialize` handshake completes — later than server construction.
  */
 function createMcpServer(
   config: ServerConfig,
@@ -29,7 +31,7 @@ function createMcpServer(
   workerService: WorkerService,
   summaryClient: VideoSummaryClient,
   subscriberRegistry: McpSubscriberRegistry,
-  sessionId: string,
+  getSessionId: () => string,
 ): McpServer {
   const server = new McpServer({
     name: "smartbuilding-video",
@@ -37,7 +39,7 @@ function createMcpServer(
   });
 
   registerTools(server, config, db, workerService, summaryClient);
-  registerResources(server, config, db, subscriberRegistry, sessionId);
+  registerResources(server, config, db, subscriberRegistry, getSessionId);
 
   return server;
 }
@@ -148,16 +150,16 @@ async function main() {
             },
           });
 
-          // Session id isn't known at construction time — pass a callback that reads it after
-          // initialize. We stash a placeholder now and rebind subscribe/unsubscribe from
-          // the transport's sessionId once available.
+          // Session id isn't known at construction time — pass a callback that reads it lazily
+          // from the transport once initialize has assigned one (subscribe/unsubscribe always
+          // arrive after initialize, so transport.sessionId is set by the time this is called).
           const server = createMcpServer(
             config,
             db,
             workerService,
             summaryClient,
             subscriberRegistry,
-            "__pending__",   // reassigned below via onsessioninitialized when we register
+            () => transport.sessionId ?? "__pending__",
           );
 
           transport.onclose = () => {
@@ -198,7 +200,7 @@ async function main() {
   } else {
     // stdio: single long-lived server registered under a fixed sessionId so onAlert can find it.
     const STDIO_SESSION_ID = "stdio";
-    const mcpServer = createMcpServer(config, db, workerService, summaryClient, subscriberRegistry, STDIO_SESSION_ID);
+    const mcpServer = createMcpServer(config, db, workerService, summaryClient, subscriberRegistry, () => STDIO_SESSION_ID);
     subscriberRegistry.register(STDIO_SESSION_ID, {
       server: mcpServer,
       transport: null,
