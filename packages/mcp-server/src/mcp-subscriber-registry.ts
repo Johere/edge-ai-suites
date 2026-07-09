@@ -17,6 +17,8 @@ export interface SubscriberEntry {
   server: McpServer;
   transport: StreamableHTTPServerTransport | null;   // null for stdio
   subscriptions: Set<string>;                        // uris this session subscribed to
+  lastSeen: number;                                  // ms epoch of the last HTTP request for this session
+  openSseCount: number;                              // number of currently-open GET SSE streams
 }
 
 export class McpSubscriberRegistry {
@@ -51,6 +53,43 @@ export class McpSubscriberRegistry {
     const out: SubscriberEntry[] = [];
     for (const entry of this.sessions.values()) {
       if (entry.subscriptions.has(uri)) out.push(entry);
+    }
+    return out;
+  }
+
+  /** Mark that a request arrived for this session (refreshes the idle clock). */
+  touch(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (entry) entry.lastSeen = Date.now();
+  }
+
+  /** A GET SSE stream opened for this session — it's now active regardless of request cadence. */
+  sseOpened(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    entry.openSseCount++;
+    entry.lastSeen = Date.now();
+  }
+
+  /** A GET SSE stream closed for this session. */
+  sseClosed(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    entry.openSseCount = Math.max(0, entry.openSseCount - 1);
+    entry.lastSeen = Date.now();
+  }
+
+  /**
+   * Sessions eligible for idle eviction: an HTTP session (transport !== null) with NO open SSE
+   * stream that has been idle longer than `ttlMs`. stdio (transport === null) is always exempt —
+   * it's the process-resident singleton and must never be swept.
+   */
+  findIdle(now: number, ttlMs: number): { sessionId: string; entry: SubscriberEntry }[] {
+    const out: { sessionId: string; entry: SubscriberEntry }[] = [];
+    for (const [sessionId, entry] of this.sessions) {
+      if (entry.transport === null) continue;   // stdio: never sweep
+      if (entry.openSseCount > 0) continue;      // active SSE: exempt
+      if (now - entry.lastSeen > ttlMs) out.push({ sessionId, entry });
     }
     return out;
   }

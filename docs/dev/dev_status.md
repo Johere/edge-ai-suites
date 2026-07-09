@@ -182,9 +182,18 @@
 
 **MCP resource subscription — alert 推送**
 
-- [ ] `resources.ts` 暴露 `smartbuilding://monitor/<id>/alerts` 资源（订阅入口）
-- [ ] `task-poller.ts` 的 `onAlert` callback 实际推送 `notifications/resources/updated`（当前只 logger.debug）
-- [ ] 联调 agent（Claude Desktop / OpenClaw）的 resource subscribe 流程
+- [x] `resources.ts` 暴露 `smartbuilding://monitor/<id>/alerts` 资源（+ `?since` 游标增量读，返回 `latestId`）
+- [x] `index.ts` 的 `onAlert` 实际推送 `notifications/resources/updated`（stateful HTTP + `McpSubscriberRegistry` 广播；原只 logger.debug）
+- [x] 联调 resource subscribe 流程（curl smoke + 对真实运行实例 subscribe → 自然触发 3 条 alert → SSE 收到 → `?since` 拉增量，全链路通过）
+
+**Framework adapter SDK + OpenClaw 参考实现**（详见 [mcp_subscription_status.md](mcp_subscription_status.md) + [framework-adapters/](../framework-adapters/README.md)）
+
+- [x] `packages/framework-adapter-sdk/` — 通用 MCP client SDK（subscribe / cursor dedup / per-monitor 保序 / 断连重连 / poll fallback）
+- [x] `tests/framework-adapter-sdk/` — 7 个单测全绿（`npm run test:sdk`，跑真实 Streamable-HTTP mock server）
+- [x] `packages/framework-adapter-sdk/examples/openclaw/` — 开箱即用 OpenClaw plugin（sink FS-append / channel deliver + install.sh + 硬拷贝 personas）
+- [x] `docs/framework-adapters/*.md` — README / deployment / writing-a-new-framework-adapter / openclaw 四篇
+- [ ] 端到端：install.sh 干净环境跑通 → openclaw.json 配路由 → 重启 gateway → 真实 alert 落到目标 session（待在实机验证）
+- [ ] **运行时新增 monitor 的动态订阅（已知缺口，以后再做）**：adapter 的 `monitorIds` 是插件启动时从 openclaw.json `Object.keys(config.monitors)` 一次性读定的（[adapter.ts](../../packages/framework-adapter-sdk/src/adapter.ts) 构造函数 + `connect()` 只 subscribe 这批），无动态发现。用户通过 monitor compose（`applyMonitors`→`register_source`，[monitor-bootstrap.ts](../../packages/mcp-server/src/monitor-bootstrap.ts)）在运行时起的新 monitor **不会被自动订阅** —— MCP server 侧 `onAlert` 虽会 `findSubscribers(uri)` 广播，但 adapter 从没 subscribe 过新 uri，通知命中 `no subscribers, dropped`。当前解法：openclaw.json 加路由 + 重启 gateway。缺口有两半：(a) 订阅到新 monitor 的 alert；(b) 新 monitor 没有路由表条目→不知道投给谁（会 `no route` 丢弃）。推荐方案：adapter 订阅 `smartbuilding://monitors` 列表资源的变更 → 动态 `subscribeResource` + 一个按 useCase 的默认路由约定（需 SDK 加 `addMonitor()` + server 在 monitor 上线时对 `smartbuilding://monitors` 发 `resources/updated`）。
 
 **Monitor ctl integration with videostream-analytics wrapper（与 Jie 联调）**
 

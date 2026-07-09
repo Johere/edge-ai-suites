@@ -80,6 +80,10 @@ export interface ServerConfig {
   videoSummaryMaxConcurrent: number;
   mcp?: {
     port?: number;
+    /** Evict an MCP session after this long with no open SSE stream AND no HTTP request. Default 30min. */
+    sessionIdleTimeoutMs?: number;
+    /** How often the idle-session sweeper runs. Default 5min. */
+    sessionSweepIntervalMs?: number;
   };
   eventsWebhook?: {
     port?: number;
@@ -144,7 +148,11 @@ export function loadConfig(configPath?: string): ServerConfig {
     pollIntervalMs: parsed?.poll_interval_ms ?? 5000,
     videoSummaryMaxConcurrent: parsed?.video_summary_max_concurrent ?? 2,
     schema: parsed?.schema,
-    mcp: { port: parsed?.mcp?.port ?? 3100 },
+    mcp: {
+      port: parsed?.mcp?.port ?? 3100,
+      sessionIdleTimeoutMs: parsed?.mcp?.session_idle_timeout_ms ?? 30 * 60 * 1000,
+      sessionSweepIntervalMs: parsed?.mcp?.session_sweep_interval_ms ?? 5 * 60 * 1000,
+    },
     eventsWebhook: {
       port: parsed?.events_webhook?.port ?? 3101,
       maxBodyBytes: parsed?.events_webhook?.max_body_bytes ?? 1024 * 1024,

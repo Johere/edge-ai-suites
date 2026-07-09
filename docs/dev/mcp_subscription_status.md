@@ -174,13 +174,65 @@ sequenceDiagram
   - 结果：管线自然产生了 3 条新 alert（id 5/6/7，`climb: critical` × 2、`jump: warn` × 1），SSE 流原样收到 3 条 `{"method":"notifications/resources/updated","params":{"uri":"smartbuilding://monitor/cam_child/alerts"}}`。随后用同一 session 发 `resources/read?uri=...&since=4`，正确返回 id 5-7 的完整 alert 内容（含 `description`、`createdAt`）与新的 `latestId: 7`。
   - 结论：subscribe → 真实告警触发 → SSE 推送 → 客户端按 cursor 拉增量，全链路验证通过，且是自然触发（未手工 INSERT），比 Phase C 单测更接近真实场景。Phase C 单测仍值得补（覆盖 registry 边界情况，如断连重连、多 session 并发订阅），但不再是"未覆盖"的 gap。
 
-### ⏳ 未开始
+### ✅ Phase B 完成 — `packages/framework-adapter-sdk/`（通用 MCP client SDK）
 
-- **B** `packages/framework-adapter-sdk/`（通用 MCP client SDK）
-- **C** `tests/framework-adapter-sdk/` 单测（可顺带补 A.4/onAlert 广播的单测覆盖，见上）
-- **D** `examples/openclaw/`（plugin + install.sh + agent personas seed）
-- **E** `docs/framework-adapters/*.md` 4 篇
-- **F** `dev_status.md` 更新
+**目录**: [packages/framework-adapter-sdk/](../../packages/framework-adapter-sdk/)
+
+- `package.json` — workspace 包 `@smartbuilding-video/framework-adapter-sdk`；deps `@modelcontextprotocol/sdk` + `@smartbuilding-video/db`（仅 type）；`exports` 同时暴露根入口与 `./cursor` 子路径（对齐 plan §3.2 的 import）
+- `tsconfig.json` — 对齐 sibling（`Node16` module + `composite`，**编译成 CJS**，与 db/mcp-server 一致，MCP SDK 有 `require` 构建可 interop）
+- `.npmignore` — 排除 `src/` `examples/` `tests`
+- `src/types.ts` — `AlertPayload` / `AlertSink`（at-least-once + 幂等契约）/ `CursorStore` / `Logger` / `ReconnectConfig` / `TransportConfig` / `AdapterConfig`；`Alert` 直接从 `@smartbuilding-video/db` 复用
+- `src/cursor.ts` — `MemoryCursorStore`（Map）+ `FileCursorStore`（JSON 文件，内存缓存 + temp-file+rename 原子写 + 跨 monitor 写串行化）
+- `src/adapter.ts` — `SmartBuildingAdapter`：
+  - `start()` connect → **先 subscribe 再首读**（避免启动窗口丢 notification，cursor 去重 overlap）→ 每 monitor seed/resume
+  - 单一 `syncMonitor()` 交付路径：cursor===null → seed 到 latestId 跳历史；cursor!==null → 读 `?since=cursor` → 升序 push → 全部成功后原子推进 cursor（中途失败整批重放 = at-least-once）
+  - notification handler + optional poll fallback（`pollFallbackMs`，默认 0）都走同一 `runExclusive` **per-monitor mutex**
+  - 断连重连：指数退避（1000/30000/2）+ **generation guard**（旧 transport handler 失效不误触发重连）
+  - `stop()` 清 timer + unsubscribe + close，best-effort 幂等
+- `src/index.ts` — 导出 `SmartBuildingAdapter` / `MemoryCursorStore` / `FileCursorStore` + 全部 type
+- **build 验证**：`npm run build`（全 workspace）✅ 零错误；dist 输出 CJS
+
+### ✅ Phase C 完成 — `tests/framework-adapter-sdk/` 单测
+
+**目录**: [tests/framework-adapter-sdk/](../../tests/framework-adapter-sdk/)（与既有 `tests/dev-mcp-server/` 同层）
+
+- **测试运行器**：Node 内建 `node:test` + `tsx`（无额外测试框架依赖）；root `package.json` 加 `test:sdk` 脚本 `node --import tsx --test tests/framework-adapter-sdk/*.test.ts`
+- `fixtures/mock-mcp-server.ts` — 自包含 mock，**跑真实 Streamable-HTTP transport**（非 stub client）：stateful HTTP session、`alerts{?since}` resource、subscribe/unsubscribe、`sendResourceUpdated` 广播；测试钩子 `fireAlert` / `addAlertSilently` / `dropConnections`；未知/过期 session 返回 404（让 client SSE 重试耗尽后 surface error）
+- `adapter.test.ts` — 7 个场景全绿：seed 跳历史 / 突发去重保序（coalescing+debounce）/ 跨摄像头独立 / **FileCursorStore 重启不重放 + 补投递** / **断连重连补投递** / poll fallback 兜底 / **sink 失败不推进游标（at-least-once 重放）**
+- `README.md` — 运行方式 + 覆盖表 + fixture 钩子说明
+- 验证：`npm run test:sdk` → **7 pass / 0 fail**；`npx tsc --noEmit` 测试+fixture 零类型错误；`npm run build` 全 workspace 通过
+
+**测试发现并修复的真实 adapter bug**：`StreamableHTTPClientTransport` 自带 SSE 重连（`maxRetries=2`），耗尽后触发的是 **`onerror` 而非 `onclose`**。原 adapter 的 `onerror` 只 log 不重连 → server bounce 后永不恢复。已修：`onerror` 也走 `handleDisconnect`，加 `reconnecting` 标志去重 onclose/onerror pair。
+
+### ✅ Phase D 完成 — `packages/framework-adapter-sdk/examples/openclaw/`（OpenClaw 参考 plugin）
+
+**目录**: [packages/framework-adapter-sdk/examples/openclaw/](../../packages/framework-adapter-sdk/examples/openclaw/)（在 SDK 包内，被 `.npmignore` 排除，非 workspace 成员）
+
+- `index.ts` — `definePluginEntry`：parse config → 建 `SmartBuildingAdapter`（FileCursorStore 落 `<OPENCLAW_HOME>/smartbuilding-alerts-cursor.json`）→ `registerService`（start/stop 绑 gateway 生命周期）
+- `api.ts` — re-export `openclaw/plugin-sdk/plugin-entry`（同 smarthome-video；`openclaw` 由 gateway bundle 期提供，不是 repo 依赖）
+- `openclaw.plugin.json` — metadata + configSchema（monitor-centric，`monitors.<id>.alerts[]` flow-key）
+- `src/config.ts` — 校验/规整 `api.pluginConfig`
+- `src/sink.ts` — OpenClaw `AlertSink`：`deliver:false` → 原生 FS-append 两行（零 LLM）；`deliver:true` → `subagent.run({deliver:true, extraSystemPrompt: verbatim relay, idempotencyKey})`
+- `src/format.ts` — `formatSeparator` + `formatAlert`（raw pass-through，无 persona；severity/event 用防御性 cast 探测，base Alert 无这些字段）
+- `src/session-append.ts` — vendored 自 smarthome-video `appendAlertGroupToMainSession`，带 `TODO(migrate)`；写 user+assistant 两行（controlUI same-role 合并约束）
+- `agents/` — 硬拷贝 3 个 agent 全部 persona `.md`（child-safety / elder-wakeup / fridge-en），自包含
+- `install.sh` — build SDK + `npm install` + symlink 进 `~/.openclaw/extensions/` + `cp -n` personas + 打印 openclaw.json snippet（幂等）
+- `README.md` — 单页安装 + 配置 + 原理
+- **验证**：SDK 依赖的 4 文件（config/format/session-append/sink）`tsc --noEmit` 零错误；index.ts/api.ts 依赖 openclaw 包，由 gateway bundler 校验（同 smarthome-video，无 repo build）；example 不进 workspace build、不进发布包
+
+### ✅ Phase E 完成 — `docs/framework-adapters/*.md`
+
+[docs/framework-adapters/](../framework-adapters/README.md)：`README.md`（架构+协议流程+两层+cooldown 分层+何时用 adapter vs webhook）/ `deployment.md`（MCP server stateful HTTP 清单 + adapter 部署形态 + cursor + 排障表）/ `writing-a-new-framework-adapter.md`（5 步指南）/ `openclaw.md`（参考实现走读）
+
+### ✅ Phase F 完成 — status 文档更新
+
+`docs/dev/dev_status.md` WW27 三条订阅项勾掉 + 新增 adapter SDK/example/docs 条目；本文件全程同步。
+
+### ⏳ 剩余（需实机）
+
+- OpenClaw example 端到端实机验证：install.sh 干净环境 → 配 openclaw.json 路由 → 重启 gateway → 真实 alert 落目标 session（本环境无法跑完整 gateway bundler + 运行时）
+- OpenClaw installer.sh 完备度不足
+- OpenClaw 启动后无法进行推送 (terminal 端长连SSE可以接收推送)
 
 ---
 
@@ -256,21 +308,21 @@ curl -sS -X POST http://localhost:3100/mcp -H "Content-Type: application/json" \
 [completed]  Phase A.3: resources.ts parse ?since= + subscribe/unsubscribe handlers + return latest_id
 [completed]  Phase A.4: index.ts switch HTTP to stateful, register subscriber registry, implement onAlert broadcast (getSessionId callback route)
 [completed]  Phase A.5: build packages/mcp-server + smoke curl verify subscribe registers real sid (not __pending__); onAlert→SSE full-chain verified live against user's running instance (3 naturally-fired alerts pushed + since= delta read confirmed)
-[pending]    Phase B.1: scaffold packages/framework-adapter-sdk (package.json / tsconfig / .npmignore)
-[pending]    Phase B.2: SDK types.ts (AlertSink, AlertPayload, AdapterConfig, CursorStore)
-[pending]    Phase B.3: SDK cursor.ts (MemoryCursorStore + FileCursorStore)
-[pending]    Phase B.4: SDK adapter.ts (SmartBuildingAdapter: subscribe / notification handler / per-monitor mutex / reconnect / poll fallback)
-[pending]    Phase B.5: SDK build clean
-[pending]    Phase C.1: tests/framework-adapter-sdk fixtures + mock MCP server
-[pending]    Phase C.2: SDK unit tests (basic + coalescing + concurrency + cross-monitor + poll fallback + cursor persistence)
-[pending]    Phase D.1: scaffold examples/openclaw (package.json / openclaw.plugin.json / index.ts)
-[pending]    Phase D.2: vendor session-append.ts from smarthome-video (with TODO migrate)
-[pending]    Phase D.3: sink.ts + format.ts + config.ts
-[pending]    Phase D.4: seed agents/ from smarthome workspace (hard-copy .md files)
-[pending]    Phase D.5: install.sh (build + symlink + persona cp -n + json snippet)
-[pending]    Phase D.6: README.md (single-page install guide)
-[pending]    Phase E: docs/framework-adapters/{README,deployment,writing-a-new-framework-adapter,openclaw}.md
-[pending]    Phase F: dev_status.md check off line 185-186 and add adapter items
+[completed]  Phase B.1: scaffold packages/framework-adapter-sdk (package.json / tsconfig / .npmignore)
+[completed]  Phase B.2: SDK types.ts (AlertSink, AlertPayload, AdapterConfig, CursorStore)
+[completed]  Phase B.3: SDK cursor.ts (MemoryCursorStore + FileCursorStore)
+[completed]  Phase B.4: SDK adapter.ts (SmartBuildingAdapter: subscribe / notification handler / per-monitor mutex / reconnect / poll fallback)
+[completed]  Phase B.5: SDK build clean
+[completed]  Phase C.1: tests/framework-adapter-sdk fixtures + mock MCP server
+[completed]  Phase C.2: SDK unit tests (basic + coalescing + concurrency + cross-monitor + poll fallback + cursor persistence + reconnect + at-least-once)
+[completed]  Phase D.1: scaffold examples/openclaw (package.json / openclaw.plugin.json / index.ts / api.ts)
+[completed]  Phase D.2: vendor session-append.ts from smarthome-video (with TODO migrate)
+[completed]  Phase D.3: sink.ts + format.ts + config.ts
+[completed]  Phase D.4: seed agents/ from smarthome workspace (hard-copy .md files)
+[completed]  Phase D.5: install.sh (build + symlink + persona cp -n + json snippet)
+[completed]  Phase D.6: README.md (single-page install guide)
+[completed]  Phase E: docs/framework-adapters/{README,deployment,writing-a-new-framework-adapter,openclaw}.md
+[completed]  Phase F: dev_status.md check off line 185-186 and add adapter items
 ```
 
 ---

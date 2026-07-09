@@ -37,3 +37,14 @@ curl -sS -X POST http://localhost:3100/mcp -H "Content-Type: application/json" \
 # curl -sS -X POST http://localhost:3100/mcp -H "Content-Type: application/json" \
 #   -H "Accept: application/json, text/event-stream" -H "mcp-session-id: $SID" \
 #   -d '{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"smartbuilding://monitor/cam_child/alerts?since=<上次的 latestId>"}}'
+
+cat <<EOF
+  GET /mcp（另开一个终端，保持长连接监听推送（同一个 $SID）
+  export SID=$SID
+  curl -sS -N -X GET http://localhost:3100/mcp -H "Accept: text/event-stream" -H "mcp-session-id: $SID"
+
+  收到通知后（通知本身不带 payload），用同一 $SID 按 cursor 拉增量内容：
+  curl -sS -X POST http://localhost:3100/mcp -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" -H "mcp-session-id: $SID" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"smartbuilding://monitor/cam_child/alerts?since=<上次的 latestId>"}}'
+EOF

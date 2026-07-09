@@ -16,6 +16,7 @@ import { logger } from "./logger.js";
 import { autoRegisterMonitors } from "./monitor-bootstrap.js";
 import { startStorageCleaner } from "./storage-cleaner.js";
 import { McpSubscriberRegistry } from "./mcp-subscriber-registry.js";
+import { startSessionSweeper } from "./session-sweeper.js";
 
 /**
  * Build an McpServer for a single MCP session. Stateful HTTP creates one per new sessionId;
@@ -102,6 +103,7 @@ async function main() {
   }
 
   const subscriberRegistry = new McpSubscriberRegistry();
+  let stopSessionSweeper: (() => void) | undefined;
 
   // Broadcast `notifications/resources/updated` to every MCP session subscribed to this monitor's
   // alerts uri. See docs/framework-adapters/README.md for the end-to-end contract.
@@ -145,6 +147,8 @@ async function main() {
                 server,
                 transport,
                 subscriptions: new Set(),
+                lastSeen: Date.now(),
+                openSseCount: 0,
               });
               logger.debug(`[mcp] session initialized sid=${sid}`);
             },
@@ -179,6 +183,15 @@ async function main() {
         if (!entry.transport) {
           throw new Error(`stdio session ${providedSessionId} cannot serve HTTP requests`);
         }
+        const sid = providedSessionId as string;
+        subscriberRegistry.touch(sid); // refresh idle clock on any request
+
+        // A GET opens the standalone SSE stream — the session is "active" for as long as it's held,
+        // even with no further requests. Track open/close so the sweeper exempts live subscribers.
+        if (req.method === "GET") {
+          subscriberRegistry.sseOpened(sid);
+          res.on("close", () => subscriberRegistry.sseClosed(sid));
+        }
         await entry.transport.handleRequest(req, res, req.body);
       } catch (error) {
         logger.error(`[mcp] ${error}`);
@@ -197,6 +210,13 @@ async function main() {
       logger.info(`[mcp-server] Streamable HTTP (stateful) on http://localhost:${port}/mcp`);
     });
 
+    // Evict idle HTTP sessions (no open SSE + no requests past the timeout) so abandoned
+    // subscriptions don't leak the registry. stdio mode has a single resident session, so no sweeper.
+    stopSessionSweeper = startSessionSweeper(subscriberRegistry, {
+      idleTimeoutMs: config.mcp!.sessionIdleTimeoutMs!,
+      sweepIntervalMs: config.mcp!.sessionSweepIntervalMs!,
+    });
+
   } else {
     // stdio: single long-lived server registered under a fixed sessionId so onAlert can find it.
     const STDIO_SESSION_ID = "stdio";
@@ -205,6 +225,8 @@ async function main() {
       server: mcpServer,
       transport: null,
       subscriptions: new Set(),
+      lastSeen: Date.now(),
+      openSseCount: 0,
     });
     const transport = new StdioServerTransport();
     await mcpServer.connect(transport);
@@ -226,6 +248,7 @@ async function main() {
   const shutdown = async () => {
     logger.info("[mcp-server] Shutting down...");
     stopCleaner();
+    stopSessionSweeper?.();
     await workerService.stopAll();
     const onlineMonitors = db.listOnlineMonitors();
     if (onlineMonitors.length > 0) {
