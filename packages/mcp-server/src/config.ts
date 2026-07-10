@@ -40,6 +40,26 @@ export interface UseCaseConfig {
   evaluate_rules_path?: string;
   /** Optional per-clip summarization tuning (see SummarizeConfig). */
   summarize?: SummarizeConfig;
+  /**
+   * Optional path to Python override script for post-alert side effects
+   * (design §5.3 `on_task_completed`). Invoked fire-and-forget after an
+   * alert row is written; receives `{...RuleContext, alertId, alertMessage}`.
+   */
+  on_task_completed_path?: string;
+  /**
+   * Optional path to Python override script for VLM summary parsing. When
+   * present, `stdout` must be a JSON object shaped like
+   * `{"fields": {...}, "missingRequired": [...]}` — the built-in
+   * schema-aware parser is bypassed for this use case.
+   */
+  parse_summary_path?: string;
+  /**
+   * Per-use-case rules block, passed verbatim to the Python override at
+   * `RuleContext.payload.rules`. Free-form because different use cases carry
+   * different keys (child_safety: severityThreshold; elder_wakeup:
+   * expectedWakeupLocal / graceMinutes; etc.).
+   */
+  rules?: Record<string, unknown>;
   /** Optional default report configuration consumed by smartbuilding_generate_report. */
   reports?: {
     data_source: "events" | "alerts" | "video_summary_tasks";
@@ -50,6 +70,14 @@ export interface UseCaseConfig {
 }
 
 export interface ServerConfig {
+  /**
+   * Absolute path to the config.yaml the server was booted from. Present when
+   * `--config <path>` was passed on the command line. Consumed by tools that
+   * need to write back to the same file (e.g. `smartbuilding_use_case_register`
+   * with `persist: true`). Undefined when booted without --config.
+   */
+  configPath?: string;
+
   // Derived from SMARTBUILDING_DATA_DIR — not settable in config.yaml
   dataDir: string;        // root: ~/.mcp-smartbuilding (or $SMARTBUILDING_DATA_DIR)
   dbPath: string;         // dataDir/smartbuilding.db
@@ -124,6 +152,7 @@ export function loadConfig(configPath?: string): ServerConfig {
   }
 
   return {
+    configPath: configPath ? resolve(configPath) : undefined,
     dataDir,
     dbPath: join(dataDir, "smartbuilding.db"),
     segmentsDir: join(dataDir, "segments"),

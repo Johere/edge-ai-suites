@@ -45,3 +45,34 @@ export type {
   UseCaseValidateDeps,
   UseCaseValidateResult,
 } from "./use-case-validate.js";
+export { useCaseRegister } from "./use-case-register.js";
+export type {
+  UseCaseRegisterParams,
+  UseCaseRegisterDeps,
+  UseCaseRegisterResult,
+} from "./use-case-register.js";
+export { generatePrompt } from "./prompt-autogen.js";
+export type {
+  GeneratePromptParams,
+  GeneratePromptDeps,
+  GeneratePromptResult,
+  PromptAutogenEventType,
+  PromptAutogenSchemaExtension,
+} from "./prompt-autogen.js";
+export { promptLint } from "./prompt-lint.js";
+export type {
+  PromptLintParams,
+  PromptLintResult,
+  PromptLintIssue,
+  PromptLintIssueSeverity,
+  PromptLintEventType,
+  PromptLintSchemaExtension,
+} from "./prompt-lint.js";
+export { videoSummaryTask } from "./video-summary-task.js";
+export type {
+  VideoSummaryTaskParams,
+  VideoSummaryTaskDeps,
+  VideoSummaryTaskResult,
+} from "./video-summary-task.js";
+export { ruleEval } from "./rule-eval.js";
+export type { RuleEvalParams, RuleEvalDeps, RuleEvalResult } from "./rule-eval.js";

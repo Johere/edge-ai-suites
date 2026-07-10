@@ -73,7 +73,7 @@ class TestConfigModels:
 
     def test_segment_config_defaults(self):
         cfg = SegmentConfig()
-        assert cfg.interval == 10.0
+        assert cfg.max_duration == 10.0
         assert cfg.min_duration == 1.0
 
     def test_webhook_config_custom(self):

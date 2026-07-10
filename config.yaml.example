@@ -28,14 +28,14 @@
 summary_service:
   url: http://localhost:8192
   path_remap:
-    host_prefix: ${HOME}/.mcp-smartbuilding   # host's SMARTBUILDING_DATA_DIR
-    container_prefix: /data                    # container mount point
+    host_prefix: ${HOME}/.mcp-smartbuilding # host's SMARTBUILDING_DATA_DIR
+    container_prefix: /data # container mount point
 
 # vllm-serving-ipex (VLM for scene_query — single-frame queries)
 vlm_service:
   url: http://localhost:41091/v1
-  model: default
-  max_edge_px: 720   # resize longest edge to this before sending to VLM (uses ffmpeg)
+  model: Qwen/Qwen3.5-35B-A3B
+  max_edge_px: 720 # resize longest edge to this before sending to VLM (uses ffmpeg)
 
 # videostream-analytics microservice (motion detection, RTSP processing)
 videostream_analytics:
@@ -46,15 +46,15 @@ video_summary_max_concurrent: 2
 
 # Per-monitor log rotation (write target: logs/monitors/<monitor_id>/<YYYY-MM-DD>.log)
 logging:
-  retention_days: 14   # delete .log files older than this
-  max_file_mb: 50      # stop appending to a single day's file past this size
+  retention_days: 14 # delete .log files older than this
+  max_file_mb: 50 # stop appending to a single day's file past this size
 
 # Segment data retention. videostream-analytics writes recordings/motion_events/queries
 # under $SMARTBUILDING_DATA_DIR/segments/<monitor_id>/<subdir>/<YYYY-MM-DD>/;
 # MCP server purges day-dirs older than this.
 storage:
   retention_days: 7
-  cleanup_subdirs: [motion_events, recordings, queries]
+  cleanup_subdirs: [ motion_events, recordings, queries ]
 
 # MCP Server HTTP port (for OpenClaw / Claude Desktop connections)
 mcp:
@@ -71,24 +71,34 @@ events_webhook:
 schema:
   video_summary_tasks:
     extensions:
-      - { name: "event",      type: "text", required: true }   # use-case event type
-      - { name: "severity",   type: "text", required: true }   # critical / warn / info
-      - { name: "desc",       type: "text", required: true }   # one-sentence description
-      - { name: "confidence", type: "real", required: false }  # optional VLM confidence
+      # `event` + `desc` are used by every use case (event drives rule logic;
+      # desc is the human-readable alert message tail). `severity` is
+      # optional because time-based use cases like elder_wakeup judge by event
+      # + payload.rules alone (no severity ordering).
+      - { name: "event", type: "text", required: true }
+      - { name: "severity", type: "text", required: false } # critical / warn / info — used by threshold-based UCs (child_safety / parking_safety / ...)
+      - { name: "desc", type: "text", required: true }
+      - { name: "confidence", type: "real", required: false } # optional VLM confidence
+      - { name: "motion_direction", type: "text", required: false } # high_altitude_safety: downward | upward | horizontal | none
+      - { name: "parking_zone", type: "text", required: false } # parking_safety: fire_lane | entrance | handicapped | double_yellow_line | normal | unknown
   custom_tables: []
 
 # Use case library. Each entry is referenced by monitors via `use_case`.
 # A single use case may be referenced by multiple monitors.
+#
+# `rules` (optional) is a free-form dict passed verbatim to the Python override
+# at RuleContext.payload.rules. Keys are use-case specific — see each entry's
+# adapter under `use-cases/<name>/evaluate_rules.py`.
 use_case_dict:
   fridge:
     description: "Fridge content tracking"
-    video_summary_task: fridge_monitor
-    # No evaluate_rules_path → defaultRuleEvaluator handles it
+    video_summary_task: refrigerator_monitor_en
+    evaluate_rules_path: ./use-cases/fridge/evaluate_rules.py
     summarize:
       method: SIMPLE
       processor_kwargs:
         levels: 1
-        level_sizes: [-1]
+        level_sizes: [ -1 ]
         process_fps: 2
     reports:
       data_source: events
@@ -98,15 +108,19 @@ use_case_dict:
   child_safety:
     description: "Child safety monitoring"
     video_summary_task: child_safety_monitor
-    evaluate_rules_path: ${HOME}/use-cases/child_safety/evaluate_rules.py  # optional Python override
+    # No evaluate_rules_path — defaultRuleEvaluator handles severity + event
+    # filtering entirely from the `rules` block below.
+    rules:
+      severityThreshold: warn # "info" | "warn" | "critical" — fires at or above this
+      cooldownSeconds: 60 # suppress duplicate alerts within N seconds per (monitor, use_case)
     # Per-clip summarize tuning. Defaults (single LOCAL_PROMPT pass) suit most use cases;
     # override only when you need multi-level roll-up or T-1 temporal context.
     summarize:
-      method: SIMPLE           # SIMPLE | USE_VLM_T-1 | USE_LLM_T-1 | USE_ALL_T-1
+      method: SIMPLE # SIMPLE | USE_VLM_T-1 | USE_LLM_T-1 | USE_ALL_T-1
       processor_kwargs:
-        levels: 1              # 1 = LOCAL_PROMPT only, no MACRO/GLOBAL roll-up
-        level_sizes: [-1]      # -1 = single group at the level
-        process_fps: 2         # frames per second sampled from the clip
+        levels: 1 # 1 = LOCAL_PROMPT only, no MACRO/GLOBAL roll-up
+        level_sizes: [ -1 ] # -1 = single group at the level
+        process_fps: 2 # frames per second sampled from the clip
     reports:
       data_source: alerts
       default_type: daily
@@ -115,15 +129,50 @@ use_case_dict:
   elder_wakeup:
     description: "Elder wakeup monitoring"
     video_summary_task: elder_wakeup_monitor
-    evaluate_rules_path: ${HOME}/use-cases/elder_wakeup/evaluate_rules.py
+    evaluate_rules_path: ./use-cases/elder_wakeup/evaluate_rules.py
+    rules:
+      expectedWakeupLocal: "07:00" # HH:MM local time
+      graceMinutes: 30 # tolerated delay before late_wakeup fires
     summarize:
       method: SIMPLE
       processor_kwargs:
         levels: 1
-        level_sizes: [-1]
+        level_sizes: [ -1 ]
         process_fps: 2
     reports:
       data_source: video_summary_tasks
       default_type: daily
       filter:
-        event: wakeup    # filter on video_summary_tasks.event extension column
+        event: wakeup # filter on video_summary_tasks.event extension column
+
+  high_altitude_safety:
+    description: "High-altitude object throwing detection"
+    video_summary_task: high_altitude_monitor
+    # No evaluate_rules_path — defaultRuleEvaluator honours requireEvent +
+    # requireDirection to gate on downward-throw events only.
+    rules:
+      severityThreshold: warn # fire when severity >= warn
+      requireEvent: high_altitude_throw # only fires when VLM reports event=high_altitude_throw
+      requireDirection: downward # only fires when VLM reports motion_direction=downward
+      cooldownSeconds: 30 # short window: consecutive throws should each alert
+    reports:
+      data_source: alerts
+      default_type: daily
+      filter: {}
+
+  parking_safety:
+    description: "Community parking violation detection (fire lane / entrance /
+      handicapped)"
+    video_summary_task: parking_safety_monitor
+    # No evaluate_rules_path — defaultRuleEvaluator handles zone exclusion and
+    # alert-message suffix from the `rules` block below.
+    rules:
+      severityThreshold: warn # fire when severity >= warn
+      excludeEvents: [ no_incident, uncertain ] # short-circuit non-violation events
+      # excludeZones: [normal, unknown]          # optional: whitelist zones that should not alert
+      alertMessageExtraField: parking_zone # appends "(zone=<value>)" to alertMessage
+      cooldownSeconds: 600 # 10 min: a parked car re-triggers only after cooldown
+    reports:
+      data_source: alerts
+      default_type: daily
+      filter: {}

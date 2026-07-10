@@ -19,7 +19,7 @@
 #   HTTP_PROXY / HTTPS_PROXY  — Docker build 代理
 #   MODEL_DIR                 — YOLO 模型目录 (默认 ~/models)
 #   DATA_DIR                  — clip 输出目录 (默认 /tmp/smartbuilding-clips)
-#   VIDEOS_DIR                — 测试视频根目录 (默认 <repo>/videos)
+#   VIDEOS_DIR                — 测试视频根目录 (默认 <repo>/demo-videos)
 #   MEDIAMTX_BIN              — MediaMTX 可执行文件 (默认 ~/.local/bin/mediamtx)
 #   MEDIAMTX_CONFIG           — MediaMTX 配置 (默认 tools/mediamtx.yml)
 #   DOCKER_IMAGE              — VSA 容器镜像名 (默认 videostream-analytics:latest)
@@ -48,11 +48,11 @@ DATA_DIR="${DATA_DIR:-/tmp/smartbuilding-clips}"
 MODEL_DIR="${MODEL_DIR:-$HOME/models}"
 
 # --- Test Videos ---
-VIDEOS_DIR="${VIDEOS_DIR:-${REPO_DIR}/videos}"
-VIDEO_CHILD="${VIDEOS_DIR}/phase2/child-care/composed/child_safety_demo.mp4"
-VIDEO_FRIDGE="${VIDEOS_DIR}/demo006-2_expanded.mp4"
-VIDEO_ELDER_DAY1="${VIDEOS_DIR}/phase2/elder_wakeup/composed/day1_elder_wakeup.mp4"
-VIDEO_ELDER_DAY2="${VIDEOS_DIR}/phase2/elder_wakeup/composed/day2_elder_wakeup.mp4"
+VIDEOS_DIR="${VIDEOS_DIR:-${REPO_DIR}/demo-videos}"
+VIDEO_CHILD="${VIDEOS_DIR}/cam_child/child_safety_demo.mp4"
+VIDEO_FRIDGE="${VIDEOS_DIR}/cam_fridge/demo006-2_expanded_20min_v2.mp4"
+VIDEO_ELDER_DAY1="${VIDEOS_DIR}/cam_elder_bedroom/day1_elder_wakeup.mp4"
+VIDEO_ELDER_DAY2="${VIDEOS_DIR}/cam_elder_bedroom_2/day2_elder_wakeup.mp4"
 
 # --- Parse Arguments ---
 RUN_UNIT=true
@@ -192,7 +192,8 @@ start_analytics_docker() {
         -e http_proxy="" \
         -e https_proxy="" \
         -v "$MODEL_DIR:/models:ro" \
-        -v "$DATA_DIR:/root/.smartbuilding/data" \
+        -v "/tmp:/tmp" \
+        -v "$DATA_DIR:/root/.mcp-smartbuilding/segments" \
         "$DOCKER_IMAGE"
     sleep 3
     wait_for_analytics

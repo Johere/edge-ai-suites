@@ -18,7 +18,15 @@ class MotionConfig(BaseModel):
 
 
 class SegmentConfig(BaseModel):
-    interval: float = 10.0
+    """Segment cut-over rule.
+
+    `max_duration` — hard ceiling on segment length in seconds; when a running
+    segment reaches this, it is closed and a new one starts.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_duration: float = 10.0
     min_duration: float = 1.0
 
 
@@ -37,6 +45,23 @@ class RecordingConfig(BaseModel):
     retention_days: int = 5
 
 
+class RoiConfig(BaseModel):
+    """ROI crop configuration (Phase 9, child_safety).
+
+    Top-level pipeline block, at the same nesting depth as `prefilter`.
+    When enabled and prefilter accumulates a `trajectory_region_xyxy`, the
+    pipeline writes a `<clip>_input.mp4` next to the original segment and
+    points `summary_clip_input` there. `auto_split_area` triggers early
+    segment cuts when the union bbox grows beyond the fraction (avoids one
+    over-large crop on long fast-moving events).
+    """
+
+    enabled: bool = False
+    mode: str = "crop"  # crop | highlight | crop_and_concat
+    expand: float = 0.25
+    auto_split_area: float = 0.0  # 0 disables early-split
+
+
 class PrefilterConfig(BaseModel):
     enabled: bool = False
     model_path: str = ""
@@ -45,6 +70,9 @@ class PrefilterConfig(BaseModel):
     min_frames_hit: int = 2
     detect_fps: float = 2.0
     device: str = "CPU"
+    # Long-side resize target for pre-inference frame downscaling (0 disables).
+    # Consumed by prefilter_yolo._resize_long_side when > 0.
+    long_side: int = 0
 
 
 class HealthConfig(BaseModel):
@@ -85,6 +113,7 @@ class DefaultsConfig(BaseModel):
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
     prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
+    roi: RoiConfig = Field(default_factory=RoiConfig)
     health: HealthConfig = Field(default_factory=HealthConfig)
     keepalive: KeepaliveConfig = Field(default_factory=KeepaliveConfig)
 
@@ -104,6 +133,7 @@ class SourceConfig(BaseModel):
     segment: Optional[SegmentConfig] = None
     recording: Optional[RecordingConfig] = None
     prefilter: Optional[PrefilterConfig] = None
+    roi: Optional[RoiConfig] = None
     health: Optional[HealthConfig] = None
     keepalive: Optional[KeepaliveConfig] = None
 
@@ -116,7 +146,7 @@ class SourceConfig(BaseModel):
 class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
-    data_dir: str = "~/.smartbuilding/data"
+    data_dir: str = "~/.mcp-smartbuilding/segments"
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     logging: dict = Field(default_factory=lambda: {"level": "INFO"})
 
@@ -143,7 +173,14 @@ def load_config(config_path: str | None = None) -> AppConfig:
     # Environment variable overrides
     if webhook_url := os.environ.get("WEBHOOK_URL"):
         config.webhook.url = webhook_url
-    if data_dir := os.environ.get("RECORDINGS_DIR"):
-        config.data_dir = expand_path(data_dir)
+
+    # SMARTBUILDING_DATA_DIR is the MCP server's data root. VSA writes under its
+    # `segments/` subdir so the DEFAULT output root lines up with the per-monitor
+    # data_dir MCP sends in register_source bodies (<SMARTBUILDING_DATA_DIR>/
+    # segments/<id>). An explicit `data_dir` in a register_source request still
+    # takes precedence — see source_worker._resolve_data_dir. This supersedes the
+    # old RECORDINGS_DIR override (Docker no longer sets that).
+    if root := os.environ.get("SMARTBUILDING_DATA_DIR"):
+        config.data_dir = os.path.join(expand_path(root), "segments")
 
     return config

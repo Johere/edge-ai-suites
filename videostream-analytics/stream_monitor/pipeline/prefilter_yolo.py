@@ -44,6 +44,9 @@ class PrefilterResult:
     hit_classes: list[str] = field(default_factory=list)
     frame_hits: int = 0
     max_confidence: float = 0.0
+    # Normalized [x0, y0, x1, y1] axis-aligned union of all hit bboxes across
+    # all sampled frames in this segment. None when there were no detections.
+    trajectory_region_xyxy: list[float] | None = None
 
 
 def _preprocess(frame: np.ndarray) -> np.ndarray:
@@ -89,12 +92,23 @@ def _postprocess(
         return []
 
     detections = []
+    iw = max(1, infer_w)
+    ih = max(1, infer_h)
     for idx in (indices.flatten() if hasattr(indices, "flatten") else indices):
         name = class_names[int(class_ids[idx])] if int(class_ids[idx]) < len(class_names) \
                else str(class_ids[idx])
         if target_classes and name not in target_classes:
             continue
-        detections.append({"name": name, "conf": float(confidences[idx])})
+        # xyxy normalized to [0, 1] over the infer frame so callers can union
+        # detections across frames without tracking infer_w / infer_h.
+        detections.append({
+            "name": name,
+            "conf": float(confidences[idx]),
+            "xyxy": [
+                float(x1[idx]) / iw, float(y1[idx]) / ih,
+                float(x2[idx]) / iw, float(y2[idx]) / ih,
+            ],
+        })
     return detections
 
 
@@ -122,9 +136,11 @@ class YoloPrefilter:
         target_classes: list[str] | None = None,
         min_confidence: float = 0.4,
         device: str = "CPU",
+        long_side: int = 0,
     ):
         self.target_classes = set(target_classes or [])
         self.min_confidence = min_confidence
+        self.long_side = long_side
 
         import openvino as ov
 
@@ -158,7 +174,7 @@ class YoloPrefilter:
     def predict(self, frame: np.ndarray) -> list[dict]:
         """Run inference on a single BGR frame. Returns target-class detections."""
         if self._is_dynamic:
-            infer_frame = _resize_long_side(frame, 0)
+            infer_frame = _resize_long_side(frame, self.long_side)
         else:
             infer_frame = cv2.resize(frame, (self._static_w, self._static_h))
         infer_h, infer_w = infer_frame.shape[:2]
@@ -203,6 +219,7 @@ class FramePrefilter:
         self._pass_decided = False
         self._consecutive_misses = 0
         self._max_conf = 0.0
+        self._union: list[float] | None = None
 
     def reset_for_next_segment(self):
         """Partial reset — call on interval cut within same motion event.
@@ -216,6 +233,7 @@ class FramePrefilter:
         self._samples_taken = 0
         self._hit_classes: set = set()
         self._max_conf = 0.0
+        self._union = None
 
     @property
     def pass_decided(self) -> bool:
@@ -251,6 +269,16 @@ class FramePrefilter:
                     self._hit_classes.add(d["name"])
                     if d["conf"] > self._max_conf:
                         self._max_conf = d["conf"]
+                    # Accumulate normalized xyxy union for ROI crop / trajectory.
+                    box = d.get("xyxy")
+                    if box and len(box) == 4:
+                        if self._union is None:
+                            self._union = [box[0], box[1], box[2], box[3]]
+                        else:
+                            self._union[0] = min(self._union[0], box[0])
+                            self._union[1] = min(self._union[1], box[1])
+                            self._union[2] = max(self._union[2], box[2])
+                            self._union[3] = max(self._union[3], box[3])
                 if not self._pass_decided and self._frame_hits >= self.min_frames_hit:
                     self._pass_decided = True
             else:
@@ -260,6 +288,26 @@ class FramePrefilter:
             self._next_infer = self._frame_idx + step
         self._frame_idx += 1
         return self._pass_decided
+
+    @property
+    def union_area(self) -> float:
+        """Current trajectory union box area as fraction of frame (0.0-1.0)."""
+        if self._union is None:
+            return 0.0
+        x1, y1, x2, y2 = self._union
+        w = max(0.0, x2 - x1)
+        h = max(0.0, y2 - y1)
+        return w * h
+
+    def should_split(self, auto_split_area: float) -> bool:
+        """True when union box exceeds threshold and segment should split early.
+
+        Only triggers after pass_decided so we don't bail before prefilter has
+        even confirmed the person; with `auto_split_area<=0` always False.
+        """
+        if not self._pass_decided or auto_split_area <= 0:
+            return False
+        return self.union_area > auto_split_area
 
     def result(self) -> PrefilterResult:
         """Return prefilter result for the current segment.
@@ -273,15 +321,19 @@ class FramePrefilter:
             passed = False
         else:
             passed = self._pass_decided or self._frame_hits >= self.min_frames_hit
+        trajectory: list[float] | None = None
+        if self._union is not None:
+            trajectory = [max(0.0, min(1.0, v)) for v in self._union]
         logger.info(
-            "Prefilter %s: hits=%d classes=%s (need %d, pass_decided=%s)",
+            "Prefilter %s: hits=%d classes=%s region=%s (need %d, pass_decided=%s)",
             "PASS" if passed else "SKIP",
-            self._frame_hits, sorted(self._hit_classes), self.min_frames_hit,
-            self._pass_decided,
+            self._frame_hits, sorted(self._hit_classes), trajectory,
+            self.min_frames_hit, self._pass_decided,
         )
         return PrefilterResult(
             passed=passed,
             hit_classes=sorted(self._hit_classes),
             frame_hits=self._frame_hits,
             max_confidence=self._max_conf,
+            trajectory_region_xyxy=trajectory,
         )

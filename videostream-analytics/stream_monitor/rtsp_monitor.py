@@ -25,6 +25,7 @@ from shared.config import (
     MotionConfig,
     SegmentConfig,
     PrefilterConfig,
+    RoiConfig,
     HealthConfig,
     SourceConfig,
     DefaultsConfig,
@@ -34,6 +35,7 @@ from stream_monitor.base_monitor import BaseMonitor
 from stream_monitor.pipeline.motion_detector import MotionDetector
 from stream_monitor.pipeline.segment_extractor import SegmentExtractor
 from stream_monitor.pipeline.prefilter_yolo import YoloPrefilter, FramePrefilter
+from stream_monitor.pipeline.roi_processor import prepare_roi_segment
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ class StreamPipeline(BaseMonitor):
         self._segment_cfg = source.segment or defaults.segment
         self._recording_cfg = source.recording or defaults.recording
         self._prefilter_cfg = source.prefilter or defaults.prefilter
+        self._roi_cfg = source.roi or defaults.roi
         self._health_cfg = source.health or defaults.health
 
         # `data_dir` is already the per-source root (resolved by SourceManager).
@@ -141,6 +144,7 @@ class StreamPipeline(BaseMonitor):
                     target_classes=self._prefilter_cfg.target_classes,
                     min_confidence=self._prefilter_cfg.min_confidence,
                     device=self._prefilter_cfg.device,
+                    long_side=self._prefilter_cfg.long_side,
                 )
                 self._prefilter = FramePrefilter(
                     yolo=yolo,
@@ -156,6 +160,7 @@ class StreamPipeline(BaseMonitor):
         motion: MotionConfig | None = None,
         segment: SegmentConfig | None = None,
         prefilter: PrefilterConfig | None = None,
+        roi: RoiConfig | None = None,
         health: HealthConfig | None = None,
     ):
         """Update pipeline configuration. Caller must stop/start for changes to take effect."""
@@ -169,6 +174,9 @@ class StreamPipeline(BaseMonitor):
             self._prefilter_cfg = prefilter
             self.source.prefilter = prefilter
             self._init_prefilter()
+        if roi:
+            self._roi_cfg = roi
+            self.source.roi = roi
         if health:
             self._health_cfg = health
             self.source.health = health
@@ -195,7 +203,6 @@ class StreamPipeline(BaseMonitor):
         strategy = self._health_cfg.recovery_strategy
 
         self._status = "unhealthy"
-        self._emit_envelope("status", {"status": "unhealthy", "reason": "rtsp_timeout"})
         logger.warning("[%s] Source unhealthy (%d failures), strategy=%s",
                        self.source_id, self._failure_count, strategy)
 
@@ -226,10 +233,16 @@ class StreamPipeline(BaseMonitor):
             try:
                 self._connect()
                 if self._cap and self._cap.isOpened():
-                    self._status = "online"
+                    # Respect an externally-set paused flag: RTSP idle-timeout
+                    # during pause can drop us here after a silent reconnect,
+                    # but the user intent is still "paused" until /resume.
+                    if self._paused.is_set():
+                        self._status = "online"
+                        self._emit_status("online")
+                    else:
+                        self._status = "paused"
                     self._failure_count = 0
                     self._reconnect_count = 0
-                    self._emit_status("online")
                     self._process_loop()
             except Exception as e:
                 logger.error("[%s] Pipeline error: %s", self.source_id, e)
@@ -248,8 +261,11 @@ class StreamPipeline(BaseMonitor):
                     if not self._running:
                         break
                 else:
-                    self._status = "reconnecting"
-                    self._emit_status("reconnecting")
+                    # Same rule as above: keep the pause label visible while
+                    # we quietly retry in the background.
+                    if self._paused.is_set():
+                        self._status = "reconnecting"
+                        self._emit_status("reconnecting")
                     delay = self._calculate_backoff()
                     logger.info("[%s] Reconnecting in %.1fs (attempt %d)...",
                                self.source_id, delay, self._reconnect_count)
@@ -357,6 +373,18 @@ class StreamPipeline(BaseMonitor):
                     extractor.start_segment()
                     if self._prefilter:
                         self._prefilter.reset_for_next_segment()
+                elif self._prefilter and self._should_split_segment():
+                    # Phase 9: trajectory union grew past auto_split_area;
+                    # finish current segment early so the ROI crop stays tight.
+                    early = extractor.finish()
+                    if early:
+                        self._maybe_emit(early)
+                    extractor.start_segment()
+                    self._prefilter.reset_for_next_segment()
+                    logger.debug(
+                        "[%s] Segment early-split by trajectory union",
+                        self.source_id,
+                    )
 
                 # Cascaded exit check
                 if self._should_exit_motion(detector, motion_frames):
@@ -372,6 +400,19 @@ class StreamPipeline(BaseMonitor):
             if result:
                 self._maybe_emit(result)
         extractor.close()
+
+    def _should_split_segment(self) -> bool:
+        """Return True when the active prefilter wants an early segment cut.
+
+        Honors `pipeline.roi.auto_split_area`. With value <=0 or roi disabled,
+        never splits.
+        """
+        if self._prefilter is None:
+            return False
+        roi_cfg = self._roi_cfg
+        if not roi_cfg.enabled or roi_cfg.auto_split_area <= 0:
+            return False
+        return self._prefilter.should_split(roi_cfg.auto_split_area)
 
     def _maybe_emit(self, result):
         """Check prefilter and emit or discard segment."""
@@ -402,10 +443,38 @@ class StreamPipeline(BaseMonitor):
 
     def _emit_segment(self, result, pf_result=None) -> None:
         """Post segment as motion event via sink, in MCP's nested envelope."""
-        # summary_clip_input: prefer a pre-cropped sibling clip if present.
         clip_path = result.path
-        crop_path = clip_path.rsplit(".", 1)[0] + "_input.mp4"
-        summary_clip_input = crop_path if os.path.exists(crop_path) else clip_path
+        summary_clip_input = clip_path  # default: original clip
+
+        # Phase 9: optionally produce <clip>_input.mp4 via ROI crop. Only when
+        # prefilter passed AND roi is enabled AND we have a trajectory region.
+        # Failure falls back to the original clip — never raises.
+        roi_cfg = self._roi_cfg
+        traj = getattr(pf_result, "trajectory_region_xyxy", None) if pf_result else None
+        if (
+            pf_result is not None
+            and pf_result.passed
+            and roi_cfg.enabled
+            and traj is not None
+        ):
+            yolo_inst = None
+            if roi_cfg.mode == "crop_and_concat" and self._prefilter is not None:
+                yolo_inst = getattr(self._prefilter, "_yolo", None)
+            roi_path = prepare_roi_segment(
+                clip_path, traj,
+                mode=roi_cfg.mode,
+                expand=roi_cfg.expand,
+                yolo=yolo_inst,
+            )
+            if roi_path:
+                summary_clip_input = roi_path
+
+        # Pre-cropped sibling clip fallback (e.g. produced out-of-band): only
+        # honour it if ROI crop above didn't run.
+        if summary_clip_input == clip_path:
+            crop_path = clip_path.rsplit(".", 1)[0] + "_input.mp4"
+            if os.path.exists(crop_path):
+                summary_clip_input = crop_path
 
         payload: dict[str, Any] = {
             "event_file_path": clip_path,
@@ -418,19 +487,28 @@ class StreamPipeline(BaseMonitor):
             payload["prefilter_passed"] = int(bool(pf_result.passed))
             payload["prefilter_classes"] = json.dumps(list(pf_result.hit_classes))
             payload["prefilter_confidence"] = float(pf_result.max_confidence)
+            if traj is not None:
+                # MCP expects a JSON string (events-endpoint.ts:143 wraps in String()).
+                payload["trajectory_region"] = json.dumps(traj)
 
         self._emit_envelope("motion", payload)
         logger.debug(
-            "[%s] Emitted motion: %.1fs %s prefilter=%s",
+            "[%s] Emitted motion: %.1fs %s prefilter=%s region=%s",
             self.source_id,
             result.duration_s,
             clip_path,
             "n/a" if pf_result is None else ("pass" if pf_result.passed else "skip"),
+            traj,
         )
 
     def _emit_status(self, status: str):
-        """Emit a status event via sink (MCP currently ignores unknown types)."""
-        self._emit_envelope("status", {"status": status})
+        """No-op. RTSP connection status is NOT a clip-segment event and must not be
+        pushed to the MCP /events webhook — MCP only accepts motion/static/recording
+        and 422s anything else, which used to trigger a retry storm that also slowed
+        reconnection (see smarthome_arch2_dev.md §32). Health is still exposed via the
+        internal `self._status` field, which MCP reads through GET /sources/{id}/status.
+        Kept as a method (rather than deleting all call sites) so callers stay readable."""
+        return
 
     def _maybe_write_snapshot(self, frame) -> None:
         """Write latest.jpg at ~_snapshot_hz Hz (atomic via tmp+rename).

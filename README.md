@@ -4,11 +4,13 @@ An AI Agent-native video analysis platform designed for MCP (Model Context Proto
 
 ## Use Cases
 
-| ID | Description |
-|----|-------------|
-| Fridge_monitor | Refrigerator monitoring — regular reports (food shortage alerts, diet adjustment suggestions, lifestyle/fitness recommendations) + interactive chat for personalized Q&A |
-| Child_safety | Child danger alert notification — real-time detection of risky behaviors (jumping from heights, playing with knives/fire, etc.), immediate alerts to parents, daily summaries, and follow-up conversations |
-| Elder_wakeup | Elder care (wake-up tracking) — monitor daily wake-up times, alert caregivers on significant deviations, weekly summary reports, and follow-up reminders |
+| ID | Description | Status |
+|----|-------------|--------|
+| Fridge_monitor | Refrigerator monitoring — regular reports (food shortage alerts, diet adjustment suggestions, lifestyle/fitness recommendations) + interactive chat for personalized Q&A | Adapter shipped (prompt only; no alert rules) |
+| Child_safety | Child danger alert notification — real-time detection of risky behaviors (jumping from heights, playing with knives/fire, etc.), immediate alerts to parents, daily summaries, and follow-up conversations | Adapter shipped (`evaluate_rules.py` + prompt) |
+| Elder_wakeup | Elder care (wake-up tracking) — monitor daily wake-up times, alert caregivers on significant deviations, weekly summary reports, and follow-up reminders | Adapter shipped (`evaluate_rules.py` + prompt) |
+
+See [docs/use-case-adapter.md](docs/use-case-adapter.md) for how to add a new use case.
 
 ## Architecture
 

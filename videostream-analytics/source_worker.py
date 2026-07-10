@@ -17,6 +17,7 @@ from shared.config import (
     MotionConfig,
     SegmentConfig,
     PrefilterConfig,
+    RoiConfig,
     RecordingConfig,
     HealthConfig,
     KeepaliveConfig,
@@ -47,6 +48,10 @@ class SourceManager:
         self._default_sink: EventSink = WebhookSink(config.webhook)
         self._bundles: dict[str, SourceBundle] = {}
         self._watchdog_running = True
+        # Use an Event instead of plain time.sleep so register_source can
+        # wake the daemon up — otherwise a short-interval source registered
+        # mid-sleep has to wait out the previous (potentially long) tick.
+        self._watchdog_wakeup = threading.Event()
         self._watchdog_thread = threading.Thread(
             target=self._watchdog_loop,
             name="keepalive-watchdog",
@@ -106,6 +111,9 @@ class SourceManager:
             keepalive=keepalive_cfg,
             last_keepalive_at=last_keepalive_at,
         )
+        # Nudge the watchdog so a fresh source with a shorter check_interval
+        # doesn't have to wait out the previous (potentially default 10s) tick.
+        self._watchdog_wakeup.set()
         self._bundles[source.source_id] = bundle
         pipeline.start()
         if recorder is not None:
@@ -164,6 +172,7 @@ class SourceManager:
         motion: MotionConfig | None = None,
         segment: SegmentConfig | None = None,
         prefilter: PrefilterConfig | None = None,
+        roi: RoiConfig | None = None,
         recording: RecordingConfig | None = None,
         health: HealthConfig | None = None,
     ) -> dict[str, Any]:
@@ -177,6 +186,7 @@ class SourceManager:
             motion=motion,
             segment=segment,
             prefilter=prefilter,
+            roi=roi,
             health=health,
         )
         bundle.pipeline.start()
@@ -285,7 +295,11 @@ class SourceManager:
                 self._watchdog_check_once()
             except Exception as e:
                 logger.warning("[watchdog] tick error: %s", e)
-            time.sleep(self._watchdog_check_interval())
+            # Event.wait returns early if a new source registers — important
+            # when a fresh source with a smaller check_interval needs the
+            # daemon to start ticking faster than the previous interval.
+            self._watchdog_wakeup.wait(timeout=self._watchdog_check_interval())
+            self._watchdog_wakeup.clear()
 
     def _watchdog_check_interval(self) -> float:
         """Tightest configured interval across enabled sources, fall back to default."""
@@ -328,6 +342,7 @@ class SourceManager:
 
     def stop_all(self):
         self._watchdog_running = False
+        self._watchdog_wakeup.set()  # break daemon out of wait() promptly
         for source_id, bundle in self._bundles.items():
             self._teardown_bundle(source_id, bundle)
         self._bundles.clear()

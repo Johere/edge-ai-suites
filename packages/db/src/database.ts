@@ -301,6 +301,29 @@ export class SmartBuildingDB {
     return rowToAlert(row);
   }
 
+  /**
+   * Return the most recent alert for a monitor + use case within the last
+   * `cooldownSeconds` (SQLite-side comparison against `datetime('now',
+   * 'localtime')` to match the column's default expression). Used by the
+   * rule-engine cooldown check — if this returns a row, the caller should
+   * suppress the new alert as still cooling down.
+   */
+  latestAlertWithin(
+    monitorId: string,
+    useCase: string,
+    cooldownSeconds: number,
+  ): Alert | undefined {
+    const row = this.db.prepare(`
+      SELECT * FROM alerts
+      WHERE monitor_id = ? AND use_case = ?
+        AND created_at >= datetime('now', 'localtime', ?)
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(monitorId, useCase, `-${cooldownSeconds} seconds`) as any;
+    if (!row) return undefined;
+    return rowToAlert(row);
+  }
+
   queryAlerts(options: { monitorId?: string; unacked?: boolean; limit?: number; sinceId?: number }): Alert[] {
     let sql = "SELECT * FROM alerts WHERE 1=1";
     const params: any[] = [];
@@ -535,6 +558,30 @@ export class SmartBuildingDB {
     return (this.db.prepare(
       "SELECT * FROM video_summary_tasks WHERE monitor_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT ?"
     ).all(monitorId, limit) as any[]).map(rowToTask);
+  }
+
+  /**
+   * Filter `video_summary_tasks` by monitor and optional status, sorted newest
+   * first. Used by tools that need to rebuild historical rule contexts
+   * (e.g. `smartbuilding_rule_eval` for manual re-evaluation).
+   */
+  queryTasks(options: {
+    monitorId: string;
+    status?: VideoSummaryTask["status"];
+    limit?: number;
+  }): VideoSummaryTask[] {
+    let sql = "SELECT * FROM video_summary_tasks WHERE monitor_id = ?";
+    const params: any[] = [options.monitorId];
+    if (options.status) {
+      sql += " AND status = ?";
+      params.push(options.status);
+    }
+    sql += " ORDER BY created_at DESC";
+    if (options.limit) {
+      sql += " LIMIT ?";
+      params.push(options.limit);
+    }
+    return (this.db.prepare(sql).all(...params) as any[]).map(rowToTask);
   }
 
   updateTaskStatus(

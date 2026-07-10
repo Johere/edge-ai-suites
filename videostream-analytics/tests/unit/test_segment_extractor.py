@@ -12,7 +12,7 @@ from stream_monitor.pipeline.segment_extractor import SegmentExtractor, SegmentR
 class TestSegmentExtractorWithRealVideo:
     @pytest.fixture
     def extractor(self, tmp_path):
-        config = SegmentConfig(interval=5.0, min_duration=0.5)
+        config = SegmentConfig(max_duration=5.0, min_duration=0.5)
         return SegmentExtractor(
             config=config,
             output_dir=str(tmp_path / "motion_events"),
@@ -115,7 +115,7 @@ class TestSegmentExtractorWithRealVideo:
 
     def test_finish_below_min_duration_returns_none(self, tmp_path, video_frames):
         """Segment shorter than min_duration should be discarded."""
-        config = SegmentConfig(interval=60.0, min_duration=2.0)
+        config = SegmentConfig(max_duration=60.0, min_duration=2.0)
         extractor = SegmentExtractor(
             config=config,
             output_dir=str(tmp_path / "motion_events"),
