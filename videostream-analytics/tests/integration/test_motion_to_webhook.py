@@ -16,11 +16,12 @@ from .conftest import wait_for_events
 @pytest.mark.integration
 class TestMotionToWebhook:
     @pytest.fixture(autouse=True)
-    def register_source(self, http_client, analytics_url, rtsp_url):
+    def register_source(self, http_client, analytics_url, rtsp_url, webhook_url):
         """Register a test source before each test, unregister after."""
         http_client.post(f"{analytics_url}/register_source", json={
             "source_id": "test_motion",
             "source_url": rtsp_url,
+            "webhook_url": f"{webhook_url}/events",
             "pipeline": {
                 "prefilter": {"enabled": False},
                 "recording": {"enabled": False},  # tests focus on motion path
