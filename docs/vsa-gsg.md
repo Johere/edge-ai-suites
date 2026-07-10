@@ -189,7 +189,7 @@ server:
   port: 8999
 
 webhook:
-  url: "http://localhost:18800/events"
+  url: "http://localhost:3101/events"
   timeout: 10
   retry_attempts: 3
   retry_delay: 2

@@ -97,7 +97,7 @@ class KeepaliveConfig(BaseModel):
 
 
 class WebhookConfig(BaseModel):
-    url: str = "http://localhost:18800/events"
+    url: str = "http://localhost:3101/events"
     timeout: int = 10
     retry_attempts: int = 3
     retry_delay: float = 2.0

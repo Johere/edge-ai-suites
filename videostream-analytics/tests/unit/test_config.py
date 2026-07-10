@@ -49,7 +49,7 @@ class TestLoadConfig:
         config = load_config("/nonexistent/path/config.yaml")
         assert config.server.port == 8999
         assert config.server.host == "0.0.0.0"
-        assert config.webhook.url == "http://localhost:18800/events"
+        assert config.webhook.url == "http://localhost:3101/events"
 
     def test_load_from_env_var(self, tmp_path):
         cfg_file = tmp_path / "env_config.yaml"
@@ -59,7 +59,10 @@ class TestLoadConfig:
             assert config.server.port == 7777
 
     def test_data_dir_expanded(self):
-        config = load_config(str(FIXTURES_DIR / "test_config.yaml"))
+        # Isolate from shell-exported SMARTBUILDING_DATA_DIR to verify YAML expansion.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SMARTBUILDING_DATA_DIR", None)
+            config = load_config(str(FIXTURES_DIR / "test_config.yaml"))
         assert "~" not in config.data_dir
         assert config.data_dir == "/tmp/videostream-test-data"
 
