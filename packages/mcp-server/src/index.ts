@@ -15,6 +15,7 @@ import { EventsEndpoint } from "./events-endpoint.js";
 import { logger } from "./logger.js";
 import { autoRegisterMonitors } from "./monitor-bootstrap.js";
 import { startStorageCleaner } from "./storage-cleaner.js";
+import { startKeepaliveSender } from "./keepalive-sender.js";
 import { McpSubscriberRegistry } from "./mcp-subscriber-registry.js";
 import { startSessionSweeper } from "./session-sweeper.js";
 
@@ -245,9 +246,14 @@ async function main() {
   // Periodic disk cleanup: logs/monitors + segments/<id>/{recordings,motion_events,queries}
   const stopCleaner = startStorageCleaner(config);
 
+  // Keepalive heartbeat: POST /sources/{id}/keepalive for online monitors so the
+  // videostream-analytics watchdog (armed at register_source) doesn't auto-pause them.
+  const stopKeepalive = startKeepaliveSender(config, db);
+
   const shutdown = async () => {
     logger.info("[mcp-server] Shutting down...");
     stopCleaner();
+    stopKeepalive();
     stopSessionSweeper?.();
     await workerService.stopAll();
     const onlineMonitors = db.listOnlineMonitors();

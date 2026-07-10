@@ -23,6 +23,14 @@ export interface MonitorCtlParams {
    * Required for register_source.
    */
   data_dir?: string;
+  /**
+   * Keepalive watchdog config forwarded to analytics at register_source as
+   * `pipeline.keepalive`. When provided (and `pipeline_config` does not already
+   * declare its own `keepalive` block), it is injected so the analytics-side
+   * watchdog is armed. The MCP server is responsible for driving the matching
+   * POST /sources/{id}/keepalive heartbeat loop. See VSA API §3.8.
+   */
+  keepalive?: { enabled: boolean; timeout_seconds: number; check_interval_seconds: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -58,8 +66,27 @@ async function analyticsRegister(
   sourceUrl: string,
   webhookUrl: string,
   dataDir: string,
-  pipelineConfig?: Record<string, unknown>
+  pipelineConfig?: Record<string, unknown>,
+  keepalive?: MonitorCtlParams["keepalive"]
 ): Promise<void> {
+  const pipeline: Record<string, unknown> = pipelineConfig
+    ? { ...pipelineConfig }
+    : {
+        motion: { enabled: true },
+        prefilter: { enabled: false },
+        recording: { enabled: true, interval_seconds: 60 },
+      };
+
+  // Arm the analytics-side keepalive watchdog unless the monitor already
+  // declares its own keepalive block (per-monitor override wins).
+  if (keepalive && !("keepalive" in pipeline)) {
+    pipeline.keepalive = {
+      enabled: keepalive.enabled,
+      timeout_seconds: keepalive.timeout_seconds,
+      check_interval_seconds: keepalive.check_interval_seconds,
+    };
+  }
+
   const resp = await fetch(`${analyticsUrl}/register_source`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -68,11 +95,7 @@ async function analyticsRegister(
       source_url: sourceUrl,
       webhook_url: webhookUrl,
       data_dir: dataDir,    // analytics writes latest.jpg + recordings/<date>/ + motion_events/<date>/ here
-      pipeline: pipelineConfig ?? {
-        motion: { enabled: true },
-        prefilter: { enabled: false },
-        recording: { enabled: true, interval_seconds: 60 },
-      },
+      pipeline,
     }),
     signal: AbortSignal.timeout(10_000),
   });
@@ -178,7 +201,7 @@ export async function monitorCtl(
       }
 
       // Register with analytics (starts stream processing immediately)
-      await analyticsRegister(analyticsUrl, monitorId, params.source_url, webhookUrl, dataDir, params.pipeline_config);
+      await analyticsRegister(analyticsUrl, monitorId, params.source_url, webhookUrl, dataDir, params.pipeline_config, params.keepalive);
       db.updateMonitorStatus(monitorId, "online");
 
       // Start video-worker task poller

@@ -172,6 +172,12 @@ export function registerTools(
         enriched.data_dir ??= join(config.segmentsDir, params.monitor_id);
         enriched.webhook_url ??= `http://localhost:${config.eventsWebhook!.port}/events`;
         enriched.video_summary_task = videoSummaryTask;
+        // Arm the analytics keepalive watchdog; the server drives the heartbeat loop.
+        enriched.keepalive = {
+          enabled: config.keepalive.enabled,
+          timeout_seconds: config.keepalive.timeoutSeconds,
+          check_interval_seconds: config.keepalive.checkIntervalSeconds,
+        };
       }
       const result = await monitorCtl(db, config.videostreamAnalytics.url, workerService, enriched);
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };

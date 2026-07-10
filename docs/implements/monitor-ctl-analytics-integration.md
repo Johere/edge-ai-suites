@@ -204,18 +204,27 @@ MCP server 调用以下 analytics RESTful 端点：
 | `/sources/{id}/status` | GET | 注册前状态探测（200=存在，404=不存在） |
 | `/sources/{id}/pause` | POST | graceful shutdown / stop action |
 | `/sources/{id}/resume` | POST | start action（当前对账未使用，所有 online 均 offline 处理） |
+| `/sources/{id}/keepalive` | POST | 心跳（每 `interval_ms` 遍历 online monitors，见 §6） |
 | `/sources` | GET | 启动对账获取全量 source 列表 |
 
 ---
 
-## 6. [TODO: analytics-side] Keepalive 协议
+## 6. Keepalive 协议（已实现）
 
-待 analytics 侧实现后联调。约定：
+analytics 侧（VSA API §3.8）与 MCP server 侧均已实现并联调。
 
-- **Endpoint**: `GET /sources/{id}/keepalive`
-- **MCP server 发送间隔**: 30s（`setInterval`，遍历 DB 中 online monitors）
-- **Analytics 超时阈值**: 90s 未收到 keepalive → 自动 pause 该 source
-- **MCP server 侧实现**：等 analytics 端就绪后在 `index.ts` 添加 keepalive interval
+- **Endpoint**: `POST /sources/{id}/keepalive`（body 忽略；注意是 POST，不是早期约定的 GET）
+- **MCP server 发送间隔**: `keepalive.interval_ms`（默认 30s，`setInterval` 遍历 DB 中 online monitors，逐一 POST，失败静默 debug log）
+- **Analytics 超时阈值**: `keepalive.timeout_seconds`（默认 90s）未收到 keepalive → watchdog 自动 pause 该 source（terminal，需 `start`/`register_source` 恢复）
+- **Analytics watchdog 轮询间隔**: `keepalive.check_interval_seconds`（默认 10s）
+
+**MCP server 侧实现要点**：
+
+1. **注册时武装 watchdog**：`register_source` 时在 analytics `POST /register_source` 的 `pipeline.keepalive` 中注入 `{enabled, timeout_seconds, check_interval_seconds}`（VSA 默认 `enabled=false`，不注入则 watchdog 不启用）。注入逻辑在 [monitor-ctl.ts `analyticsRegister`](../../packages/tools/src/monitor-ctl.ts)；若 monitor 自己的 `pipeline_config` 已声明 `keepalive` 块，则以其为准（per-monitor override）。
+2. **心跳发送**：[keepalive-sender.ts `startKeepaliveSender`](../../packages/mcp-server/src/keepalive-sender.ts) 在 `index.ts` 启动一个 interval，每 `interval_ms` 对所有 `status=online` 的 monitor POST keepalive；shutdown 时 `stopKeepalive()` 清理。
+3. **配置**：`config.yaml` `keepalive` 块（`enabled` / `interval_ms` / `timeout_seconds` / `check_interval_seconds`）。`enabled: false` 时既不注入 watchdog 也不启动 interval。
+
+**约束**：`interval_ms` 必须显著小于 `timeout_seconds`（默认 30s ≪ 90s），否则正常运行的 source 会被误 pause。
 
 ---
 

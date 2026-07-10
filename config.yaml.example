@@ -41,6 +41,13 @@ vlm_service:
 videostream_analytics:
   url: http://localhost:8999
 
+# Keepalive protocol with videostream-analytics
+keepalive:
+  enabled: true
+  interval_ms: 30000 # MCP → VSA heartbeat cadence
+  timeout_seconds: 90 # VSA auto-pause threshold (register payload)
+  check_interval_seconds: 10 # VSA watchdog poll interval (register payload)
+
 poll_interval_ms: 5000
 video_summary_max_concurrent: 2
 
