@@ -33,15 +33,14 @@ class TestMotionToWebhook:
         except httpx.HTTPError:
             pass
 
-    def test_status_online_event_received(self, http_client, webhook_url):
-        """After registering, a status='online' event should be posted to webhook."""
-        events = wait_for_events(
-            http_client, webhook_url, event_type="status", min_count=1, timeout=15
-        )
-        assert len(events) >= 1
-        online_events = [e for e in events if e.get("payload", {}).get("status") == "online"]
-        assert len(online_events) >= 1
-        assert online_events[0]["sourceId"] == "test_motion"
+    def test_no_status_events_pushed(self, http_client, webhook_url):
+        """§32: RTSP connection status is no longer pushed to the /events webhook.
+        After the source connects, the mock webhook must have recorded zero `status`
+        events (health is exposed via GET /sources/{id}/status instead)."""
+        time.sleep(3)  # allow the source to connect / go online
+        resp = http_client.get(f"{webhook_url}/recorded_events/status")
+        assert resp.status_code == 200
+        assert resp.json()["count"] == 0
 
     def test_motion_events_received(self, http_client, webhook_url):
         """After pipeline runs, motion events should arrive (video has motion after ~40s)."""

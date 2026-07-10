@@ -213,7 +213,7 @@ class TestHandleUnhealthy:
         assert pipeline._failure_count == 0
         assert pipeline._reconnect_count == 0
 
-    def test_unhealthy_emits_status_event(self):
+    def test_unhealthy_sets_status_without_webhook(self):
         sink = MagicMock()
         source = SourceConfig(
             source_id="cam_health",
@@ -234,12 +234,10 @@ class TestHandleUnhealthy:
         with patch("stream_monitor.rtsp_monitor.time.sleep"):
             pipeline._handle_unhealthy()
 
-        # Phase 7: nested envelope
-        sink.emit.assert_called_once()
-        event = sink.emit.call_args.args[0]
-        assert event["sourceId"] == "cam_health"
-        assert event["type"] == "status"
-        assert event["payload"] == {"status": "unhealthy", "reason": "rtsp_timeout"}
+        # §32: unhealthy (RTSP health) is no longer pushed to the /events webhook.
+        # Internal status is set instead — MCP reads it via GET /sources/{id}/status.
+        sink.emit.assert_not_called()
+        assert pipeline._status == "unhealthy"
 
 
 class TestRunReconnectionLogic:

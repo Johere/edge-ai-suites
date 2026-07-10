@@ -12,12 +12,101 @@ videostream-analytics 是 Smart Building 的视频流处理微服务。从 RTSP 
 | MediaMTX | 提供 RTSP 服务，host 端运行 |
 | YOLO 模型 | 启用 prefilter 时挂载 `~/models` 到容器 `/models` |
 
-YOLO 模型目录布局：
+YOLO 模型文件（**扁平布局**，host 侧 `~/models` 挂到容器 `/models`）：
 
 ```
-~/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.xml
-~/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.bin
+~/models/yolo11s.xml
+~/models/yolo11s.bin
 ```
+
+启用 prefilter 前需先按下方 §1.1 导出该模型；不启用 prefilter（`prefilter.enabled: false`）时可跳过。
+
+### 1.1 准备 YOLO11 NPU 模型（仅启用 prefilter 时）
+
+prefilter 用 Intel NPU 上的 YOLO11s OpenVINO IR 做「人/物」快速通过-跳过闸门。下面步骤导出所需模型
+文件（与 `agent-ai.smarthome/docs/prepare-yolo11-npu-model.md` 一致，只是把产物拍平到 `~/models/` 根下）。
+
+**产物**：`~/models/yolo11s.xml` + `~/models/yolo11s.bin`
+
+- 输入形状：`[1, 3, 704, 1280]`（**静态**；边长取 32 的倍数）
+- 精度：**FP16**
+- 目标设备：**NPU**
+
+**为什么这么选**：
+
+- **静态 shape**：OpenVINO NPU 插件不支持动态输入，动态 IR 在 NPU 上会编译失败。必须
+  `dynamic=False` + 固定 `imgsz`。
+- **1280×704**：stream_monitor 喂 1280×720 帧，YOLO11 要求 H/W 是 32 的倍数；1280×704 向下对齐
+  （裁掉上下共 16px），避免 letterbox 填充。
+- **FP16（非 INT8）**：NPU 原生跑 FP16（Core Ultra 358H NPU 约 12–13ms/帧），省去 INT8 校准数据集
+  依赖。
+- **yolo11s**（非 n/m）：`s` 在精度/NPU 速度间平衡最好；`n` 对小物体（刀/瓶）掉点多，`m+` 对
+  prefilter 这种「快速通过/跳过」的闸门过重。
+
+**前提**：
+
+- Intel Core Ultra / Xeon，带 Arc 集显 NPU；NPU 驱动已装
+  （`python3 -c "from openvino import Core; print(Core().available_devices)"` 输出需含 `NPU`）。
+- 首次导出需联网下载权重；Python ≥ 3.10。
+
+**导出步骤**（一次性；用独立临时 venv，不污染运行时环境）：
+
+```bash
+set -euo pipefail
+mkdir -p ~/models
+WORK="$HOME/models/_yolo_work"; mkdir -p "$WORK"
+
+# 1. 独立转换 venv
+python3 -m venv "$WORK/venv"
+"$WORK/venv/bin/pip" install -q ultralytics openvino
+
+# 2. 下载权重（已存在则跳过）
+[ -f "$WORK/yolo11s.pt" ] || \
+  wget -q https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s.pt -O "$WORK/yolo11s.pt"
+
+# 3. 导出静态 FP16 IR（H=704, W=1280）→ 产物在 $WORK/yolo11s_openvino_model/
+( cd "$WORK" && ./venv/bin/python -c \
+  "from ultralytics import YOLO; YOLO('yolo11s.pt').export(format='openvino', dynamic=False, half=True, imgsz=[704,1280])" )
+
+# 4. 拍平到 ~/models/ 根下（VSA / 各 monitor 配置统一引用这两个文件）
+cp "$WORK/yolo11s_openvino_model/yolo11s.xml" ~/models/yolo11s.xml
+cp "$WORK/yolo11s_openvino_model/yolo11s.bin" ~/models/yolo11s.bin
+
+# 5. 清理转换 venv（保留 .pt 便于重跑）
+rm -rf "$WORK/venv"
+echo "[prepare-yolo] ready: ~/models/yolo11s.{xml,bin}"
+```
+
+**校验**（用 VSA 的 venv，已含 openvino）：
+
+```bash
+cd videostream-analytics
+.venv/bin/python - <<'PY'
+import os
+from openvino import Core
+c = Core()
+m = c.read_model(os.path.expanduser("~/models/yolo11s.xml"))
+assert not m.is_dynamic(), "IR 必须是静态 shape 才能上 NPU"
+assert tuple(d.get_length() for d in m.input(0).partial_shape) == (1, 3, 704, 1280)
+c.compile_model(m, "NPU")   # prefilter 运行时就是这么加载的
+print("[verify-yolo] 静态 shape IR 可在 NPU 上编译，OK")
+PY
+```
+
+预期（Core Ultra 358H NPU）：编译 ~0.1s（热），单帧推理 ~12–13ms @ 1280×704。
+
+**运行时接线**：容器把 host `~/models` 挂到 `/models`，因此配置里 `prefilter.model_path` 用
+**容器内路径** `/models/yolo11s.xml`（见 §3 config 示例）；本地模式则用 host 绝对路径
+`~/models/yolo11s.xml`（`monitors.yaml` / 注册体里也是这个扁平路径）。`device: NPU`。
+
+**故障排查**：
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `Model is not supported by selected device` | 动态 shape IR 上 NPU | 用 `dynamic=False imgsz=[704,1280]` 重新导出 |
+| `compile_model` 卡 > 30s | NPU 驱动过旧 | 检查/更新 NPU 驱动到 2024.08+ |
+| 推理很慢（> 50ms/帧） | 悄悄回落到 CPU | 配置里显式 `device: NPU`，确认没被切到 `AUTO` |
+| 输出张量无命名 output | 正常，yolo11 OV 导出不给 output 命名 | 按下标 `compiled.output(0)` 取（prefilter 已这么做） |
 
 ## 2. 安装与启动
 
@@ -32,14 +121,23 @@ docker compose -f docker/docker-compose.yaml up -d
 docker compose -f docker/docker-compose.yaml logs -f videostream-analytics
 ```
 
-环境变量（可在 `.env` 或 shell 中设置）：
+环境变量**全部可选**——compose 已内置默认值（`${VAR:-默认}`），`docker compose up -d` **零配置开箱即用**，无需创建 `.env`。要覆盖时在 shell 里 `export` 后再启动即可：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `WEBHOOK_URL` | `http://host.docker.internal:18789/webhook/smarthome/event` | 事件下游 |
-| `DATA_DIR` | `/tmp/smartbuilding-clips` | clip 输出目录（host 路径，挂到容器 `/data`） |
+| `SMARTBUILDING_DATA_DIR` | `~/.mcp-smartbuilding` | MCP 数据根（= MCP server 的默认根）。VSA 默认输出根 = `<它>/segments`；并按**恒等路径**挂进容器（host X → 容器 X），使 MCP 下发的 `<它>/segments/<id>` 在容器内解析到同一真实目录 |
 | `MODEL_DIR` | `~/models` | YOLO 模型目录（挂到容器 `/models:ro`） |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 空 | 仅 build 阶段使用 |
+
+覆盖示例：
+
+```bash
+SMARTBUILDING_DATA_DIR=/data/mcp docker compose -f docker/docker-compose.yaml up -d
+```
+
+> - 不再需要 `.env` / `env.example` / `DATA_DIR`  —— 都由 compose 默认值 + `export` 覆盖取代。
+> - 容器以 **root** 运行，写出的 clip 文件属 root（MCP clip extractor / VLM 读取无碍）。若要让 MCP storage cleaner（以宿主用户跑）能清理这些文件，用 `--user "$(id -u):$(id -g)"` 起容器（见下方 `docker run` 示例）或自行 `chown`。
 
 容器使用 `network_mode: host`，对外端口固定 `8999`。
 
@@ -95,7 +193,7 @@ defaults:
     retention_days: 5
   prefilter:
     enabled: true
-    model_path: "/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.xml"   # 容器内路径
+    model_path: "/models/yolo11s.xml"   # 容器内路径（host ~/models/yolo11s.xml，见 §1.1）
     target_classes: ["person"]
     min_confidence: 0.4
     min_frames_hit: 1
@@ -161,7 +259,7 @@ videostream-analytics stream \
   "source_id":   "cam_demo",
   "source_url":  "rtsp://localhost:8554/live/child",
   "webhook_url": "http://host.docker.internal:9999/events",
-  "data_dir":    "/data/cam_demo",
+  "data_dir":    "${SMARTBUILDING_DATA_DIR}/segments/cam_demo",
   "pipeline": {
     "motion":    { "enabled": true, "diff_threshold": 15, "area_ratio": 0.005, "stable_frames": 45 },
     "segment":   { "max_duration": 10, "min_duration": 1.0 },
@@ -322,11 +420,12 @@ python -m uvicorn tests.integration.mock_webhook_server:app \
 WEBHOOK_URL="http://localhost:9999/events" \
   videostream-analytics serve --config config/config.yaml
 
-# 或容器方式
+# 或容器方式（恒等挂载 SMARTBUILDING_DATA_DIR；VSA 自己推导默认输出根，不再用 /data / RECORDINGS_DIR）
 docker run -d --rm --name vsa-test --network host \
   -e WEBHOOK_URL="http://localhost:9999/events" \
+  -e SMARTBUILDING_DATA_DIR="${VSA_TEST_DATA_DIR}" \
   -v "$HOME/models:/models:ro" \
-  -v /tmp/smartbuilding-clips:/data \
+  -v "${VSA_TEST_DATA_DIR}:${VSA_TEST_DATA_DIR}" \
   videostream-analytics:latest
 ```
 
@@ -745,9 +844,8 @@ curl -i -X POST http://localhost:8999/sources/no_such/keepalive | head -5
 验证 child_safety 链路：NPU YOLO prefilter → 累计 trajectory union bbox → 写
 `<clip>_input.mp4`（ROI crop） → webhook payload 带 `trajectory_region`。
 
-**前置条件**：NPU YOLO 模型文件（默认路径
-`/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.xml`），以及一段含
-person 的视频（如 `demo-videos/cam_child/child_safety_demo.mp4`）。
+**前置条件**：NPU YOLO 模型文件（容器内 `/models/yolo11s.xml`，host `~/models/yolo11s.xml`，见 §1.1），
+以及一段含 person 的视频（如 `demo-videos/cam_child/child_safety_demo.mp4`）。
 
 #### Step 1 — 启动支撑服务（4 个终端）
 
@@ -783,7 +881,7 @@ curl -s -X POST http://localhost:8999/register_source \
   "pipeline": {
     "prefilter": {
       "enabled": true,
-      "model_path": "/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.xml",
+      "model_path": "/models/yolo11s.xml",
       "target_classes": ["person"],
       "detect_fps": 2.0,
       "device": "NPU"
@@ -881,6 +979,13 @@ ffprobe -v error -show_entries stream=width,height -of csv=p=0 "$INPUT"
 
 #### Step 6 — 验证 `auto_split_area` 早切（可选）
 
+**前提：把日志级别调到 DEBUG。** 早切日志在代码里是 `logger.debug("... Segment early-split by trajectory union")`（见 `stream_monitor/rtsp_monitor.py`），而 `config/config.yaml` 默认 `logging.level: "INFO"` —— DEBUG 日志根本不输出，即使早切真的触发，INFO 级别下也 grep 不到（空结果是预期的）。验证前先改配置：
+
+```bash
+# config/config.yaml 里把 logging.level 从 INFO 改成 DEBUG
+sed -i 's/level: "INFO"/level: "DEBUG"/' config/config.yaml
+```
+
 VSA 默认仅通过 `StreamHandler(sys.stdout)` 输出日志。启动 VSA 时重定向到文件后可搜索早切事件：
 
 ```bash
@@ -891,7 +996,7 @@ WEBHOOK_URL=http://localhost:9999/events \
 grep "Segment early-split by trajectory union" "${VSA_TEST_DATA_DIR}/vsa.log"
 ```
 
-当画面动作幅度大、union 面积超过 `auto_split_area`（本例为 `0.35`）时会记录该日志。未触发不视为失败；如需强制触发，将 `auto_split_area` 调低至 `0.05` 后重新注册。
+当画面动作幅度大、union 面积超过 `auto_split_area`（本例为 `0.35`）时会记录该日志。**注意需同时满足两个条件才能 grep 到**：① `logging.level: DEBUG`（上一步已改）；② 早切分支被真正走到（`prefilter.enabled=true` 且 `roi.enabled=true` 且 `auto_split_area>0` 且 union 面积在 segment 间隔到达前就超阈值）。未触发不视为失败；如需强制触发，将 `auto_split_area` 调低至 `0.05` 后重新注册。
 
 #### 通过标准（须同时满足以下 4 项）
 
@@ -902,11 +1007,14 @@ grep "Segment early-split by trajectory union" "${VSA_TEST_DATA_DIR}/vsa.log"
 
 #### 对接真 MCP server（替代 T2 mock）
 
-参考 V10。T2 替换为真 MCP server，T3 的 `WEBHOOK_URL` 改为 `http://localhost:3101/events`，事件累积后查询 MCP DB：
+参考 V10。T2 替换为真 MCP server，T3 的 `WEBHOOK_URL` 改为 `http://localhost:3101/events`，事件累积后查询 MCP DB。
+
+MCP 现在用**全局单一** DB（`${SMARTBUILDING_DATA_DIR:-~/.mcp-smartbuilding}/smartbuilding.db`），所有 monitor 共用一张 `events` 表并以 `monitor_id` 列区分 —— 不再是旧版每 monitor 一个 `~/.smartbuilding-video/data/<id>/pipeline.db`。查询时按 `monitor_id` 过滤：
 
 ```bash
-sqlite3 ~/.smartbuilding-video/data/cam_child_roi/pipeline.db \
-  "SELECT id, motion_type, event_file_path, trajectory_region FROM events ORDER BY id DESC LIMIT 3;"
+sqlite3 "${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}/smartbuilding.db" \
+  "SELECT id, motion_type, event_file_path, trajectory_region FROM events \
+   WHERE monitor_id='cam_child_roi' ORDER BY id DESC LIMIT 3;"
 ```
 
 期望：`events.trajectory_region` 列非空，且与 webhook payload 一致。
@@ -935,13 +1043,14 @@ sqlite3 ~/.smartbuilding-video/data/cam_child_roi/pipeline.db \
 启动 / 停止：
 
 ```bash
-# 启动（直接 docker run，便于单测）
+# 启动（直接 docker run，便于单测；恒等挂载 SMARTBUILDING_DATA_DIR）
 docker run -d --rm --name vsa-test --network host \
   -e WEBHOOK_URL="http://localhost:9999/events" \
+  -e SMARTBUILDING_DATA_DIR="${VSA_TEST_DATA_DIR:-$HOME/.mcp-smartbuilding}" \
   -e no_proxy="localhost,127.0.0.1" \
   -e http_proxy="" -e https_proxy="" \
   -v "$HOME/models:/models:ro" \
-  -v /tmp/smartbuilding-clips:/data \
+  -v "${VSA_TEST_DATA_DIR:-$HOME/.mcp-smartbuilding}:${VSA_TEST_DATA_DIR:-$HOME/.mcp-smartbuilding}" \
   videostream-analytics:latest
 
 # 启动（compose，含完整环境变量管理）
@@ -967,7 +1076,7 @@ docker rm -f vsa-test
 docker compose -f docker/docker-compose.yaml down
 ```
 
-容器内 clip 输出路径为 `/data`（对应 host `${DATA_DIR:-/tmp/smartbuilding-clips}`），YOLO 模型目录为 `/models`（对应 host `${MODEL_DIR:-~/models}`）。
+容器通过**恒等挂载**把 host 的 `SMARTBUILDING_DATA_DIR` 挂到容器内同名绝对路径，clip 直接落在 host（不再有独立 `/data` 映射）；VSA 默认输出根 = `<SMARTBUILDING_DATA_DIR>/segments`，注册体里显式的 `data_dir` 优先。YOLO 模型目录为 `/models`（对应 host `${MODEL_DIR:-~/models}`）。
 
 ## 9. 多场景评估工具
 

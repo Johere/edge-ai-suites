@@ -70,26 +70,31 @@ class TestStreamPipelinePauseResume:
         pipeline.resume()
         assert pipeline.status == "online"
 
-    def test_pause_emits_status_event(self, pipeline, mock_sink):
+    def test_pause_sets_status_without_webhook(self, pipeline, mock_sink):
         pipeline._running = True
         pipeline._status = "online"
         pipeline.pause()
-        # Phase 7: nested envelope {sourceId, type, timestamp, payload}
-        event = mock_sink.emit.call_args.args[0]
-        assert event["sourceId"] == "test_pause"
-        assert event["type"] == "status"
-        assert event["payload"] == {"status": "paused"}
-        assert "timestamp" in event
+        # §32: RTSP status is no longer pushed to the /events webhook. Internal
+        # status is still updated (MCP reads it via GET /sources/{id}/status), but
+        # no `status` envelope is emitted to the sink.
+        assert pipeline.status == "paused"
+        status_emits = [
+            c.args[0] for c in mock_sink.emit.call_args_list
+            if c.args and c.args[0].get("type") == "status"
+        ]
+        assert status_emits == []
 
-    def test_resume_emits_status_event(self, pipeline, mock_sink):
+    def test_resume_sets_status_without_webhook(self, pipeline, mock_sink):
         pipeline._running = True
         pipeline._status = "paused"
         pipeline._paused.clear()
         pipeline.resume()
-        event = mock_sink.emit.call_args.args[0]
-        assert event["sourceId"] == "test_pause"
-        assert event["type"] == "status"
-        assert event["payload"] == {"status": "online"}
+        assert pipeline.status == "online"
+        status_emits = [
+            c.args[0] for c in mock_sink.emit.call_args_list
+            if c.args and c.args[0].get("type") == "status"
+        ]
+        assert status_emits == []
 
     def test_stop_unblocks_paused_pipeline(self, pipeline):
         pipeline._running = True

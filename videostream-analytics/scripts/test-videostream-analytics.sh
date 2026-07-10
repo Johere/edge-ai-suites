@@ -193,7 +193,7 @@ start_analytics_docker() {
         -e https_proxy="" \
         -v "$MODEL_DIR:/models:ro" \
         -v "/tmp:/tmp" \
-        -v "$DATA_DIR:/root/.smartbuilding/data" \
+        -v "$DATA_DIR:/root/.mcp-smartbuilding/segments" \
         "$DOCKER_IMAGE"
     sleep 3
     wait_for_analytics

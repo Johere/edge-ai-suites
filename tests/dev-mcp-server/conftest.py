@@ -59,13 +59,6 @@ def init_test_db(db_path: str) -> sqlite3.Connection:
             completed_at TEXT,
             FOREIGN KEY (monitor_id) REFERENCES monitors(id)
         );
-
-        CREATE TABLE IF NOT EXISTS monitor_state (
-            monitor_id TEXT PRIMARY KEY,
-            state_json TEXT NOT NULL DEFAULT '{}',
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (monitor_id) REFERENCES monitors(id)
-        );
     """)
     conn.commit()
     return conn

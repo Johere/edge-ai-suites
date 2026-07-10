@@ -203,7 +203,6 @@ class StreamPipeline(BaseMonitor):
         strategy = self._health_cfg.recovery_strategy
 
         self._status = "unhealthy"
-        self._emit_envelope("status", {"status": "unhealthy", "reason": "rtsp_timeout"})
         logger.warning("[%s] Source unhealthy (%d failures), strategy=%s",
                        self.source_id, self._failure_count, strategy)
 
@@ -503,8 +502,13 @@ class StreamPipeline(BaseMonitor):
         )
 
     def _emit_status(self, status: str):
-        """Emit a status event via sink (MCP currently ignores unknown types)."""
-        self._emit_envelope("status", {"status": status})
+        """No-op. RTSP connection status is NOT a clip-segment event and must not be
+        pushed to the MCP /events webhook — MCP only accepts motion/static/recording
+        and 422s anything else, which used to trigger a retry storm that also slowed
+        reconnection (see smarthome_arch2_dev.md §32). Health is still exposed via the
+        internal `self._status` field, which MCP reads through GET /sources/{id}/status.
+        Kept as a method (rather than deleting all call sites) so callers stay readable."""
+        return
 
     def _maybe_write_snapshot(self, frame) -> None:
         """Write latest.jpg at ~_snapshot_hz Hz (atomic via tmp+rename).

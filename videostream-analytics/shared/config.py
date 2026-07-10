@@ -146,7 +146,7 @@ class SourceConfig(BaseModel):
 class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
-    data_dir: str = "~/.smartbuilding/data"
+    data_dir: str = "~/.mcp-smartbuilding/segments"
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     logging: dict = Field(default_factory=lambda: {"level": "INFO"})
 
@@ -173,7 +173,14 @@ def load_config(config_path: str | None = None) -> AppConfig:
     # Environment variable overrides
     if webhook_url := os.environ.get("WEBHOOK_URL"):
         config.webhook.url = webhook_url
-    if data_dir := os.environ.get("RECORDINGS_DIR"):
-        config.data_dir = expand_path(data_dir)
+
+    # SMARTBUILDING_DATA_DIR is the MCP server's data root. VSA writes under its
+    # `segments/` subdir so the DEFAULT output root lines up with the per-monitor
+    # data_dir MCP sends in register_source bodies (<SMARTBUILDING_DATA_DIR>/
+    # segments/<id>). An explicit `data_dir` in a register_source request still
+    # takes precedence — see source_worker._resolve_data_dir. This supersedes the
+    # old RECORDINGS_DIR override (Docker no longer sets that).
+    if root := os.environ.get("SMARTBUILDING_DATA_DIR"):
+        config.data_dir = os.path.join(expand_path(root), "segments")
 
     return config

@@ -123,21 +123,20 @@ class TestFullPipeline:
             # Fixed interval: duration should be around interval (10s) or shorter for tail segments
             assert 1.0 <= duration <= 11.0, f"Clip duration {duration:.1f}s out of range"
 
-    def test_sink_receives_status_online(self, pipeline, mock_sink):
-        """Sink should receive a status='online' event when pipeline connects."""
+    def test_sink_receives_no_status_events(self, pipeline, mock_sink):
+        """§32: RTSP connection status is no longer pushed to the sink/webhook.
+        Starting and stopping the pipeline must not emit any `status` envelope
+        (health is exposed via GET /sources/{id}/status; internal pipeline.status
+        still tracks it)."""
         pipeline.start()
         time.sleep(3)
         pipeline.stop()
 
-        # Phase 7: nested envelope — type/sourceId at top, business fields in payload.
         status_events = [
             call.args[0] for call in mock_sink.emit.call_args_list
-            if call.args[0].get("type") == "status"
+            if call.args and call.args[0].get("type") == "status"
         ]
-        online_events = [
-            e for e in status_events if e.get("payload", {}).get("status") == "online"
-        ]
-        assert len(online_events) >= 1, f"Expected online status event, got: {status_events}"
+        assert status_events == [], f"Expected no status events, got: {status_events}"
 
     def test_sink_receives_motion_events(self, pipeline, data_dir, mock_sink):
         """Sink should receive motion events with correct payload fields."""
