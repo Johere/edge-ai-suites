@@ -14,15 +14,34 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${STREAMS_CONFIG:-$SCRIPT_DIR/streams.yaml}"
 RUN_DIR="$SCRIPT_DIR/.run"
+VENV_DIR="$SCRIPT_DIR/.venv"
+REQUIREMENTS_FILE="$SCRIPT_DIR/requirements.txt"
+PYTHON_BIN="$VENV_DIR/bin/python"
 mkdir -p "$RUN_DIR"
 
 command -v ffmpeg >/dev/null || { echo "ffmpeg not found in PATH" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 not found in PATH" >&2; exit 1; }
 [[ -f "$CONFIG_FILE" ]] || { echo "config not found: $CONFIG_FILE" >&2; exit 1; }
 
+ensure_python_env() {
+  if [[ ! -d "$VENV_DIR" ]]; then
+    echo "creating Python virtualenv: $VENV_DIR"
+    python3 -m venv "$VENV_DIR"
+  fi
+
+  if [[ ! -x "$PYTHON_BIN" ]]; then
+    echo "virtualenv python not found: $PYTHON_BIN" >&2
+    exit 1
+  fi
+
+  if [[ -f "$REQUIREMENTS_FILE" ]]; then
+    "$PYTHON_BIN" -m pip install -q -r "$REQUIREMENTS_FILE"
+  fi
+}
+
 parse_streams() {
   # Emit one tab-separated row per stream: id\tenabled\tfile\trtsp\tloop
-  python3 - "$CONFIG_FILE" <<'PY'
+  "$PYTHON_BIN" - "$CONFIG_FILE" <<'PY'
 import sys, yaml
 with open(sys.argv[1]) as f:
     cfg = yaml.safe_load(f) or {}
@@ -39,7 +58,7 @@ write_mediamtx_conf() {
   # Read mediamtx.binary and mediamtx.config from streams.yaml, expand ~ in
   # binary path, dump mediamtx.config sub-tree to a temp YAML file.
   # Emit a single tab-separated row: binary\tconf_path
-  python3 - "$CONFIG_FILE" "$RUN_DIR/_mediamtx.yml" <<'PY'
+  "$PYTHON_BIN" - "$CONFIG_FILE" "$RUN_DIR/_mediamtx.yml" <<'PY'
 import os, sys, yaml
 cfg_path, out_path = sys.argv[1], sys.argv[2]
 with open(cfg_path) as f:
@@ -170,6 +189,8 @@ esac
 declare -A WANTED=()
 for arg in "$@"; do WANTED["$arg"]=1; done
 filter_active=$(( ${#WANTED[@]} > 0 ))
+
+ensure_python_env
 
 start_mediamtx || true
 
