@@ -71,6 +71,11 @@ export async function applyMonitorConfig(
           use_case: cfg.use_case,
           video_summary_task: ucCfg.video_summary_task,
           pipeline_config: cfg.pipeline_config,
+          keepalive: {
+            enabled: config.keepalive.enabled,
+            timeout_seconds: config.keepalive.timeoutSeconds,
+            check_interval_seconds: config.keepalive.checkIntervalSeconds,
+          },
           webhook_url: `http://localhost:${config.eventsWebhook!.port}/events`,
           data_dir: join(config.segmentsDir, monitorId),
         });

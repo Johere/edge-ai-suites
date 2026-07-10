@@ -8,6 +8,7 @@
     "strict": true,
     "esModuleInterop": true,
     "declaration": true,
+    "composite": true,
     "skipLibCheck": true,
     "paths": {
       "@smartbuilding-video/db": ["../db/src/index.ts"],

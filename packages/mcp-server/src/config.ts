@@ -103,6 +103,19 @@ export interface ServerConfig {
   videostreamAnalytics: {
     url: string;
   };
+  /**
+   * Keepalive protocol with videostream-analytics (VSA API §3.8). When enabled,
+   * the server arms the VSA watchdog at register_source (pipeline.keepalive) and
+   * runs a heartbeat loop that POSTs /sources/{id}/keepalive for every online
+   * monitor every intervalMs. VSA auto-pauses a source that goes silent for
+   * timeoutSeconds. intervalMs must stay well below timeoutSeconds.
+   */
+  keepalive: {
+    enabled: boolean;
+    intervalMs: number;           // MCP → VSA heartbeat cadence
+    timeoutSeconds: number;       // VSA auto-pause threshold (register payload)
+    checkIntervalSeconds: number; // VSA watchdog poll interval (register payload)
+  };
   schema?: SchemaDefinition;
   pollIntervalMs: number;
   videoSummaryMaxConcurrent: number;
@@ -174,6 +187,12 @@ export function loadConfig(configPath?: string): ServerConfig {
       maxEdgePx: parsed?.vlm_service?.max_edge_px ?? 720,
     },
     videostreamAnalytics: { url: parsed?.videostream_analytics?.url ?? "http://localhost:8999" },
+    keepalive: {
+      enabled: parsed?.keepalive?.enabled ?? true,
+      intervalMs: parsed?.keepalive?.interval_ms ?? 30_000,
+      timeoutSeconds: parsed?.keepalive?.timeout_seconds ?? 90,
+      checkIntervalSeconds: parsed?.keepalive?.check_interval_seconds ?? 10,
+    },
     pollIntervalMs: parsed?.poll_interval_ms ?? 5000,
     videoSummaryMaxConcurrent: parsed?.video_summary_max_concurrent ?? 2,
     schema: parsed?.schema,
