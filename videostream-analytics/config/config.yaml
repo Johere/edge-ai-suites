@@ -12,7 +12,7 @@ webhook:
 # Each registered source gets its own subdirectory `<data_dir>/<source_id>/`
 # (or whatever absolute path the register_source body specifies in its
 # `data_dir` field; MCP sends an absolute per-source path).
-data_dir: "~/.smartbuilding/data"
+data_dir: "~/.mcp-smartbuilding/segments"
 
 defaults:
   motion:
@@ -30,7 +30,7 @@ defaults:
     retention_days: 5
   prefilter:
     enabled: true
-    model_path: "/models/openvino/shape_static_1280x704/yolo11s/FP16/yolo11s.xml"
+    model_path: "/models/yolo11s.xml"
     target_classes: ["person"]
     min_confidence: 0.4
     min_frames_hit: 1

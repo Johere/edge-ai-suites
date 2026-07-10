@@ -91,21 +91,6 @@ def main():
     t.check_equal(completed[1], "Child jumped off chair", "task summary stored")
     t.check(completed[2] is not None, "completedAt set on completion")
 
-    # --- State ---
-    state_data = json.dumps({"lastWakeTime": "07:30", "streak": 5})
-    conn.execute(
-        "INSERT INTO monitor_state (monitor_id, state_json, updated_at) VALUES (?, ?, datetime('now'))",
-        ("cam-01", state_data),
-    )
-    conn.commit()
-    state_row = conn.execute("SELECT state_json FROM monitor_state WHERE monitor_id = ?", ("cam-01",)).fetchone()
-    state = json.loads(state_row[0])
-    t.check_equal(state["lastWakeTime"], "07:30", "setState/getState: string value")
-    t.check_equal(state["streak"], 5, "setState/getState: numeric value")
-
-    empty_state = conn.execute("SELECT state_json FROM monitor_state WHERE monitor_id = ?", ("nonexistent",)).fetchone()
-    t.check(empty_state is None, "getState: None for unknown monitor")
-
     # --- Stats ---
     today = conn.execute("SELECT date('now')").fetchone()[0]
     task_count = conn.execute(
@@ -121,7 +106,6 @@ def main():
     # --- Delete (clean up FK deps first) ---
     conn.execute("DELETE FROM alerts WHERE source_id = ?", ("cam-01",))
     conn.execute("DELETE FROM video_summary_tasks WHERE monitor_id = ?", ("cam-01",))
-    conn.execute("DELETE FROM monitor_state WHERE monitor_id = ?", ("cam-01",))
     conn.execute("DELETE FROM monitors WHERE id = ?", ("cam-01",))
     conn.commit()
     deleted = conn.execute("SELECT * FROM monitors WHERE id = ?", ("cam-01",)).fetchone()

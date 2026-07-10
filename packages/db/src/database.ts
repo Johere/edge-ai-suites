@@ -176,14 +176,6 @@ CREATE TABLE IF NOT EXISTS plans (
   UNIQUE(monitor_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_plans_monitor ON plans(monitor_id);
-
-CREATE TABLE IF NOT EXISTS monitor_state (
-  monitor_id TEXT NOT NULL,
-  key TEXT NOT NULL,
-  value_json TEXT NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (monitor_id, key)
-);
 `;
 
 export class SmartBuildingDB {
@@ -307,64 +299,6 @@ export class SmartBuildingDB {
     const row = this.db.prepare("SELECT * FROM alerts WHERE id = ?").get(id) as any;
     if (!row) return undefined;
     return rowToAlert(row);
-  }
-
-  // --- Monitor state (per-monitor key/value JSON store) ---
-
-  /**
-   * Read one state entry as a parsed JSON value. Returns `undefined` when the
-   * key does not exist. Rule-engine overrides and post-alert callbacks use
-   * this to persist per-monitor state across task boundaries (e.g. the last
-   * wake-up time for elder_wakeup).
-   */
-  getMonitorState(monitorId: string, key: string): unknown | undefined {
-    const row = this.db.prepare(
-      "SELECT value_json FROM monitor_state WHERE monitor_id = ? AND key = ?",
-    ).get(monitorId, key) as { value_json: string } | undefined;
-    if (!row) return undefined;
-    try {
-      return JSON.parse(row.value_json);
-    } catch {
-      return row.value_json;
-    }
-  }
-
-  /**
-   * Upsert one state entry. `value` is JSON-serialised (`null` is legal and
-   * distinct from "unset"; use `deleteMonitorState` to actually remove).
-   */
-  setMonitorState(monitorId: string, key: string, value: unknown): void {
-    const valueJson = JSON.stringify(value ?? null);
-    this.db.prepare(`
-      INSERT INTO monitor_state (monitor_id, key, value_json, updated_at)
-      VALUES (?, ?, ?, datetime('now'))
-      ON CONFLICT(monitor_id, key) DO UPDATE SET
-        value_json = excluded.value_json,
-        updated_at = excluded.updated_at
-    `).run(monitorId, key, valueJson);
-  }
-
-  /** Return all keys for a monitor as a `{key: parsed_value}` dict. */
-  listMonitorState(monitorId: string): Record<string, unknown> {
-    const rows = this.db.prepare(
-      "SELECT key, value_json FROM monitor_state WHERE monitor_id = ?",
-    ).all(monitorId) as Array<{ key: string; value_json: string }>;
-    const out: Record<string, unknown> = {};
-    for (const r of rows) {
-      try {
-        out[r.key] = JSON.parse(r.value_json);
-      } catch {
-        out[r.key] = r.value_json;
-      }
-    }
-    return out;
-  }
-
-  /** Delete one state entry. No-op if key does not exist. */
-  deleteMonitorState(monitorId: string, key: string): void {
-    this.db.prepare(
-      "DELETE FROM monitor_state WHERE monitor_id = ? AND key = ?",
-    ).run(monitorId, key);
   }
 
   /**

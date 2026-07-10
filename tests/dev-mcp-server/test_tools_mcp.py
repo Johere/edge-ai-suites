@@ -168,19 +168,6 @@ video_summary_max_concurrent: 1
         db_text = db_content[0].get("text", "") if db_content else ""
         t.check("count" in db_text, "video_db: raw query returns count")
 
-        # Call tool: smartbuilding_state_query set + get
-        client.send("tools/call", {
-            "name": "smartbuilding_state_query",
-            "arguments": {"monitor_id": "cam-01", "action": "set", "state": {"temp": 5}},
-        })
-        state_get_resp = client.send("tools/call", {
-            "name": "smartbuilding_state_query",
-            "arguments": {"monitor_id": "cam-01", "action": "get"},
-        })
-        state_get_content = state_get_resp.get("result", {}).get("content", [])
-        state_get_text = state_get_content[0].get("text", "") if state_get_content else ""
-        t.check("temp" in state_get_text, "state_query: set then get returns stored state")
-
         # Call tool: smartbuilding_use_case_validate (pass)
         validate_resp = client.send("tools/call", {
             "name": "smartbuilding_use_case_validate",

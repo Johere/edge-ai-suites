@@ -267,7 +267,7 @@ export function registerTools(
 
   // --- smartbuilding_video_db ---
   server.registerTool("smartbuilding_video_db", {
-    description: "Low-level read-only SQL query against the SQLite database (all tables: monitors, alerts, video_summary_tasks, events, recordings, reports, plans, monitor_state)",
+    description: "Low-level read-only SQL query against the SQLite database (all tables: monitors, alerts, video_summary_tasks, events, recordings, reports, plans)",
     inputSchema: {
       query: z.string().describe("SELECT SQL query to execute"),
       params: z.array(z.unknown()).optional().describe("Positional query parameters"),
@@ -497,25 +497,4 @@ export function registerTools(
     }
   });
 
-  // --- smartbuilding_state_query ---
-  server.registerTool("smartbuilding_state_query", {
-    description: "Read or write the per-monitor JSON state store. action=get returns one key " +
-      "(or the whole state map when `key` is omitted); action=set upserts one key; action=delete " +
-      "removes one key. Rule-engine overrides and on_task_completed callbacks use this store to " +
-      "persist state across task boundaries.",
-    inputSchema: {
-      monitor_id: z.string().describe("Monitor ID"),
-      action: z.enum(["get", "set", "delete"]).describe("Action to perform"),
-      key: z.string().optional().describe("State key (required for set/delete; optional for get)"),
-      value: z.unknown().optional().describe("Any JSON value (required for set)"),
-    },
-  }, async (params) => {
-    try {
-      const { stateQuery } = await import("@smartbuilding-video/tools");
-      const result = stateQuery(db, params as any);
-      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-    } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
-    }
-  });
 }

@@ -239,7 +239,7 @@ The nested pipeline object (`extra="forbid"`). Every sub-block is optional; when
     "segment":   { "max_duration": 10, "min_duration": 1.0 },
     "prefilter": {
       "enabled": true,
-      "model_path": "/models/openvino/yolo11s/FP16/yolo11s.xml",
+      "model_path": "/models/yolo11s.xml",
       "target_classes": ["person"],
       "detect_fps": 2.0,
       "device": "NPU"
