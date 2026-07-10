@@ -75,13 +75,13 @@ streams:
     loop: true
 
   cam_high_altitude:
-    enabled: true
+    enabled: false
     file: cam_ha_test/building-throwing-2.mp4
     rtsp_url: rtsp://localhost:8554/live/high_altitude
     loop: true
 
   cam_parking:
-    enabled: true
+    enabled: false
     file: cam_parking/false-parking.mp4
     rtsp_url: rtsp://localhost:8554/live/parking
     loop: true

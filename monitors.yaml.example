@@ -37,12 +37,12 @@ monitors:
       # Hazard prefilter: NPU YOLO11s gates summary requests on target classes.
       prefilter:
         enabled: true
-        model_path: ${HOME}/models/yolo11s.xml
         target_classes: [person, knife, scissors, bottle]
         min_confidence: 0.4
         detect_fps: 2
         min_frames_hit: 2
         long_side: 1280
+        device: NPU
       # ROI crop — only the target region is sent to the summary service.
       roi:
         enabled: true
@@ -59,21 +59,27 @@ monitors:
     use_case: elder_wakeup
     pipeline_config:
       motion: { enabled: true, diff_threshold: 25 }
+      prefilter:
+        enabled: true
+        device: NPU
       recording: { enabled: true, interval_seconds: 60 }
       segment: { max_duration: 10 }
 
   cam_elder_bedroom_2:
-    enabled: false
+    enabled: true
     name: "Elder Bedroom Camera 2"
     source_url: rtsp://localhost:8554/live/elder2
     use_case: elder_wakeup
     pipeline_config:
       motion: { enabled: true, diff_threshold: 25 }
+      prefilter:
+        enabled: true
+        device: NPU
       recording: { enabled: true, interval_seconds: 60 }
       segment: { max_duration: 10 }
 
   cam_high_altitude:
-    enabled: true
+    enabled: false
     name: "High Altitude Safety Camera"
     source_url: rtsp://localhost:8554/live/high_altitude
     use_case: high_altitude_safety
@@ -84,7 +90,7 @@ monitors:
       segment: { max_duration: 10 }
 
   cam_parking:
-    enabled: true
+    enabled: false
     name: "Parking Safety Camera"
     source_url: rtsp://localhost:8554/live/parking
     use_case: parking_safety

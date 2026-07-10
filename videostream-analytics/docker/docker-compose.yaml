@@ -8,7 +8,6 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
-    image: ${REGISTRY:-}videostream-analytics:${TAG:-latest}
     ports:
       - "8999:8999"
     environment:

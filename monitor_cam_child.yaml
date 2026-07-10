@@ -26,12 +26,12 @@ monitors:
       # Hazard prefilter: NPU YOLO11s gates summary requests on target classes.
       prefilter:
         enabled: true
-        model_path: ${HOME}/models/yolo11s.xml
         target_classes: [person, knife, scissors, bottle]
         min_confidence: 0.4
         detect_fps: 2
         min_frames_hit: 2
         long_side: 1280
+        device: NPU
       # ROI crop — only the target region is sent to the summary service.
       roi:
         enabled: true
