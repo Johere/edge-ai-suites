@@ -10,9 +10,9 @@ videostream-analytics 是 Smart Building 的视频流处理微服务。从 RTSP 
 | Docker | ≥ 24，含 `docker compose`（容器模式需要） |
 | ffmpeg | 推流测试用 |
 | MediaMTX | 提供 RTSP 服务，host 端运行 |
-| YOLO 模型 | 启用 prefilter 时挂载 `~/models` 到容器 `/models` |
+| YOLO 模型 | 启用 prefilter 时把 `~/models` 以**恒等路径**挂载到容器同路径（`~/models -> ~/models`） |
 
-YOLO 模型文件（**扁平布局**，host 侧 `~/models` 挂到容器 `/models`）：
+YOLO 模型文件（**扁平布局**，host 侧 `~/models` 以恒等路径挂进容器）：
 
 ```
 ~/models/yolo11s.xml
@@ -24,7 +24,7 @@ YOLO 模型文件（**扁平布局**，host 侧 `~/models` 挂到容器 `/models
 ### 1.1 准备 YOLO11 NPU 模型（仅启用 prefilter 时）
 
 prefilter 用 Intel NPU 上的 YOLO11s OpenVINO IR 做「人/物」快速通过-跳过闸门。下面步骤导出所需模型
-文件（与 `agent-ai.smarthome/docs/prepare-yolo11-npu-model.md` 一致，只是把产物拍平到 `~/models/` 根下）。
+文件。
 
 **产物**：`~/models/yolo11s.xml` + `~/models/yolo11s.bin`
 
@@ -95,9 +95,7 @@ PY
 
 预期（Core Ultra 358H NPU）：编译 ~0.1s（热），单帧推理 ~12–13ms @ 1280×704。
 
-**运行时接线**：容器把 host `~/models` 挂到 `/models`，因此配置里 `prefilter.model_path` 用
-**容器内路径** `/models/yolo11s.xml`（见 §3 config 示例）；本地模式则用 host 绝对路径
-`~/models/yolo11s.xml`（`monitors.yaml` / 注册体里也是这个扁平路径）。`device: NPU`。
+**运行时接线**：容器把 host `~/models` 做**恒等挂载**（host X → container X），因此容器模式和本地模式都统一用 host 绝对路径（例如 `$HOME/models/yolo11s.xml`，见 §3 config 示例）。`device: NPU`。
 
 **故障排查**：
 
@@ -121,13 +119,14 @@ docker compose -f docker/docker-compose.yaml up -d
 docker compose -f docker/docker-compose.yaml logs -f videostream-analytics
 ```
 
-环境变量**全部可选**——compose 已内置默认值（`${VAR:-默认}`），`docker compose up -d` **零配置开箱即用**，无需创建 `.env`。要覆盖时在 shell 里 `export` 后再启动即可：
+环境变量**全部可选**——compose 已内置默认值（`${VAR:-默认}`），`docker compose up -d` 可开箱运行，无需创建 `.env`。  
+建议先确认：`${HOME}/models` 可读、`${HOME}/.mcp-smartbuilding` 可写，再按需 `export` 覆盖变量后启动：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `WEBHOOK_URL` | `http://host.docker.internal:18789/webhook/smarthome/event` | 事件下游 |
-| `SMARTBUILDING_DATA_DIR` | `~/.mcp-smartbuilding` | MCP 数据根（= MCP server 的默认根）。VSA 默认输出根 = `<它>/segments`；并按**恒等路径**挂进容器（host X → 容器 X），使 MCP 下发的 `<它>/segments/<id>` 在容器内解析到同一真实目录 |
-| `MODEL_DIR` | `~/models` | YOLO 模型目录（挂到容器 `/models:ro`） |
+| `WEBHOOK_URL` | `http://localhost:3101/events` | 事件下游 |
+| `SMARTBUILDING_DATA_DIR` | `${HOME}/.mcp-smartbuilding` | MCP 数据根（= MCP server 的默认根）。VSA 默认输出根 = `<它>/segments`；并按**恒等路径**挂进容器（host X → 容器 X），使 MCP 下发的 `<它>/segments/<id>` 在容器内解析到同一真实目录 |
+| `MODEL_DIR` | `${HOME}/models` | YOLO 模型目录（恒等挂载到容器同路径，`:ro`） |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 空 | 仅 build 阶段使用 |
 
 覆盖示例：
@@ -136,8 +135,31 @@ docker compose -f docker/docker-compose.yaml logs -f videostream-analytics
 SMARTBUILDING_DATA_DIR=/data/mcp docker compose -f docker/docker-compose.yaml up -d
 ```
 
-> - 不再需要 `.env` / `env.example` / `DATA_DIR`  —— 都由 compose 默认值 + `export` 覆盖取代。
+> - 不再需要 `.env` / `DATA_DIR`  —— 都由 compose 默认值 + `export` 覆盖取代。
 > - 容器以 **root** 运行，写出的 clip 文件属 root（MCP clip extractor / VLM 读取无碍）。若要让 MCP storage cleaner（以宿主用户跑）能清理这些文件，用 `--user "$(id -u):$(id -g)"` 起容器（见下方 `docker run` 示例）或自行 `chown`。
+>
+> 常用 `docker run` 模板（和 compose 配置保持一致）：
+>
+> ```bash
+> export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
+>
+> # 最小模板（host network + 恒等挂载）
+> docker run -d --rm --name vsa-test --network host \
+>   -e WEBHOOK_URL="http://localhost:3101/events" \
+>   -e SMARTBUILDING_DATA_DIR \
+>   -v "${SMARTBUILDING_DATA_DIR}:${SMARTBUILDING_DATA_DIR}" \
+>   videostream-analytics:latest
+>
+> # 完整模板（含模型只读恒等挂载 + 代理 + 非 root）
+> docker run -d --rm --name vsa-test --network host \
+>   --user "$(id -u):$(id -g)" \
+>   -e WEBHOOK_URL="http://localhost:3101/events" \
+>   -e SMARTBUILDING_DATA_DIR \
+>   -e http_proxy="" -e https_proxy="" -e no_proxy="localhost,127.0.0.1" \
+>   -v "${MODEL_DIR:-$HOME/models}:${MODEL_DIR:-$HOME/models}:ro" \
+>   -v "${SMARTBUILDING_DATA_DIR}:${SMARTBUILDING_DATA_DIR}" \
+>   videostream-analytics:latest
+> ```
 
 容器使用 `network_mode: host`，对外端口固定 `8999`。
 
@@ -193,7 +215,7 @@ defaults:
     retention_days: 5
   prefilter:
     enabled: true
-    model_path: "/models/yolo11s.xml"   # 容器内路径（host ~/models/yolo11s.xml，见 §1.1）
+    model_path: "/home/<your_user>/models/yolo11s.xml"   # 容器/host 同路径（恒等挂载，见 §1.1）
     target_classes: ["person"]
     min_confidence: 0.4
     min_frames_hit: 1
@@ -391,7 +413,7 @@ pytest tests/integration/test_motion_to_webhook.py -m integration -v -s
 
 ```bash
 export PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"               # smart-community 根目录
-export VSA_TEST_DATA_DIR="${VSA_TEST_DATA_DIR:-/tmp/vsa-test}"
+export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-/tmp/vsa-test}"
 ```
 
 ### 准备：启动支撑服务（4 个终端）
@@ -423,10 +445,16 @@ WEBHOOK_URL="http://localhost:9999/events" \
 # 或容器方式（恒等挂载 SMARTBUILDING_DATA_DIR；VSA 自己推导默认输出根，不再用 /data / RECORDINGS_DIR）
 docker run -d --rm --name vsa-test --network host \
   -e WEBHOOK_URL="http://localhost:9999/events" \
-  -e SMARTBUILDING_DATA_DIR="${VSA_TEST_DATA_DIR}" \
-  -v "$HOME/models:/models:ro" \
-  -v "${VSA_TEST_DATA_DIR}:${VSA_TEST_DATA_DIR}" \
+  -e SMARTBUILDING_DATA_DIR \
+  -v "$HOME/models:$HOME/models:ro" \
+  -v "${SMARTBUILDING_DATA_DIR}:${SMARTBUILDING_DATA_DIR}" \
   videostream-analytics:latest
+
+# 或 compose 方式（推荐长期使用）
+# 关键：WEBHOOK_URL / SMARTBUILDING_DATA_DIR 需要在执行 compose 的同一终端里 export
+WEBHOOK_URL="http://localhost:9999/events" \
+SMARTBUILDING_DATA_DIR="/tmp/vsa-test" \
+docker compose -f docker/docker-compose.yaml up -d --force-recreate
 ```
 
 **T4 — 推流（host）**
@@ -460,7 +488,7 @@ curl -s -X POST http://localhost:8999/register_source \
 {
   "source_id":   "cam_demo",
   "source_url":  "rtsp://localhost:8554/live/child",
-  "data_dir":    "${VSA_TEST_DATA_DIR}/cam_demo",
+  "data_dir":    "${SMARTBUILDING_DATA_DIR}/cam_demo",
   "pipeline": {
     "prefilter": {"enabled": false}
   }
@@ -468,7 +496,7 @@ curl -s -X POST http://localhost:8999/register_source \
 JSON
 ```
 
-期望（首次注册）：`{"status": "started", "source_id": "cam_demo", "data_dir": "${VSA_TEST_DATA_DIR}/cam_demo", ...}`
+期望（首次注册）：`{"status": "started", "source_id": "cam_demo", "data_dir": "${SMARTBUILDING_DATA_DIR}/cam_demo", ...}`
 
 期望（重复注册同一个 `source_id`）：`{"status": "already_running", "source_id": "cam_demo"}`。
 
@@ -493,7 +521,7 @@ curl -sf http://localhost:8999/sources/cam_demo/status | python3 -m json.tool
 {
   "source_id": "cam_demo",
   "source_url": "rtsp://localhost:8554/live/child",
-  "data_dir": "${VSA_TEST_DATA_DIR}/cam_demo",
+  "data_dir": "${SMARTBUILDING_DATA_DIR}/cam_demo",
   "status": "online",
   "running": true,
   "recording_enabled": true,
@@ -521,7 +549,7 @@ curl -sf http://localhost:9999/recorded_events/motion | python3 -m json.tool | h
 # recording 事件 — envelope: {sourceId, type:"recording", timestamp, payload:{recording_path, recording_start, ...}}
 curl -sf http://localhost:9999/recorded_events/recording | python3 -m json.tool | head -40
 
-DATA_DIR="${VSA_TEST_DATA_DIR}/cam_demo"   # 与 V2 register body 中的 data_dir 一致
+DATA_DIR="${SMARTBUILDING_DATA_DIR}/cam_demo"   # 与 V2 register body 中的 data_dir 一致
 ls -la "$DATA_DIR/latest.jpg"
 ls -la "$DATA_DIR/motion_events/$(date +%Y-%m-%d)/"
 ls -la "$DATA_DIR/recordings/$(date +%Y-%m-%d)/"
@@ -587,7 +615,7 @@ curl -s -X POST http://localhost:8999/register_source \
 {
   "source_id":   "cam_bad",
   "source_url":  "rtsp://localhost:8554/live/__nonexistent__",
-  "data_dir":    "${VSA_TEST_DATA_DIR}/cam_bad",
+  "data_dir":    "${SMARTBUILDING_DATA_DIR}/cam_bad",
   "pipeline": {
     "prefilter": {"enabled": false},
     "recording": {"enabled": false},
@@ -650,7 +678,7 @@ done
 **步骤 1：启动 MCP server（替换 T2 mock webhook）**
 
 ```bash
-# MCP 数据目录（默认是 ~/.mcp-smartbuilding；如需隔离测试可改成 /tmp/...）
+# MCP 数据目录（默认是 ${HOME}/.mcp-smartbuilding；如需隔离测试可改成 /tmp/...）
 export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
 mkdir -p "$SMARTBUILDING_DATA_DIR"
 
@@ -679,18 +707,29 @@ WEBHOOK_URL=http://localhost:3101/events \
   .venv/bin/videostream-analytics serve --config config/config.yaml
 
 # B) VSA 在 Docker 跑（推荐 host network，容器内 localhost 就是宿主机）
+export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
 docker run -d --rm --name vsa-test --network host \
   -e WEBHOOK_URL="http://localhost:3101/events" \
-  -v "${VSA_TEST_DATA_DIR}:${VSA_TEST_DATA_DIR}" \
+  -e SMARTBUILDING_DATA_DIR \
+  -v "$HOME/models:$HOME/models:ro" \
+  -v "${SMARTBUILDING_DATA_DIR}:${SMARTBUILDING_DATA_DIR}" \
   videostream-analytics:latest
 
-# C) 若不能用 --network host（bridge 网络），改用 host.docker.internal
+# C) VSA 用 docker compose 跑（推荐长期使用）
+# 在执行 compose 的同一终端里设置变量，确保容器与 MCP 共享同一数据根
+WEBHOOK_URL="http://localhost:3101/events" \
+SMARTBUILDING_DATA_DIR="$HOME/.mcp-smartbuilding" \
+docker compose -f docker/docker-compose.yaml up -d --force-recreate
+
+# D) 若不能用 --network host（bridge 网络），改用 host.docker.internal
 # Linux 需要显式映射 host-gateway
 docker run -d --rm --name vsa-test \
   --add-host=host.docker.internal:host-gateway \
   -p 8999:8999 \
   -e WEBHOOK_URL="http://host.docker.internal:3101/events" \
-  -v "${VSA_TEST_DATA_DIR}:${VSA_TEST_DATA_DIR}" \
+  -e SMARTBUILDING_DATA_DIR \
+  -v "$HOME/models:$HOME/models:ro" \
+  -v "${SMARTBUILDING_DATA_DIR}:${SMARTBUILDING_DATA_DIR}" \
   videostream-analytics:latest
 ```
 
@@ -810,7 +849,7 @@ curl -s -X POST http://localhost:8999/register_source \
 {
   "source_id":   "cam_ka",
   "source_url":  "rtsp://localhost:8554/live/child",
-  "data_dir":    "${VSA_TEST_DATA_DIR}/cam_ka",
+  "data_dir":    "${SMARTBUILDING_DATA_DIR}/segments/cam_ka",
   "pipeline": {
     "prefilter": {"enabled": false},
     "recording": {"enabled": false},
@@ -844,7 +883,7 @@ curl -i -X POST http://localhost:8999/sources/no_such/keepalive | head -5
 验证 child_safety 链路：NPU YOLO prefilter → 累计 trajectory union bbox → 写
 `<clip>_input.mp4`（ROI crop） → webhook payload 带 `trajectory_region`。
 
-**前置条件**：NPU YOLO 模型文件（容器内 `/models/yolo11s.xml`，host `~/models/yolo11s.xml`，见 §1.1），
+**前置条件**：NPU YOLO 模型文件（容器/host 同路径，例如 `$HOME/models/yolo11s.xml`，见 §1.1），
 以及一段含 person 的视频（如 `demo-videos/cam_child/child_safety_demo.mp4`）。
 
 #### Step 1 — 启动支撑服务（4 个终端）
@@ -877,11 +916,11 @@ curl -s -X POST http://localhost:8999/register_source \
 {
   "source_id":   "cam_child_roi",
   "source_url":  "rtsp://localhost:8554/live/child",
-  "data_dir":    "${VSA_TEST_DATA_DIR}/cam_child_roi",
+  "data_dir":    "${SMARTBUILDING_DATA_DIR}/segments/cam_child_roi",
   "pipeline": {
     "prefilter": {
       "enabled": true,
-      "model_path": "/models/yolo11s.xml",
+      "model_path": "${MODEL_DIR:-$HOME/models}/yolo11s.xml",
       "target_classes": ["person"],
       "detect_fps": 2.0,
       "device": "NPU"
@@ -914,7 +953,7 @@ JSON
 | `roi.auto_split_area=0.35` | 当 union 面积超过 35% 帧面积时，提前切 segment，避免长 clip 上 crop 失效 |
 | `recording.enabled=false` | 关闭固定时长录像分支，仅验证 motion 路径 |
 
-期望响应：`{"status": "started", "source_id": "cam_child_roi", "source_url": "...", "data_dir": "${VSA_TEST_DATA_DIR}/cam_child_roi"}`。
+期望响应：`{"status": "started", "source_id": "cam_child_roi", "source_url": "...", "data_dir": "${SMARTBUILDING_DATA_DIR}/cam_child_roi"}`。
 
 #### Step 3 — 等待 motion 事件累积
 
@@ -956,7 +995,7 @@ print('prefilter_passed  :', p.get('prefilter_passed'))
 #### Step 5 — 验证磁盘上的 `_input.mp4`
 
 ```bash
-DATA_DIR="${VSA_TEST_DATA_DIR}/cam_child_roi"
+DATA_DIR="${SMARTBUILDING_DATA_DIR}/segments/cam_child_roi"
 TODAY=$(date +%Y-%m-%d)
 
 # 5.1 文件存在
@@ -991,9 +1030,9 @@ VSA 默认仅通过 `StreamHandler(sys.stdout)` 输出日志。启动 VSA 时重
 ```bash
 WEBHOOK_URL=http://localhost:9999/events \
   .venv/bin/videostream-analytics serve --config config/config.yaml \
-  > "${VSA_TEST_DATA_DIR}/vsa.log" 2>&1 &
+  > "${SMARTBUILDING_DATA_DIR}/vsa.log" 2>&1 &
 
-grep "Segment early-split by trajectory union" "${VSA_TEST_DATA_DIR}/vsa.log"
+grep "Segment early-split by trajectory union" "${SMARTBUILDING_DATA_DIR}/vsa.log"
 ```
 
 当画面动作幅度大、union 面积超过 `auto_split_area`（本例为 `0.35`）时会记录该日志。**注意需同时满足两个条件才能 grep 到**：① `logging.level: DEBUG`（上一步已改）；② 早切分支被真正走到（`prefilter.enabled=true` 且 `roi.enabled=true` 且 `auto_split_area>0` 且 union 面积在 segment 间隔到达前就超阈值）。未触发不视为失败；如需强制触发，将 `auto_split_area` 调低至 `0.05` 后重新注册。
@@ -1009,7 +1048,7 @@ grep "Segment early-split by trajectory union" "${VSA_TEST_DATA_DIR}/vsa.log"
 
 参考 V10。T2 替换为真 MCP server，T3 的 `WEBHOOK_URL` 改为 `http://localhost:3101/events`，事件累积后查询 MCP DB。
 
-MCP 现在用**全局单一** DB（`${SMARTBUILDING_DATA_DIR:-~/.mcp-smartbuilding}/smartbuilding.db`），所有 monitor 共用一张 `events` 表并以 `monitor_id` 列区分 —— 不再是旧版每 monitor 一个 `~/.smartbuilding-video/data/<id>/pipeline.db`。查询时按 `monitor_id` 过滤：
+MCP 现在用**全局单一** DB（`${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}/smartbuilding.db`），所有 monitor 共用一张 `events` 表并以 `monitor_id` 列区分 —— 不再是旧版每 monitor 一个 `~/.smartbuilding-video/data/<id>/pipeline.db`。查询时按 `monitor_id` 过滤：
 
 ```bash
 sqlite3 "${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}/smartbuilding.db" \
@@ -1044,13 +1083,14 @@ sqlite3 "${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}/smartbuilding.db" \
 
 ```bash
 # 启动（直接 docker run，便于单测；恒等挂载 SMARTBUILDING_DATA_DIR）
+export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
 docker run -d --rm --name vsa-test --network host \
   -e WEBHOOK_URL="http://localhost:9999/events" \
-  -e SMARTBUILDING_DATA_DIR="${VSA_TEST_DATA_DIR:-$HOME/.mcp-smartbuilding}" \
+  -e SMARTBUILDING_DATA_DIR \
   -e no_proxy="localhost,127.0.0.1" \
   -e http_proxy="" -e https_proxy="" \
-  -v "$HOME/models:/models:ro" \
-  -v "${VSA_TEST_DATA_DIR:-$HOME/.mcp-smartbuilding}:${VSA_TEST_DATA_DIR:-$HOME/.mcp-smartbuilding}" \
+  -v "$HOME/models:$HOME/models:ro" \
+  -v "${SMARTBUILDING_DATA_DIR}:${SMARTBUILDING_DATA_DIR}" \
   videostream-analytics:latest
 
 # 启动（compose，含完整环境变量管理）
@@ -1076,7 +1116,21 @@ docker rm -f vsa-test
 docker compose -f docker/docker-compose.yaml down
 ```
 
-容器通过**恒等挂载**把 host 的 `SMARTBUILDING_DATA_DIR` 挂到容器内同名绝对路径，clip 直接落在 host（不再有独立 `/data` 映射）；VSA 默认输出根 = `<SMARTBUILDING_DATA_DIR>/segments`，注册体里显式的 `data_dir` 优先。YOLO 模型目录为 `/models`（对应 host `${MODEL_DIR:-~/models}`）。
+容器通过**恒等挂载**把 host 的 `SMARTBUILDING_DATA_DIR` 挂到容器内同名绝对路径，clip 直接落在 host（不再有独立 `/data` 映射）；VSA 默认输出根 = `<SMARTBUILDING_DATA_DIR>/segments`，注册体里显式的 `data_dir` 优先。YOLO 模型目录也采用恒等挂载（`${MODEL_DIR:-$HOME/models}` → `${MODEL_DIR:-$HOME/models}`）。
+
+权限提醒：容器默认 root 运行，挂载目录中的新文件会是 root 属主。若希望与宿主用户权限一致，可用 `docker run --user "$(id -u):$(id -g)" ...`，或使用 compose：
+
+```bash
+# 让 compose 里的 user: "${UID}:${GID}" 生效
+UID="$(id -u)" GID="$(id -g)" docker compose -f docker/docker-compose.yaml up -d
+```
+
+```yaml
+# docker/docker-compose.yaml 示例（可选）
+services:
+  videostream-analytics:
+    user: "${UID:-1000}:${GID:-1000}"
+```
 
 ## 9. 多场景评估工具
 

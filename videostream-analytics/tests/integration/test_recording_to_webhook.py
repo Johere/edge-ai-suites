@@ -9,6 +9,8 @@ Phase 7 §3 enabled the fixed-duration recording path. This test confirms:
 import os
 import time
 from datetime import datetime
+from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -19,12 +21,14 @@ from .conftest import wait_for_events
 @pytest.mark.integration
 class TestRecordingToWebhook:
     @pytest.fixture(autouse=True)
-    def register_source(self, http_client, analytics_url, rtsp_url, tmp_path):
+    def register_source(self, http_client, analytics_url, rtsp_url, webhook_url):
         """Register a source with recording enabled at a short interval."""
-        self.data_dir = str(tmp_path / "rec_cam")
+        data_root = Path(os.environ.get("SMARTBUILDING_DATA_DIR", str(Path.home() / ".mcp-smartbuilding")))
+        self.data_dir = str(data_root / "segments" / f"rec_cam_{uuid4().hex[:8]}")
         http_client.post(f"{analytics_url}/register_source", json={
             "source_id": "rec_cam",
             "source_url": rtsp_url,
+            "webhook_url": f"{webhook_url}/events",
             "data_dir": self.data_dir,
             "pipeline": {
                 "prefilter": {"enabled": False},
