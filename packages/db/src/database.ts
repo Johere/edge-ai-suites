@@ -324,7 +324,7 @@ export class SmartBuildingDB {
     return rowToAlert(row);
   }
 
-  queryAlerts(options: { monitorId?: string; unacked?: boolean; limit?: number }): Alert[] {
+  queryAlerts(options: { monitorId?: string; unacked?: boolean; limit?: number; sinceId?: number }): Alert[] {
     let sql = "SELECT * FROM alerts WHERE 1=1";
     const params: any[] = [];
 
@@ -335,13 +335,32 @@ export class SmartBuildingDB {
     if (options.unacked) {
       sql += " AND ack_at IS NULL";
     }
-    sql += " ORDER BY created_at DESC";
+    if (options.sinceId !== undefined) {
+      // Cursor read for MCP subscribe flow — return alerts strictly newer than the caller's cursor.
+      // Paired with ORDER BY id ASC so the caller can advance its cursor to the max id it received.
+      sql += " AND id > ?";
+      params.push(options.sinceId);
+      sql += " ORDER BY id ASC";
+    } else {
+      sql += " ORDER BY created_at DESC";
+    }
     if (options.limit) {
       sql += " LIMIT ?";
       params.push(options.limit);
     }
 
     return (this.db.prepare(sql).all(...params) as any[]).map(rowToAlert);
+  }
+
+  /** Highest alert.id for a monitor (or globally if monitorId omitted). Returns 0 when the table has no rows. */
+  getLatestAlertId(monitorId?: string): number {
+    const sql = monitorId
+      ? "SELECT COALESCE(MAX(id), 0) AS max_id FROM alerts WHERE monitor_id = ?"
+      : "SELECT COALESCE(MAX(id), 0) AS max_id FROM alerts";
+    const row = monitorId
+      ? (this.db.prepare(sql).get(monitorId) as { max_id: number })
+      : (this.db.prepare(sql).get() as { max_id: number });
+    return row.max_id;
   }
 
   queryAlertsWithDetails(params: {
