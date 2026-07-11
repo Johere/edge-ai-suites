@@ -68,6 +68,40 @@ class TestLoadConfig:
         assert "~" not in config.data_dir
         assert config.data_dir == "/tmp/videostream-test-data"
 
+    def test_prefilter_model_path_env_var_expanded(self, tmp_path):
+        cfg_file = tmp_path / "mp_env.yaml"
+        cfg_file.write_text(
+            "defaults:\n"
+            "  prefilter:\n"
+            "    enabled: true\n"
+            '    model_path: "${HOME}/models/yolo11s.xml"\n'
+        )
+        config = load_config(str(cfg_file))
+        assert "$" not in config.defaults.prefilter.model_path
+        assert config.defaults.prefilter.model_path == os.path.expanduser(
+            "~/models/yolo11s.xml"
+        )
+
+    def test_prefilter_model_path_tilde_expanded(self, tmp_path):
+        cfg_file = tmp_path / "mp_tilde.yaml"
+        cfg_file.write_text(
+            "defaults:\n"
+            "  prefilter:\n"
+            "    model_path: ~/models/yolo11s.xml\n"
+        )
+        config = load_config(str(cfg_file))
+        assert "~" not in config.defaults.prefilter.model_path
+        assert config.defaults.prefilter.model_path == os.path.expanduser(
+            "~/models/yolo11s.xml"
+        )
+
+    def test_prefilter_empty_model_path_stays_empty(self, tmp_path):
+        # Absent model_path (class default "") must not blow up the expansion step.
+        cfg_file = tmp_path / "mp_empty.yaml"
+        cfg_file.write_text("defaults:\n  prefilter:\n    enabled: false\n")
+        config = load_config(str(cfg_file))
+        assert config.defaults.prefilter.model_path == ""
+
 
 class TestConfigModels:
     def test_motion_config_defaults(self):

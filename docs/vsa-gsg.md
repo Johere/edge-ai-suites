@@ -215,7 +215,7 @@ defaults:
     retention_days: 5
   prefilter:
     enabled: true
-    model_path: "/home/<your_user>/models/yolo11s.xml"   # 容器/host 同路径（恒等挂载，见 §1.1）
+    model_path: "${HOME}/models/yolo11s.xml"   # 支持 ${HOME}/~ 展开；容器/host 恒等挂载见 §1.1
     target_classes: ["person"]
     min_confidence: 0.4
     min_frames_hit: 1
@@ -231,7 +231,12 @@ logging:
   level: "INFO"
 ```
 
-`defaults` 是全局默认值，每个源在注册时可通过同名字段覆盖。
+`defaults` 是全局默认值，每个源在注册时**按字段覆盖**：注册体（或 monitor yaml 的 `pipeline_config`）里
+只写「要改的」字段即可，未写的字段自动回退到这里的 `defaults`（不是整块替换）。例如 monitor 侧只给
+`prefilter.target_classes`、不给 `model_path`，则 `model_path` 沿用本文件的默认值。
+
+路径占位符：`data_dir` 与 `prefilter.model_path` 支持 `${HOME}` / `~` 展开（VSA 在 `load_config` 时解析），
+可直接写 `${HOME}/models/yolo11s.xml`，无需硬编码绝对路径。
 
 ## 4. CLI 三种模式
 

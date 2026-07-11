@@ -185,6 +185,15 @@ def load_config(config_path: str | None = None) -> AppConfig:
 
     config.data_dir = expand_path(config.data_dir)
 
+    # `prefilter.model_path` may use ${HOME}/~ placeholders in config.yaml, mirroring
+    # the node side which already expands ${HOME} in monitor-yaml paths. VSA reads its
+    # own config.yaml, so expand here (same treatment as data_dir above). Per-source
+    # configs that omit model_path inherit this expanded default via merge_config.
+    if config.defaults.prefilter.model_path:
+        config.defaults.prefilter.model_path = expand_path(
+            config.defaults.prefilter.model_path
+        )
+
     # Environment variable overrides
     if webhook_url := os.environ.get("WEBHOOK_URL"):
         config.webhook.url = webhook_url
