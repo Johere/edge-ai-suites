@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypeVar
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
+
+
+ConfigModelT = TypeVar("ConfigModelT", bound=BaseModel)
 
 
 class MotionConfig(BaseModel):
@@ -155,6 +158,18 @@ def expand_path(p: str) -> str:
     p = os.path.expanduser(p)
     p = os.path.expandvars(p)
     return p
+
+
+def merge_config(defaults: ConfigModelT, override: ConfigModelT | None) -> ConfigModelT:
+    """Merge explicitly-set override fields onto defaults."""
+    if override is None:
+        return defaults
+
+    update = override.model_dump(exclude_unset=True)
+    if not update:
+        return defaults
+
+    return defaults.model_copy(update=update)
 
 
 def load_config(config_path: str | None = None) -> AppConfig:

@@ -14,6 +14,7 @@ from shared.config import (
     PrefilterConfig,
     HealthConfig,
     DefaultsConfig,
+    RecordingConfig,
 )
 from source_worker import SourceManager
 from stream_monitor.rtsp_monitor import StreamPipeline
@@ -51,7 +52,7 @@ class TestPipelineUpdateConfig:
         assert pipeline._motion_cfg.diff_threshold == 50
         assert pipeline._motion_cfg.area_ratio == 0.1
         assert pipeline._motion_cfg.stable_frames == 60
-        assert pipeline.source.motion == new_motion
+        assert pipeline.source.motion == pipeline._motion_cfg
 
     def test_update_segment_config(self):
         pipeline = make_pipeline()
@@ -59,7 +60,7 @@ class TestPipelineUpdateConfig:
         pipeline.update_pipeline_config(segment=new_segment)
         assert pipeline._segment_cfg.max_duration == 5.0
         assert pipeline._segment_cfg.min_duration == 2.0
-        assert pipeline.source.segment == new_segment
+        assert pipeline.source.segment == pipeline._segment_cfg
 
     def test_update_health_config(self):
         pipeline = make_pipeline()
@@ -67,7 +68,7 @@ class TestPipelineUpdateConfig:
         pipeline.update_pipeline_config(health=new_health)
         assert pipeline._health_cfg.max_failures == 10
         assert pipeline._health_cfg.recovery_strategy == "pause"
-        assert pipeline.source.health == new_health
+        assert pipeline.source.health == pipeline._health_cfg
 
     def test_update_prefilter_triggers_rebuild(self):
         pipeline = make_pipeline()
@@ -76,6 +77,25 @@ class TestPipelineUpdateConfig:
             pipeline.update_pipeline_config(prefilter=new_pf)
             mock_init.assert_called_once()
         assert pipeline._prefilter_cfg.enabled is False
+
+    def test_update_prefilter_preserves_existing_model_path(self):
+        source = SourceConfig(
+            source_id="test_cam",
+            source_url="rtsp://localhost:8554/live/test",
+            prefilter=PrefilterConfig(
+                enabled=True,
+                model_path="/models/default.xml",
+                min_confidence=0.4,
+            ),
+        )
+        pipeline = make_pipeline(source=source)
+        with patch.object(pipeline, "_init_prefilter"):
+            pipeline.update_pipeline_config(
+                prefilter=PrefilterConfig(min_confidence=0.9)
+            )
+        assert pipeline._prefilter_cfg.enabled is True
+        assert pipeline._prefilter_cfg.model_path == "/models/default.xml"
+        assert pipeline._prefilter_cfg.min_confidence == 0.9
 
     def test_update_none_fields_no_change(self):
         pipeline = make_pipeline()
@@ -179,6 +199,32 @@ class TestSourceManagerUpdate:
         update_idx = next(i for i, c in enumerate(calls) if c[0] == "update_pipeline_config")
         start_idx = next(i for i, c in enumerate(calls) if c[0] == "start")
         assert stop_idx < update_idx < start_idx
+
+    def test_partial_recording_update_preserves_existing_values(self, manager, mock_pipeline_class):
+        _, instance = mock_pipeline_class
+        source = SourceConfig(
+            source_id="cam1",
+            source_url="rtsp://localhost:8554/live/cam1",
+        )
+        manager.register_source(source)
+        instance.source.recording = RecordingConfig(
+            enabled=True,
+            interval_seconds=60,
+            fps=15,
+            retention_days=5,
+        )
+
+        manager.update_pipeline_config(
+            source_id="cam1",
+            recording=RecordingConfig(fps=25),
+        )
+
+        updated = instance.source.recording
+        assert updated is not None
+        assert updated.fps == 25
+        assert updated.enabled is True
+        assert updated.interval_seconds == 60
+        assert updated.retention_days == 5
 
 
 class TestSourceManagerRemoveCallback:

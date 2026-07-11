@@ -22,6 +22,7 @@ from shared.config import (
     HealthConfig,
     KeepaliveConfig,
     expand_path,
+    merge_config,
 )
 from stream_monitor.rtsp_monitor import StreamPipeline
 from stream_monitor.continuous_recorder import ContinuousRecorder
@@ -91,7 +92,8 @@ class SourceManager:
         )
 
         recorder: ContinuousRecorder | None = None
-        recording_cfg = source.recording or self.config.defaults.recording
+        recording_cfg = merge_config(self.config.defaults.recording, source.recording)
+        source.recording = recording_cfg
         if recording_cfg.enabled:
             recorder = ContinuousRecorder(
                 source=source,
@@ -100,7 +102,8 @@ class SourceManager:
                 sink=sink,
             )
 
-        keepalive_cfg = source.keepalive or self.config.defaults.keepalive
+        keepalive_cfg = merge_config(self.config.defaults.keepalive, source.keepalive)
+        source.keepalive = keepalive_cfg
         last_keepalive_at = time.time() if keepalive_cfg.enabled else None
 
         bundle = SourceBundle(
@@ -192,6 +195,11 @@ class SourceManager:
         bundle.pipeline.start()
 
         if recording is not None:
+            current_recording = (
+                bundle.pipeline.source.recording or self.config.defaults.recording
+            )
+            recording = merge_config(current_recording, recording)
+            bundle.pipeline.source.recording = recording
             new_enabled = recording.enabled
             if bundle.recorder is not None:
                 bundle.recorder.stop()

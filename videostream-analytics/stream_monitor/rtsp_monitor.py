@@ -29,6 +29,7 @@ from shared.config import (
     HealthConfig,
     SourceConfig,
     DefaultsConfig,
+    merge_config,
 )
 from sinks import EventSink
 from stream_monitor.base_monitor import BaseMonitor
@@ -58,12 +59,18 @@ class StreamPipeline(BaseMonitor):
         self._on_remove_callback = on_remove_callback
 
         # Merge per-source config with defaults
-        self._motion_cfg = source.motion or defaults.motion
-        self._segment_cfg = source.segment or defaults.segment
-        self._recording_cfg = source.recording or defaults.recording
-        self._prefilter_cfg = source.prefilter or defaults.prefilter
-        self._roi_cfg = source.roi or defaults.roi
-        self._health_cfg = source.health or defaults.health
+        self._motion_cfg = merge_config(defaults.motion, source.motion)
+        self._segment_cfg = merge_config(defaults.segment, source.segment)
+        self._recording_cfg = merge_config(defaults.recording, source.recording)
+        self._prefilter_cfg = merge_config(defaults.prefilter, source.prefilter)
+        self._roi_cfg = merge_config(defaults.roi, source.roi)
+        self._health_cfg = merge_config(defaults.health, source.health)
+        self.source.motion = self._motion_cfg
+        self.source.segment = self._segment_cfg
+        self.source.recording = self._recording_cfg
+        self.source.prefilter = self._prefilter_cfg
+        self.source.roi = self._roi_cfg
+        self.source.health = self._health_cfg
 
         # `data_dir` is already the per-source root (resolved by SourceManager).
         self._data_dir = data_dir
@@ -165,21 +172,21 @@ class StreamPipeline(BaseMonitor):
     ):
         """Update pipeline configuration. Caller must stop/start for changes to take effect."""
         if motion:
-            self._motion_cfg = motion
-            self.source.motion = motion
+            self._motion_cfg = merge_config(self._motion_cfg, motion)
+            self.source.motion = self._motion_cfg
         if segment:
-            self._segment_cfg = segment
-            self.source.segment = segment
+            self._segment_cfg = merge_config(self._segment_cfg, segment)
+            self.source.segment = self._segment_cfg
         if prefilter:
-            self._prefilter_cfg = prefilter
-            self.source.prefilter = prefilter
+            self._prefilter_cfg = merge_config(self._prefilter_cfg, prefilter)
+            self.source.prefilter = self._prefilter_cfg
             self._init_prefilter()
         if roi:
-            self._roi_cfg = roi
-            self.source.roi = roi
+            self._roi_cfg = merge_config(self._roi_cfg, roi)
+            self.source.roi = self._roi_cfg
         if health:
-            self._health_cfg = health
-            self.source.health = health
+            self._health_cfg = merge_config(self._health_cfg, health)
+            self.source.health = self._health_cfg
 
     @property
     def health_info(self) -> dict:

@@ -9,11 +9,13 @@ import pytest
 from shared.config import (
     AppConfig,
     MotionConfig,
+    PrefilterConfig,
     SegmentConfig,
     WebhookConfig,
     SourceConfig,
     expand_path,
     load_config,
+    merge_config,
 )
 
 from tests.conftest import FIXTURES_DIR
@@ -93,3 +95,25 @@ class TestConfigModels:
         assert src.rtsp_url == src.source_url
         assert src.motion is None
         assert src.data_dir is None
+
+
+class TestMergeConfig:
+    def test_merge_config_none_uses_defaults(self):
+        defaults = MotionConfig(diff_threshold=15, area_ratio=0.01, stable_frames=45)
+        merged = merge_config(defaults, None)
+        assert merged is defaults
+
+    def test_merge_config_preserves_unset_fields(self):
+        defaults = PrefilterConfig(
+            enabled=True,
+            model_path="/models/yolo11s.xml",
+            target_classes=["person"],
+            min_confidence=0.4,
+            device="NPU",
+        )
+        override = PrefilterConfig(enabled=False)
+        merged = merge_config(defaults, override)
+        assert merged.enabled is False
+        assert merged.model_path == "/models/yolo11s.xml"
+        assert merged.target_classes == ["person"]
+        assert merged.device == "NPU"
