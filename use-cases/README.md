@@ -144,3 +144,97 @@ document are wired via optional `use_case_dict.<uc>.parse_summary_path` /
 `on_task_completed_path` config keys — the built-in summary parser and a
 fire-and-forget subprocess callback respectively. See
 [docs/use-case-adapter.md](../docs/use-case-adapter.md) for the full recipe.
+
+## Extended use cases (non-default — reference only, not shipped in the example configs)
+
+`high_altitude_safety` and `parking_safety` are **not** part of the default demo
+set (fridge / child_safety / elder_wakeup), so they are intentionally kept out of
+`config.yaml.example`, `monitors.yaml.example`, and `demo-videos/streams.yaml`.
+Their definitions are preserved here — copy the blocks you need into your own
+`config.yaml` / `monitors.yaml` / `streams.yaml` to enable them. Both are
+threshold-based, alert-only use cases handled entirely by `defaultRuleEvaluator`
+(no Python `evaluate_rules.py`).
+
+**`config.yaml` → `schema.video_summary_tasks.extensions`** (add only when enabling these UCs — they are use-case-specific fields):
+
+```yaml
+- { name: "motion_direction", type: "text", required: false } # high_altitude_safety: downward | upward | horizontal | none
+- { name: "parking_zone", type: "text", required: false }     # parking_safety: fire_lane | entrance | handicapped | double_yellow_line | normal | unknown
+```
+
+**`config.yaml` → `use_case_dict`**:
+
+```yaml
+high_altitude_safety:
+  description: "High-altitude object throwing detection"
+  video_summary_task: high_altitude_monitor
+  # No evaluate_rules_path — defaultRuleEvaluator honours requireEvent +
+  # requireDirection to gate on downward-throw events only.
+  rules:
+    severityThreshold: warn # fire when severity >= warn
+    requireEvent: high_altitude_throw # only fires when VLM reports event=high_altitude_throw
+    requireDirection: downward # only fires when VLM reports motion_direction=downward
+    cooldownSeconds: 30 # short window: consecutive throws should each alert
+  reports:
+    data_source: alerts
+    default_type: daily
+    filter: {}
+
+parking_safety:
+  description: "Community parking violation detection (fire lane / entrance / handicapped)"
+  video_summary_task: parking_safety_monitor
+  # No evaluate_rules_path — defaultRuleEvaluator handles zone exclusion and
+  # alert-message suffix from the `rules` block below.
+  rules:
+    severityThreshold: warn # fire when severity >= warn
+    excludeEvents: [ no_incident, uncertain ] # short-circuit non-violation events
+    # excludeZones: [normal, unknown]          # optional: whitelist zones that should not alert
+    alertMessageExtraField: parking_zone # appends "(zone=<value>)" to alertMessage
+    cooldownSeconds: 600 # 10 min: a parked car re-triggers only after cooldown
+  reports:
+    data_source: alerts
+    default_type: daily
+    filter: {}
+```
+
+**`monitors.yaml` → `monitors`**:
+
+```yaml
+cam_high_altitude:
+  enabled: true
+  name: "High Altitude Safety Camera"
+  source_url: rtsp://localhost:8554/live/high_altitude
+  use_case: high_altitude_safety
+  pipeline_config:
+    motion: { enabled: true, diff_threshold: 25 }
+    prefilter: { enabled: false }
+    recording: { enabled: false, interval_seconds: 60, retention_days: 1 }
+    segment: { max_duration: 10 }
+
+cam_parking:
+  enabled: true
+  name: "Parking Safety Camera"
+  source_url: rtsp://localhost:8554/live/parking
+  use_case: parking_safety
+  pipeline_config:
+    motion: { enabled: true, diff_threshold: 25 }
+    prefilter: { enabled: false }
+    recording: { enabled: false, interval_seconds: 60, retention_days: 1 }
+    segment: { max_duration: 10 }
+```
+
+**`demo-videos/streams.yaml` → `streams`** (bring your own clips — `*.mp4` is gitignored, so `cam_ha_test/building-throwing-2.mp4` / `cam_parking/false-parking.mp4` are not shipped in the repo):
+
+```yaml
+cam_high_altitude:
+  enabled: true
+  file: cam_ha_test/building-throwing-2.mp4
+  rtsp_url: rtsp://localhost:8554/live/high_altitude
+  loop: true
+
+cam_parking:
+  enabled: true
+  file: cam_parking/false-parking.mp4
+  rtsp_url: rtsp://localhost:8554/live/parking
+  loop: true
+```

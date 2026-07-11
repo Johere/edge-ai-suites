@@ -84,11 +84,9 @@ schema:
       # optional because time-based use cases like elder_wakeup judge by event
       # + payload.rules alone (no severity ordering).
       - { name: "event", type: "text", required: true }
-      - { name: "severity", type: "text", required: false } # critical / warn / info — used by threshold-based UCs (child_safety / parking_safety / ...)
+      - { name: "severity", type: "text", required: false } # critical / warn / info — used by threshold-based UCs (e.g. child_safety)
       - { name: "desc", type: "text", required: true }
       - { name: "confidence", type: "real", required: false } # optional VLM confidence
-      - { name: "motion_direction", type: "text", required: false } # high_altitude_safety: downward | upward | horizontal | none
-      - { name: "parking_zone", type: "text", required: false } # parking_safety: fire_lane | entrance | handicapped | double_yellow_line | normal | unknown
   custom_tables: []
 
 # Use case library. Each entry is referenced by monitors via `use_case`.
@@ -151,35 +149,3 @@ use_case_dict:
       default_type: weekly
       filter:
         event: wakeup # filter on video_summary_tasks.event extension column
-
-  high_altitude_safety:
-    description: "High-altitude object throwing detection"
-    video_summary_task: high_altitude_monitor
-    # No evaluate_rules_path — defaultRuleEvaluator honours requireEvent +
-    # requireDirection to gate on downward-throw events only.
-    rules:
-      severityThreshold: warn # fire when severity >= warn
-      requireEvent: high_altitude_throw # only fires when VLM reports event=high_altitude_throw
-      requireDirection: downward # only fires when VLM reports motion_direction=downward
-      cooldownSeconds: 30 # short window: consecutive throws should each alert
-    reports:
-      data_source: alerts
-      default_type: daily
-      filter: {}
-
-  parking_safety:
-    description: "Community parking violation detection (fire lane / entrance /
-      handicapped)"
-    video_summary_task: parking_safety_monitor
-    # No evaluate_rules_path — defaultRuleEvaluator handles zone exclusion and
-    # alert-message suffix from the `rules` block below.
-    rules:
-      severityThreshold: warn # fire when severity >= warn
-      excludeEvents: [ no_incident, uncertain ] # short-circuit non-violation events
-      # excludeZones: [normal, unknown]          # optional: whitelist zones that should not alert
-      alertMessageExtraField: parking_zone # appends "(zone=<value>)" to alertMessage
-      cooldownSeconds: 600 # 10 min: a parked car re-triggers only after cooldown
-    reports:
-      data_source: alerts
-      default_type: daily
-      filter: {}

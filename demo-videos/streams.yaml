@@ -75,15 +75,3 @@ streams:
     file: cam_elder_bedroom_2/day2_elder_wakeup_expanded_20min.mp4
     rtsp_url: rtsp://localhost:8554/live/elder2
     loop: true
-
-  cam_high_altitude:
-    enabled: false
-    file: cam_ha_test/building-throwing-2.mp4
-    rtsp_url: rtsp://localhost:8554/live/high_altitude
-    loop: true
-
-  cam_parking:
-    enabled: false
-    file: cam_parking/false-parking.mp4
-    rtsp_url: rtsp://localhost:8554/live/parking
-    loop: true
