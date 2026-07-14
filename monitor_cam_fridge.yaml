@@ -28,7 +28,7 @@ monitors:
       segment: { max_duration: 10 }
 
   cam_child:
-    enabled: true
+    enabled: false
     name: "Child Safety Camera"
     source_url: rtsp://localhost:8554/live/child
     use_case: child_safety
@@ -53,7 +53,7 @@ monitors:
       segment: { max_duration: 10 }
 
   cam_elder_bedroom:
-    enabled: true
+    enabled: false
     name: "Elder Bedroom Camera"
     source_url: rtsp://localhost:8554/live/elder
     use_case: elder_wakeup
@@ -66,7 +66,7 @@ monitors:
       segment: { max_duration: 10 }
 
   cam_elder_bedroom_2:
-    enabled: true
+    enabled: false
     name: "Elder Bedroom Camera 2"
     source_url: rtsp://localhost:8554/live/elder2
     use_case: elder_wakeup

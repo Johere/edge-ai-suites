@@ -60,7 +60,7 @@ logging:
 # under $SMARTBUILDING_DATA_DIR/segments/<monitor_id>/<subdir>/<YYYY-MM-DD>/;
 # MCP server purges day-dirs older than this.
 storage:
-  retention_days: 7
+  retention_days: 2
   cleanup_subdirs: [ motion_events, recordings, queries ]
 
 # MCP Server HTTP port (for OpenClaw / Claude Desktop connections)
@@ -99,8 +99,7 @@ schema:
 use_case_dict:
   fridge:
     description: "Fridge content tracking"
-    video_summary_task: refrigerator_monitor_en
-    evaluate_rules_path: ./use-cases/fridge/evaluate_rules.py
+    video_summary_task: fridge_monitor
     summarize:
       method: SIMPLE
       processor_kwargs:

@@ -52,6 +52,7 @@ mediamtx:
 streams:
   cam_fridge:
     enabled: true
+    # file: cam_fridge/demo006-2_expanded.mp4
     file: cam_fridge/demo006-2_expanded_20min_v2.mp4
     rtsp_url: rtsp://localhost:8554/live/fridge
     loop: true
@@ -59,6 +60,7 @@ streams:
   cam_child:
     enabled: true
     file: cam_child/child_safety_demo_expanded_1h.mp4
+    # file: cam_child/child_safety_demo.mp4
     rtsp_url: rtsp://localhost:8554/live/child
     loop: true
 
