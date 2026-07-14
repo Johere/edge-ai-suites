@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,6 +37,14 @@ _COCO_CLASSES = [
 ]
 
 _NMS_IOU_THRESH = 0.45
+
+# NPU runtime power-management (autosuspend ~100ms) can leave the device in D3
+# when the first compile_model fires at startup; the NPU VCL compiler then races
+# the D3->D0 resume and aborts with "[NPU_VCL] Unrecognized device ID! 0x0". It is
+# transient — a short retry after the device wakes succeeds. Retries apply to all
+# devices uniformly; CPU/GPU never hit the race so they pass on the first attempt.
+_COMPILE_MAX_ATTEMPTS = 4
+_COMPILE_RETRY_DELAY_S = 0.5
 
 
 @dataclass
@@ -167,9 +176,30 @@ class YoloPrefilter:
             self._static_h = int(dims[2])
             self._static_w = int(dims[3])
 
-        self._compiled = core.compile_model(ov_model, device.upper())
+        self._compiled = self._compile_with_retry(core, ov_model, device.upper())
         self._infer_req = self._compiled.create_infer_request()
         logger.info("YoloPrefilter ready: classes=%d device=%s", len(self._class_names), device)
+
+    @staticmethod
+    def _compile_with_retry(core, ov_model, device: str):
+        """compile_model with a short retry, to survive the NPU D3->D0 resume
+        race (see _COMPILE_MAX_ATTEMPTS). Re-raises the last error if every
+        attempt fails, so the caller's fallback-to-no-prefilter path is intact.
+        """
+        last_err = None
+        for attempt in range(1, _COMPILE_MAX_ATTEMPTS + 1):
+            try:
+                return core.compile_model(ov_model, device)
+            except Exception as e:  # noqa: BLE001 — retry any compile failure
+                last_err = e
+                if attempt < _COMPILE_MAX_ATTEMPTS:
+                    logger.warning(
+                        "compile_model(%s) attempt %d/%d failed, retrying in %.1fs: %s",
+                        device, attempt, _COMPILE_MAX_ATTEMPTS, _COMPILE_RETRY_DELAY_S,
+                        str(e).splitlines()[0] if str(e) else e,
+                    )
+                    time.sleep(_COMPILE_RETRY_DELAY_S)
+        raise last_err
 
     def predict(self, frame: np.ndarray) -> list[dict]:
         """Run inference on a single BGR frame. Returns target-class detections."""
