@@ -1005,6 +1005,67 @@ curl -s -X POST http://localhost:3100/mcp \
 
 ## 10. 零重启动态注册新 use case
 
+### 10.0 从零完整步骤速览（Phase 0–5，`pet_safety.mp4`）
+
+> 这是"新增一个 use case，从零到跑通"的**压缩版流程图**，按当前代码（2026-07 核对）给出。
+> 每个 Phase 的**完整可复制命令**在下面 §10.3 的步骤 A0–E 里；本速览只列顺序、关键参数与易踩坑点。
+> 目标兑现 Design §5.2 承诺：**零 TS 代码 / 零手工 curl VLM / 零手写 YAML / 零 prompt 从空白写 / 零 Python override**（简单阈值类 UC）。
+
+**管线**：`ffmpeg 推流 → MediaMTX → VSA motion → webhook → MCP 建 task → poller 切 clip → POST /v1/summary（video-summary/multilevel）→ schema-aware parser 抽字段 → defaultRuleEvaluator（或 evaluate_rules.py）→ alert`。
+
+#### Phase 0 — 起 4 个服务（都不为 pet_safety 改配置，这才叫"从零"）
+
+按此顺序（详见 §3）：
+
+1. **MediaMTX + 推流**：`cd demo-videos && ./start-streams.sh`（脚本自起 mediamtx，配置在 `videostream-analytics/tools/mediamtx.yml`）。pet 视频可另行 `ffmpeg -re -stream_loop -1 -i demo-videos/cam_pet/pet_safety.mp4 -c copy -f rtsp rtsp://localhost:8554/live/pet`（放到 Phase 4 推也行）。
+2. **VSA `:8999`**：本地 `cd videostream-analytics && .venv/bin/videostream-analytics serve --config config/config.yaml`，或 `docker compose -f videostream-analytics/docker/docker-compose.yaml up -d`。
+3. **VLM stack**：`cd docker/video-summary && source set_env.sh && docker compose -f compose.yaml up -d` → vLLM `:41091` + multilevel `:8192`，等 healthy。
+   - ⚠️ 目录是 **`docker/video-summary/`**、compose 文件是 **`compose.yaml`**（不是 `docker/multilevel-video-understanding/` / `docker-compose.yaml`）。
+4. **MCP `:3100`+`:3101`**：`node packages/mcp-server/dist/index.js --http --config config.yaml.example`。
+   - ⚠️ 单测 pet_safety **不要**加 `--monitors monitors.yaml.example`——否则未推流的 cam_high_altitude/cam_parking 会刷 RTSP 重连噪声甚至拖垮 auto-register。
+   - ⚠️ config.yaml.example 里**没有预置** pet_safety（只有 fridge/child_safety/elder_wakeup）——它靠 Phase 2 的 `register persist:true` 动态写入。
+   - ⚠️ `vlm_service.model` 必须等于 `curl :41091/v1/models` 返回的真实模型名（如 `Qwen/Qwen3.5-35B-A3B`），否则 `generate_prompt` 报 `The model default does not exist`。
+
+#### Phase 1 — 素材（仓库已备好，无需生成）
+
+`use-cases/pet_safety/{prompt.md, evaluate_rules.py}` + `demo-videos/cam_pet/pet_safety.mp4` 均已在仓库中。
+
+#### Phase 2 —（可选）生成 prompt 骨架 + 零重启注册
+
+- **（可选，§10.3 步骤 A0）`action=generate_prompt`**：给 description + event_types(+schema_extensions)，vLLM 生成 `## LOCAL_PROMPT` 骨架，不 mutate 任何状态；存到 `use-cases/pet_safety/prompt.md` 后人工 refine。可用 `smartbuilding_prompt_lint`（`strict=true`）单独预检。不想用可跳过，直接手写 prompt.md。
+- **`action=register`（§10.3 步骤 A）一次干 4 件事**（persist 是可跳过的第 5 件）：
+  1. `schema_extensions` → `ALTER TABLE video_summary_tasks ADD COLUMN`（幂等）+ merge 到内存 schema
+  2. `prompt_text` → POST `/v1/tasks`（409 自动 PATCH）
+  3. 注入内存 `use_case_dict[pet_safety]`（task-poller 下一轮 poll 即见）
+  4. 复核 `use_case_validate`（结果在 `steps.validate`）
+  5. `persist:true` → 用 yaml Document API 写回 `config.yaml.example`（`steps.config_yaml=written`）
+  - **零 Python**：不传 `evaluate_rules_path`；靠 `rules:{severityThreshold, excludeEvents, alertMessageExtraField, cooldownSeconds}` + 内置 `defaultRuleEvaluator`。
+  - **零 YAML 手工**：传 `persist:true`（前提 MCP 启动带了 `--config`）。不 persist 时只改内存，MCP 重启即丢，且引用它的 monitor 会让 MCP 因 unknown use_case 退出。
+
+#### Phase 3 —（可选）单独给 VLM 打样
+
+拿一个真实 clip（VSA motion 后 20–40s 才有），POST `:8192/v1/summary`，看输出有没有 `SEVERITY: / EVENT: / DESC: / PET_ZONE:`。**务必显式传 `method:"SIMPLE"` + `processor_kwargs`**，否则服务端走 broken 默认（报 `Unsupported summarization method: ...USE_ALL_T_1` 的连字符/下划线 bug）。命令见 §4。
+
+#### Phase 4 — 加 monitor + 推流（§10.3 步骤 B）
+
+`smartbuilding_monitor_ctl action=register_source`（`monitor_id=cam_pet`, `use_case=pet_safety`, `source_url=rtsp://localhost:8554/live/pet`, `pipeline_config={motion,prefilter,recording,segment}`）——内部自动跑 `use_case_validate`（此时 useCaseDict 已有 pet_safety，通过）。若 Phase 0 没推 pet 流，此时用 ffmpeg 推。
+
+#### Phase 5 — 观察落库（§10.3 步骤 C）
+
+- `video_summary_tasks`：`pending→completed`，且结构化列 `event/severity/desc/pet_zone` 被 schema-aware parser 填好。
+- `segments/cam_pet/motion_events/<date>/*.mp4`：clip 落 host。
+- `alerts` + `smartbuilding_alert_query action=latest`：应见 `[pet_safety] pet_escape: warn — ... (zone=阳台)`。
+  - ⚠️ `alerts` 是瘦表，**没有** event/severity/pet_zone 列——结构化字段在 `video_summary_tasks`，查 SQLite 需 `LEFT JOIN video_summary_tasks t ON t.id=a.task_id`（见 §10.3 步骤 C 末尾）。
+
+**退路**：motion 不触发（loop 视频画面变化太小）→ 退到手塞 task + `smartbuilding_rule_eval` 单独验规则层（见 §5 U7 / U10 与 [use-case-register-verification.md §8](./dev/use-case-register-verification.md)）。
+
+**清场**：§10.3 步骤 E（停 monitor / 删关联表 / `unregister persist:true`）。
+
+> 想要每一步的"期望输出 JSON + 失败定位 + 参数负例 + persist 重启恢复"，配合读
+> [dev/use-case-register-verification.md](./dev/use-case-register-verification.md)（该文档是本节的详细验证对照版）。
+
+---
+
 ### 10.1 背景
 
 MCP server 启动时把 `config.yaml` 的 `use_case_dict` 一次性快照到 `ServerConfig.useCaseDict`
