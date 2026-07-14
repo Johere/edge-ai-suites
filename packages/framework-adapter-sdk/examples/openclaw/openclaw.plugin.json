@@ -2,6 +2,9 @@
   "id": "smartbuilding-alerts",
   "name": "SmartBuilding Alerts",
   "description": "Subscribes to SmartBuilding MCP alert resources and delivers alerts into OpenClaw sessions (reference framework adapter).",
+  "activation": {
+    "onStartup": true
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": true,

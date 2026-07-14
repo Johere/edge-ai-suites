@@ -11,9 +11,9 @@ function str(alert: Alert, key: string): string | undefined {
 }
 
 const USE_CASE_EMOJI: Record<string, string> = {
-  refrigerator_monitor: "🧊",
-  child_safety_monitor: "🛡️",
-  elder_wakeup_monitor: "🌅",
+  fridge: "🧊",
+  child_safety: "🛡️",
+  elder_wakeup: "🌅",
 };
 
 function emoji(alert: Alert): string {
@@ -38,5 +38,5 @@ export function formatSeparator(alert: Alert): string {
  */
 export function formatAlert(alert: Alert): string {
   const desc = alert.description?.trim() || "(no description)";
-  return `${emoji(alert)} [${alert.useCase}] ${desc}`;
+  return `${emoji(alert)} ${desc}`;
 }
