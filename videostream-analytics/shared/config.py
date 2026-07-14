@@ -33,6 +33,19 @@ class SegmentConfig(BaseModel):
     min_duration: float = 1.0
 
 
+class StaticConfig(BaseModel):
+    """Static ("quiet period") close-out emission config.
+
+    A `static` event is emitted when motion ends and a new motion begins,
+    closing out the intervening quiet span (see rtsp_monitor close-out model).
+    `min_duration` suppresses very short gaps to avoid flooding the events
+    table with sub-second static rows.
+    """
+
+    enabled: bool = True
+    min_duration: float = 3.0
+
+
 class RecordingConfig(BaseModel):
     """Fixed-duration continuous recording config.
 
@@ -114,6 +127,7 @@ class ServerConfig(BaseModel):
 class DefaultsConfig(BaseModel):
     motion: MotionConfig = Field(default_factory=MotionConfig)
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
+    static: StaticConfig = Field(default_factory=StaticConfig)
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
     prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
     roi: RoiConfig = Field(default_factory=RoiConfig)
@@ -134,6 +148,7 @@ class SourceConfig(BaseModel):
     data_dir: Optional[str] = None
     motion: Optional[MotionConfig] = None
     segment: Optional[SegmentConfig] = None
+    static: Optional[StaticConfig] = None
     recording: Optional[RecordingConfig] = None
     prefilter: Optional[PrefilterConfig] = None
     roi: Optional[RoiConfig] = None

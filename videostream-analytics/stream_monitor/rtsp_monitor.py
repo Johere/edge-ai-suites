@@ -24,6 +24,7 @@ import cv2
 from shared.config import (
     MotionConfig,
     SegmentConfig,
+    StaticConfig,
     PrefilterConfig,
     RoiConfig,
     HealthConfig,
@@ -61,12 +62,14 @@ class StreamPipeline(BaseMonitor):
         # Merge per-source config with defaults
         self._motion_cfg = merge_config(defaults.motion, source.motion)
         self._segment_cfg = merge_config(defaults.segment, source.segment)
+        self._static_cfg = merge_config(defaults.static, source.static)
         self._recording_cfg = merge_config(defaults.recording, source.recording)
         self._prefilter_cfg = merge_config(defaults.prefilter, source.prefilter)
         self._roi_cfg = merge_config(defaults.roi, source.roi)
         self._health_cfg = merge_config(defaults.health, source.health)
         self.source.motion = self._motion_cfg
         self.source.segment = self._segment_cfg
+        self.source.static = self._static_cfg
         self.source.recording = self._recording_cfg
         self.source.prefilter = self._prefilter_cfg
         self.source.roi = self._roi_cfg
@@ -325,6 +328,14 @@ class StreamPipeline(BaseMonitor):
         motion_frames = 0
         consecutive_failures = 0
 
+        # Static close-out state (strict Motion → static → Motion loop).
+        # `None` means "not currently inside a closed-out quiet period"; it is
+        # ONLY set when a motion segment ends, never at startup (the gap from
+        # camera-online to first motion is system uptime, not a real quiet
+        # period, and would otherwise be emitted as a bogus long static).
+        static_start_wall: float | None = None
+        static_start_iso: str | None = None
+
         while self._running:
             ret, frame = self._cap.read()  # type: ignore
             if not ret:
@@ -354,12 +365,26 @@ class StreamPipeline(BaseMonitor):
                     continue
                 if not self._running:
                     break
+                # Just resumed: if we were mid quiet-period, drop the span that
+                # elapsed across the pause — the paused wall-clock is not real
+                # idle time. Keep `None` as `None` (no open period to reset).
+                if static_start_wall is not None:
+                    static_start_wall = time.time()
+                    static_start_iso = datetime.now().isoformat(timespec="seconds")
 
             # Motion detection
             motion_detected = detector.detect(frame)
 
             # State: enter motion
             if motion_detected and not in_motion:
+                # Close out the preceding quiet period (if any) before the new
+                # motion. `static_start_*` is None on the very first motion
+                # (nothing to close out) — correct, we never fabricate a
+                # leading static.
+                if static_start_wall is not None:
+                    self._maybe_emit_static(static_start_wall, static_start_iso)
+                    static_start_wall = None
+                    static_start_iso = None
                 in_motion = True
                 motion_frames = 0
                 extractor.start_segment()
@@ -399,6 +424,11 @@ class StreamPipeline(BaseMonitor):
                     if tail:
                         self._maybe_emit(tail)
                     in_motion = False
+                    # A real motion just ended → the quiet period begins now.
+                    # This is the ONLY place static_start is armed (close-out
+                    # model: static is always bracketed by two motions).
+                    static_start_wall = time.time()
+                    static_start_iso = datetime.now().isoformat(timespec="seconds")
                     logger.info("[%s] Motion ended", self.source_id)
 
         # Drain remaining segment on shutdown
@@ -406,6 +436,12 @@ class StreamPipeline(BaseMonitor):
             result = extractor.finish()
             if result:
                 self._maybe_emit(result)
+        elif static_start_wall is not None:
+            # Shut down while inside a quiet period (a motion had ended and no
+            # new motion arrived): emit the final static so state_query still
+            # sees the trailing idle span. If motion never happened at all,
+            # static_start_wall is None here and we (correctly) emit nothing.
+            self._maybe_emit_static(static_start_wall, static_start_iso)
         extractor.close()
 
     def _should_split_segment(self) -> bool:
@@ -506,6 +542,42 @@ class StreamPipeline(BaseMonitor):
             clip_path,
             "n/a" if pf_result is None else ("pass" if pf_result.passed else "skip"),
             traj,
+        )
+
+    def _maybe_emit_static(self, start_wall: float, start_iso: str | None) -> None:
+        """Close out a quiet period as a `static` event, subject to config gates.
+
+        Skips emission when static is disabled or the quiet span is shorter than
+        `min_duration` (avoids flooding the events table with sub-second gaps).
+        `start_wall` (float, from time.time()) drives the duration; `start_iso`
+        is the ISO start recorded when the period began.
+        """
+        if not self._static_cfg.enabled:
+            return
+        duration = time.time() - start_wall
+        if duration < self._static_cfg.min_duration:
+            logger.debug(
+                "[%s] Static period %.1fs < min_duration %.1fs, not emitting",
+                self.source_id, duration, self._static_cfg.min_duration,
+            )
+            return
+        end_iso = datetime.now().isoformat(timespec="seconds")
+        self._emit_static(start_iso, end_iso, duration)
+
+    def _emit_static(self, start_iso: str | None, end_iso: str, duration: float) -> None:
+        """Emit a `static` event via the shared MCP envelope.
+
+        Payload matches mcp_webhook_event_api.md §4: required `start_time` +
+        `duration_seconds`, optional `end_time`.
+        """
+        self._emit_envelope("static", {
+            "start_time": start_iso,
+            "end_time": end_iso,
+            "duration_seconds": duration,
+        })
+        logger.info(
+            "[%s] Emitted static: %.1fs [%s → %s]",
+            self.source_id, duration, start_iso, end_iso,
         )
 
     def _emit_status(self, status: str):
