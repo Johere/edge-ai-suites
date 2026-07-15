@@ -15,8 +15,6 @@ export interface UseCaseRegisterParams {
   video_summary_task?: string;
   description?: string;
   evaluate_rules_path?: string;
-  on_task_completed_path?: string;
-  parse_summary_path?: string;
   rules?: Record<string, unknown>;
   reports?: Record<string, unknown>;
   summarize?: Record<string, unknown>;
@@ -87,11 +85,7 @@ export interface UseCaseRegisterResult {
 const TASK_NAME_RE = /^[a-z][a-z0-9_]{1,63}$/;
 const VLM_BUILTIN_TASKS = new Set([
   "summary",
-  "engine_valves_sop",
-  "refrigerator_monitor",
-  "refrigerator_monitor_en",
-  "daily_report",
-  "daily_report_en",
+  "summary_zh",
 ]);
 
 export async function useCaseRegister(
@@ -190,8 +184,6 @@ export async function useCaseRegister(
   };
   if (params.description !== undefined) entry.description = params.description;
   if (params.evaluate_rules_path !== undefined) entry.evaluate_rules_path = params.evaluate_rules_path;
-  if (params.on_task_completed_path !== undefined) entry.on_task_completed_path = params.on_task_completed_path;
-  if (params.parse_summary_path !== undefined) entry.parse_summary_path = params.parse_summary_path;
   if (params.rules !== undefined) entry.rules = params.rules;
   if (params.reports !== undefined) entry.reports = params.reports;
   if (params.summarize !== undefined) entry.summarize = params.summarize;

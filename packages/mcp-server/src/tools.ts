@@ -340,8 +340,6 @@ export function registerTools(
       evaluate_rules_path: z.string().optional().describe(
         "Path to Python evaluate_rules.py override (absolute or relative to cwd of MCP server)"
       ),
-      on_task_completed_path: z.string().optional().describe("Path to on_task_completed.py override"),
-      parse_summary_path: z.string().optional().describe("Path to custom parse_summary.py override"),
       rules: z.record(z.unknown()).optional().describe(
         "Free-form rules dict passed verbatim to evaluate_rules.py at payload.rules"
       ),

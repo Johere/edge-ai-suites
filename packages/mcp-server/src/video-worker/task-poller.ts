@@ -1,19 +1,10 @@
-import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { promisify } from "node:util";
 import type { ServerConfig } from "../config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
-import type {
-  RuleContext,
-  RuleResult,
-  VideoSummaryClient,
-} from "@smartbuilding-video/tools";
+import type { VideoSummaryClient } from "@smartbuilding-video/tools";
 import type { VideoSummaryYield } from "./video-summary-yield.js";
 import type { AlertCallback } from "./index.js";
 import { evaluateWithOverride, parseSummaryFields } from "@smartbuilding-video/tools";
 import { logger } from "../logger.js";
-
-const execFileAsync = promisify(execFile);
 
 export class TaskPoller {
   private intervals: Map<string, ReturnType<typeof setInterval>> = new Map();
@@ -101,14 +92,9 @@ export class TaskPoller {
       });
       const latencySeconds = (Date.now() - t0) / 1000;
 
-      // VLM output parser. When `parse_summary_path` is set, run the Python
-      // override; otherwise fall back to the schema-aware built-in parser.
+      // VLM output parser: schema-aware built-in field extraction.
       const extensions = this.config.schema?.video_summary_tasks?.extensions ?? [];
-      const parsed = await this.parseSummary(
-        result.summary ?? "",
-        extensions,
-        useCaseCfg?.parse_summary_path,
-      );
+      const parsed = parseSummaryFields(result.summary ?? "", extensions);
       if (parsed.missingRequired.length > 0) {
         logger.warn(`[task-poller] task ${task.id} (${monitorId}) missing required schema fields: ${parsed.missingRequired.join(", ")}`);
       }
@@ -156,7 +142,7 @@ export class TaskPoller {
         }
 
         if (!suppressed) {
-          const alert = this.db.createAlert({
+          this.db.createAlert({
             monitorId,
             taskId: task.id,
             eventId: task.eventId,
@@ -166,11 +152,6 @@ export class TaskPoller {
           if (this.onAlert) {
             this.onAlert(monitorId);
           }
-          // Optional post-processing callback (see design §5.3).
-          const onTaskPath = useCaseCfg?.on_task_completed_path;
-          if (onTaskPath) {
-            void this.runOnTaskCompleted(onTaskPath, ruleCtx, ruleResult, alert.id);
-          }
         }
       }
     } catch (err: any) {
@@ -178,75 +159,6 @@ export class TaskPoller {
       this.db.updateTaskStatus(task.id, "failed", undefined, { errorMessage: err.message });
     } finally {
       this.yieldManager.release();
-    }
-  }
-
-  /**
-   * Parse VLM `summary_text` into schema fields. When `overridePath` is
-   * supplied and exists, invoke the Python override:
-   *
-   *   argv[1] = {"summary": <text>, "extensions": [<SchemaExtension>...]}
-   *   stdout  = {"fields": {<name>: <value>}, "missingRequired": [<name>]}
-   *
-   * Any failure (missing script, non-zero exit, bad JSON) falls back to the
-   * schema-aware built-in parser so a broken override cannot stall the poller.
-   */
-  private async parseSummary(
-    summary: string,
-    extensions: any[],
-    overridePath?: string,
-  ): Promise<{ fields: Record<string, string>; missingRequired: string[] }> {
-    if (overridePath && existsSync(overridePath)) {
-      try {
-        const { stdout } = await execFileAsync("python3", [
-          overridePath,
-          JSON.stringify({ summary, extensions }),
-        ], { timeout: 10_000 });
-        const parsed = JSON.parse(stdout.trim());
-        return {
-          fields: (parsed.fields ?? {}) as Record<string, string>,
-          missingRequired: Array.isArray(parsed.missingRequired) ? parsed.missingRequired : [],
-        };
-      } catch (err: any) {
-        logger.warn(
-          `[task-poller] parse_summary override failed (${overridePath}), ` +
-            `falling back to built-in parser: ${err.message}`,
-        );
-      }
-    }
-    return parseSummaryFields(summary, extensions);
-  }
-
-  /**
-   * Fire-and-forget post-alert callback (design §5.3 on_task_completed).
-   * Receives JSON on argv[1] with the same shape as the rule-engine context
-   * plus the newly-created `alertId`. Never rejects — failures log a warning
-   * and are otherwise dropped so a broken callback cannot stall the poller.
-   */
-  private async runOnTaskCompleted(
-    scriptPath: string,
-    ruleCtx: RuleContext,
-    ruleResult: RuleResult,
-    alertId: number,
-  ): Promise<void> {
-    if (!existsSync(scriptPath)) {
-      logger.warn(`[task-poller] on_task_completed script missing: ${scriptPath}`);
-      return;
-    }
-    const payload = {
-      ...ruleCtx,
-      alertId,
-      alertMessage: ruleResult.alertMessage ?? "",
-    };
-    try {
-      await execFileAsync("python3", [scriptPath, JSON.stringify(payload)], {
-        timeout: 10_000,
-      });
-    } catch (err: any) {
-      logger.warn(
-        `[task-poller] on_task_completed failed for ${ruleCtx.useCase} ` +
-          `(task=${ruleCtx.taskId}): ${err.message}`,
-      );
     }
   }
 }
