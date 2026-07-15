@@ -139,10 +139,13 @@ field names, unchanged by this format switch.
 
 ## Scope in Phase 10
 
-`parse_summary.py` and `on_task_completed.py` overrides listed in the design
-document are wired via optional `use_case_dict.<uc>.parse_summary_path` /
-`on_task_completed_path` config keys — the built-in summary parser and a
-fire-and-forget subprocess callback respectively. See
+The design document's `parse_summary.py` and `on_task_completed.py` per-use-case
+Python overrides are **not** implemented. Summary parsing is handled solely by
+the built-in schema-aware `parseSummaryFields`, and post-alert side effects
+belong on the MCP subscription side (a subscriber reacts to
+`notifications/resources/updated`) rather than in a subprocess forked from the
+video-worker. The only per-use-case Python override that remains is
+`evaluate_rules.py` (wired via `use_case_dict.<uc>.evaluate_rules_path`). See
 [docs/use-case-adapter.md](../docs/use-case-adapter.md) for the full recipe.
 
 ## Extended use cases (non-default — reference only, not shipped in the example configs)

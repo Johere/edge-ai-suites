@@ -11,7 +11,7 @@
 
 ## Executive Summary
 
-- **Design §5.1 Implementation Status**: Adapter wrapper 核心能力已完整具备，包括默认 parser/rules 流程和可选 Python 回调（`evaluate_rules.py`、`parse_summary.py`、`on_task_completed.py`）。
+- **Design §5.1 Implementation Status**: Adapter wrapper 核心能力已完整具备，包括默认 parser/rules 流程和可选 Python 规则回调（`evaluate_rules.py`）。`parse_summary.py` / `on_task_completed.py` 两个 override 已移除（见 §6.3）。
 - **Design §5.2 Implementation Status**: 用例注册全流程已由 MCP 工具编排实现（`register`/`unregister`/`generate_prompt` 及 task 管理）。独立交互式 wizard 形态仍属于待补强项。
 - **Design §5.3 Implementation Status**: 后处理主链路（parser/rules/cooldown/alert 写入）功能完整；其中一条 rule_eval 触发广播链路仍需明确 E2E 证据。
 - **Remaining Gaps**: 主要剩余项为设计文档对齐、prompt lint/wizard 产品化，以及自动化与端到端验证覆盖扩展。
@@ -23,7 +23,7 @@
 | # | 设计要求 | 状态 | 当前实现 |
 |---|---|---|---|
 | 1 | `use-cases/<name>/evaluate_rules.py` 可选 override | Fully Implemented | 通过 rule engine 中的 `evaluateWithOverride` 支持。
-| 2 | `use-cases/<name>/on_task_completed.py` 可选 callback | Fully Implemented | 通过任务完成回调（`runOnTaskCompleted`）支持。
+| 2 | `use-cases/<name>/on_task_completed.py` 可选 callback | Removed | 已移除（见 §6.3）；后处理副作用改由 MCP subscription 侧消费 `resources/updated`。
 | 3 | 内置 parser（按 schema 字段抽取） | Fully Implemented | `parseSummaryFields` 提供默认字段抽取。
 | 4 | 内置默认 rules（阈值 + 排除） | Fully Implemented | `defaultRuleEvaluator` 支持基于 rules 字典判定。
 | 5 | `use-cases/README.md` callback 编写指南 | Partially Implemented | 规范说明主要在 [use-case-adapter.md](../use-case-adapter.md)，`use-cases/README.md` 相对精简。
@@ -49,9 +49,9 @@
 |---|---|---|---|
 | 1 | 内置 parser + required field 校验 | Fully Implemented | 默认 parser 支持必填字段校验。
 | 2 | 内置 rules + cooldown | Fully Implemented | evaluator 与 poller 流程均遵守 cooldown（`cooldownSeconds`）。
-| 3 | Python callback: `parse_summary.py` | Fully Implemented | 支持 `parse_summary_path` override，并有 fallback。
+| 3 | Python callback: `parse_summary.py` | Removed | 已移除（见 §6.3）；summary 解析统一由内置 `parseSummaryFields` 处理。
 | 4 | Python callback: `evaluate_rules.py` | Fully Implemented | 支持 override，且可回落默认 evaluator。
-| 5 | Python callback: `on_task_completed.py` | Fully Implemented | 任务完成回调链路可用。
+| 5 | Python callback: `on_task_completed.py` | Removed | 已移除（见 §6.3）。
 | 6 | cooldown check -> insert alert -> MCP 流程 | Fully Implemented | 通过 latest-alert 时间窗判定并写入告警记录。
 | 7 | rule 层 MCP broadcast 验证 | Partially Implemented | 告警订阅通道存在，但一条 subscribe -> rule_eval -> notify 链路仍需明确 E2E 证明。
 
@@ -62,7 +62,7 @@
 - 运行时注册是可变模型：`useCaseDict` 可经由 MCP 注册流程动态更新，不受仅启动期静态加载限制。
 - 动态 task 在校验链路中可用：`use_case_validate` 对 dynamic task 与 builtin task 均可通过 task API 进行解析校验。
 - 默认 evaluator 覆盖常见条件较完整（`requireEvent`、`requireDirection`、`excludeZones`、`alertMessageExtraField`），复杂逻辑可选择保留 Python override。
-- `parse_summary_path` 提供 parser override 灵活性，并在脚本不可执行或结果异常时回落到内置 parser。
+- summary 解析统一由内置 `parseSummaryFields`（schema-aware）处理，不再有 per-UC parser override（`parse_summary_path` 已移除，见 §6.3）。
 
 ## 3. Completion Assessment
 
@@ -83,7 +83,6 @@
 | `smartbuilding_db_manager action=register_use_case` | `smartbuilding_use_case_register action=register` | 注册能力已收敛至 use case register 工具。
 | `smartbuilding_video_summary_task action=autogen` | `smartbuilding_use_case_register action=generate_prompt` | prompt 自动生成能力在 register 工具 action 下提供。
 | `smartbuilding_video_summary_task action=list/get/delete` | `smartbuilding_video_summary_task action=list/get/delete` | task 清单与生命周期操作能力可用。
-| `parseScript` 命名 | `parse_summary_path` | parser override 的实现键名为 `parse_summary_path`。
 | `smartbuilding_use_case_validate` dynamic 行为 | `smartbuilding_use_case_validate` | 当前实现支持基于 task API 的 dynamic task 校验。
 
 ## 5. MCP Tool Inventory
@@ -124,7 +123,6 @@ smartbuilding_rule_eval
 - 将设计文档中的工具命名与当前 MCP 接口命名统一。
 - 增补 `smartbuilding_use_case_register` action 说明（`register` / `unregister` / `generate_prompt`）。
 - 增补 `smartbuilding_video_summary_task` action 说明（`list` / `get` / `delete`）。
-- 明确 `parse_summary_path` 为 parser override 合同字段。
 
 ## 6. Outstanding Gaps
 
@@ -170,23 +168,24 @@ smartbuilding_rule_eval
     **薄的、模型可配**的 autogen；lint 降为纯函数（不注册成 tool）；真正「多轮/需 router 选型」的创造性编排交给
     skill 层。**锁步**：skill 落地后再删 tool，别在替代品到位前删。
 
-### 6.3 `on_task_completed_path` / `parse_summary_path` / `rules`
+### 6.3 `on_task_completed_path` / `parse_summary_path`（已移除）/ `rules`（保留）
 
-- **问题**：`UseCaseConfig` 有 3 个 per-UC 字段。`rules` 是声明式规则配置（在用）；两个 `*_path` 是 Python
-  override 钩子（当前零 UC 配置）。
-- **原代码**：定义 [config.ts:48/55/62](../../packages/mcp-server/src/config.ts#L48)；消费
-  [task-poller.ts:104-110](../../packages/mcp-server/src/video-worker/task-poller.ts#L104)（parse_summary）、
-  [:170-172](../../packages/mcp-server/src/video-worker/task-poller.ts#L170)（on_task_completed）、
-  [rule-engine/index.ts:116](../../packages/tools/src/rule-engine/index.ts#L116)（读 `payload.rules`）。
-- **评审意见**：三者 out of design scope，待议。含义：不该在 MCP 配置层预埋 per-UC Python hook，增加 MCP 与
+- **问题**：`UseCaseConfig` 原有 3 个 per-UC 字段。`rules` 是声明式规则配置（在用）；两个 `*_path` 是 Python
+  override 钩子（零 UC 配置）。
+- **评审意见**：两个 `*_path` out of design scope。含义：不该在 MCP 配置层预埋 per-UC Python hook，增加 MCP 与
   use-case 实现的耦合面。
-- **架构建议（拆开谈）**：
+- **处理结果**：
   - **`rules` 保留**：它是规则 DSL（severityThreshold/cooldownSeconds/requireEvent…），`defaultRuleEvaluator`
-    直接消费，删了默认三 case 的规则全丢。in-scope。
-  - **`parse_summary_path` + `on_task_completed_path` 建议移除**（连带 task-poller 的 `parseSummary` override
-    分支 + `runOnTaskCompleted`）。理由：①零使用（YAGNI）；②把「任意 Python 子进程」引进 MCP 主链路是稳定性/
+    直接消费（[rule-engine/index.ts:116](../../packages/tools/src/rule-engine/index.ts#L116)：`const rules = context.payload?.rules`），
+    删了默认用例的规则判定 + 冷却全丢。in-scope，**保留**。
+    （注：[rule-engine/index.ts:81](../../packages/tools/src/rule-engine/index.ts#L81) 的 doc-comment "built-in evaluator
+    ignores it" 与实现相反，是过时注释——内置 evaluator 恰恰消费 `rules`。）
+  - **`parse_summary_path` + `on_task_completed_path` 已移除**。连带清理：config.ts 字段定义、task-poller 的
+    `parseSummary` override 分支 + `runOnTaskCompleted` 方法及触发块、use-case-register.ts 入参接口与 yaml 写回、
+    tools.ts 的 zod input schema。理由：①零使用（YAGNI）；②把「任意 Python 子进程」引进 MCP 主链路是稳定性/
     攻击面（虽已加 10s timeout）；③**更优雅的替代恰是 subscription**——告警后处理副作用应由订阅方收到
-    `resources/updated` 后自己做，而非 MCP 里 fork Python，这与评审的 subscription 方向一致。
+    `resources/updated` 后自己做，而非 MCP 里 fork Python，这与评审的 subscription 方向一致。summary 解析统一走
+    内置 `parseSummaryFields`。
 
 ### 6.4 Alerts cooldown 归属
 

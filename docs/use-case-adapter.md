@@ -17,18 +17,31 @@ smart-community/
 ├── use-cases/
 │   ├── README.md                 # protocol reference for override authors
 │   ├── child_safety/
-│   │   ├── evaluate_rules.py     # optional Python rule override
-│   │   └── prompt.md             # VLM task prompts (LOCAL / GLOBAL sections)
+│   │   └── prompt.md             # no evaluate_rules.py — uses defaultRuleEvaluator + `rules` block
 │   ├── elder_wakeup/
-│   │   ├── evaluate_rules.py
+│   │   ├── evaluate_rules.py     # time comparison → needs a Python override
 │   │   └── prompt.md
-│   └── fridge/
-│       ├── config.md             # per-use-case notes
-│       ├── evaluate_rules.py     # no-alert stub
-│       ├── prompt.md             # Chinese prompt
-│       └── prompt_en.md          # English variant
+│   ├── fridge/
+│   │   ├── config.md             # per-use-case notes
+│   │   ├── prompt.md             # Chinese prompt (report-only, no evaluate_rules.py)
+│   │   └── prompt_en.md          # English variant
+│   ├── high_altitude_safety/     # extension template (prompt only — NOT wired into config.yaml.example)
+│   │   └── prompt.md
+│   ├── parking_safety/           # extension template (prompt only — NOT wired into config.yaml.example)
+│   │   └── prompt.md
+│   └── pet_safety/               # dynamic-register demo (see use-case-adapter-gsg.md §9)
+│       ├── evaluate_rules.py
+│       └── prompt.md
 └── config.yaml                   # wiring via use_case_dict.<name>
 ```
+
+> Only `elder_wakeup` (and the `pet_safety` demo) ship a Python override.
+> `child_safety` / `fridge` / `high_altitude_safety` / `parking_safety` are
+> handled entirely by `defaultRuleEvaluator` + their `rules` block — no Python.
+> `config.yaml.example` only wires up `fridge` / `child_safety` / `elder_wakeup`;
+> `high_altitude_safety` / `parking_safety` are prompt-only templates you register
+> yourself (see [use-case-adapter-gsg.md §9.7](./use-case-adapter-gsg.md); the
+> `pet_safety` walkthrough in §9 is the canonical dynamic-register recipe).
 
 ## 2. Runtime flow
 
@@ -108,9 +121,10 @@ chained-summary flows.
 
 #### Prompt writing conventions (learned the hard way)
 
-Empirical rules extracted from real VLM (Qwen3.5-0.8B) verification runs
-against the `high_altitude_safety` adapter. Following these avoids known
-failure modes that are hard to diagnose after the fact.
+Empirical rules extracted from real VLM verification runs against the
+`high_altitude_safety` adapter (originally on a small Qwen3.5 variant; the
+failure modes below get worse the smaller the model). Following these avoids
+known failure modes that are hard to diagnose after the fact.
 
 **Convention 1 — Do NOT use pipe-separated enum syntax** (`A | B | C`).
 
@@ -179,9 +193,36 @@ Small models sometimes still echo the example when the prompt is long. Adding
 
 ### Step 3 — (optional) write `evaluate_rules.py`
 
-Skip this step to rely on `defaultRuleEvaluator` (fires when
-`fields.severity ∈ {critical, warn}`). Otherwise implement a Python script
-that follows the protocol in [use-cases/README.md](../use-cases/README.md):
+**Prefer skipping this step.** `defaultRuleEvaluator` already covers most
+threshold/whitelist logic straight from the `rules` block — no Python needed.
+It fires when `fields.severity` is at or above `severityThreshold`, subject to
+the optional filters below (see
+[packages/tools/src/rule-engine/index.ts](../packages/tools/src/rule-engine/index.ts)):
+
+| `rules` key | Effect | Default |
+|-------------|--------|---------|
+| `severityThreshold` | `"info" \| "warn" \| "critical"` — fires at or above this | `"warn"` |
+| `excludeEvents` | `string[]` — these `fields.event` values never fire | `[]` |
+| `requireEvent` | whitelist a single `fields.event`; only it fires | — |
+| `requireDirection` | `fields.motion_direction` must equal this (case-insensitive) | — |
+| `excludeZones` | `string[]` compared against `fields.parking_zone`; matches never fire | — |
+| `alertMessageExtraField` | append `(label=value)` from `fields[<key>]` to the alert text | — |
+
+> The `label` in the `(label=value)` suffix is a short alias, **not** the raw
+> field name: `parking_zone` / `pet_zone` → `zone`, `motion_direction` →
+> `direction`; any other field uses its name verbatim (see `EXTRA_LABEL_MAP` in
+> the evaluator source). That is why `alertMessageExtraField: pet_zone` yields
+> `(zone=…)`.
+
+> If `fields.severity` is missing or unrecognised, `defaultRuleEvaluator`
+> short-circuits to `shouldAlert=false` **before** any threshold/filter check.
+> This is exactly why `fridge` is report-only: its VLM task emits no `SEVERITY`
+> line, so the severity lookup fails and nothing fires.
+
+Only reach for a Python override when the decision needs logic the `rules`
+keys can't express — time comparisons, multi-event joins, or external calls
+(`elder_wakeup` is the canonical example). Follow the protocol in
+[use-cases/README.md](../use-cases/README.md):
 
 ```python
 import json, sys
@@ -211,11 +252,16 @@ use_case_dict:
   pet_safety:
     description: "Pet safety monitoring"
     video_summary_task: pet_safety_monitor
-    evaluate_rules_path: ./use-cases/pet_safety/evaluate_rules.py
+    # No evaluate_rules_path — defaultRuleEvaluator handles it from `rules`.
     rules:
-      # arbitrary shape — whatever your override consumes
+      severityThreshold: warn
+      excludeEvents: [pet_normal, no_incident]   # info-severity events never fire anyway
+      alertMessageExtraField: pet_zone            # append "(zone=…)" to the alert text
       cooldownSeconds: 60
 ```
+
+Add `evaluate_rules_path: ./use-cases/pet_safety/evaluate_rules.py` only if you
+went through Step 3 (`rules` is then passed to your script verbatim instead).
 
 Monitors that reference this use case pick up the wiring on next server
 restart:
@@ -236,14 +282,26 @@ json.dumps(ctx)])`, then assert on the parsed stdout.
 
 ## 4. Bundled adapters
 
+Wired into `config.yaml.example`:
+
 | Use case | `evaluate_rules.py` | Alert semantics |
 |----------|---------------------|-----------------|
-| `child_safety` | present | Fires when `severity ≥ severityThreshold` (default `warn`); `info`-severity clips never fire. |
+| `child_safety` | none — `rules` block | Fires when `severity ≥ severityThreshold` (default `warn`); `info`-severity clips never fire. |
 | `elder_wakeup` | present | Fires `late_wakeup` when `event=get_up` AND current local time > `expectedWakeupLocal + graceMinutes`. |
-| `fridge` | present | Uses `use-cases/fridge/evaluate_rules.py` no-alert stub; even if a task is manually edited to `severity=critical`, it still returns `should_alert=false`. |
+| `fridge` | none — no `rules` block | Report-only: the `refrigerator_monitor_en` task emits no `SEVERITY` line, so `defaultRuleEvaluator` short-circuits to `shouldAlert=false`. ⚠️ It is *not* a hard stub — if a task's `severity` column is manually set to `warn`/`critical`, the evaluator **will** fire. |
 
-`rules` block defaults are documented in each `evaluate_rules.py` header and
-in [config.yaml.example](../config.yaml.example).
+Prompt-only extension templates (in `use-cases/` but **not** wired into
+`config.yaml.example` — register them per
+[use-case-adapter-gsg.md §9.7](./use-case-adapter-gsg.md)):
+
+| Use case | Alert semantics |
+|----------|-----------------|
+| `high_altitude_safety` | `rules.requireDirection: downward` (optionally `requireEvent: high_altitude_throw`); suppresses e.g. balloons rising upward. |
+| `parking_safety` | `rules.excludeZones` opts specific `parking_zone` values out; `alertMessageExtraField: parking_zone` appends `(zone=…)`. |
+
+`rules` block defaults are documented in
+[config.yaml.example](../config.yaml.example) and in the evaluator source
+([packages/tools/src/rule-engine/index.ts](../packages/tools/src/rule-engine/index.ts)).
 
 ## 5. Protocol reference
 
@@ -252,6 +310,6 @@ For the exact I/O contract expected of every `evaluate_rules.py`, see
 
 Design context: [smartbuilding-video-design-2026.2.md §5](./smartbuilding-video-design-2026.2.md).
 
-Runtime source: [packages/rule-engine/src/index.ts](../packages/rule-engine/src/index.ts)
-(`evaluateWithOverride`), invoked from
+Runtime source: [packages/tools/src/rule-engine/index.ts](../packages/tools/src/rule-engine/index.ts)
+(`defaultRuleEvaluator` + `evaluateWithOverride`), invoked from
 [packages/mcp-server/src/video-worker/task-poller.ts](../packages/mcp-server/src/video-worker/task-poller.ts).
