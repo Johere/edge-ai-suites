@@ -228,11 +228,75 @@ sequenceDiagram
 
 `docs/dev/dev_status.md` WW27 三条订阅项勾掉 + 新增 adapter SDK/example/docs 条目；本文件全程同步。
 
+### ✅ install.sh 完备度补齐（全自动化，2026-07-15）
+
+`packages/framework-adapter-sdk/examples/openclaw/install.sh` 原本 build+symlink+persona 后打印
+snippet 让用户手工编辑 openclaw.json / 手工重启 / 手工唤醒。已改为全自动、幂等、非破坏：
+
+- **注册 plugin entry**：`openclaw config get plugins.entries.smartbuilding-alerts` 探测，缺失才
+  `openclaw config patch --file`（JSON5，对象递归 merge + 写前校验，不动 minimax/tavily）。已存在则跳过，保留手工改过的 monitors/mcpServer。
+- **合并 agents.list**：`config patch` 对数组是**整体替换**，所以先 `config get agents.list --json`
+  读现有（非数组则回退 `[]`），jq **merge-by-id** 只追加缺失的（main + fridge/child/elder），再整块写回；顺带把隐式默认 `main` 收进显式 list。
+- **重启**：`openclaw gateway restart`（gateway 是 systemd user service `openclaw-gateway.service`，enabled+active；`daemon` 是 legacy alias）+ 轮询 `gateway status` 的 `Connectivity probe: ok` 直到就绪（~30s 超时）。非 service 环境降级为提示手工 `openclaw gateway run` / `--force`。
+- **唤醒**：`openclaw agent -m "hi" --agent <id>` 依次唤醒三个 persona agent。
+- 环境变量：`OPENCLAW_HOME` / `MCP_URL` / `AGENT_MODEL` / `SKIP_RESTART=1` / `SKIP_WAKEUP=1`。
+- 依赖前置检查：`openclaw` + `jq` 缺失即报错退出。merge/patch 逻辑已对 live config（4 agent 已存在 → added=0）与 fresh（空 list → 全加，`${HOME}` 占位符原样保留）两条路径验证。
+
+### ✅ 会话投递迁移到 2026.7.1 一等 transcript API（2026-07-15）
+
+机器已升级 openclaw 2026.7.1（`openclaw --version`）。deliver:false 的会话注入从手工 FS-append hack
+迁到官方 plugin-SDK API，deliver:true 结构统一：
+
+- **统一注入原语**：`sink.ts` 两条路共用一个 `appendToSession`（`src/inject-types.ts` 里的
+  `SessionAppender`）。`deliver` 不再选"用哪套机制"，只决定是否**额外**推外部渠道。
+- **新实现 `src/session-inject.ts`**：`withSessionTranscriptWriteLock` 一把锁内 append 分隔行 + assistant
+  行再 `publishUpdate`；sessionId 由 `getSessionEntry` 解析、缺失则 `randomUUID()` +
+  `patchSessionEntry({systemSent:true})` 新铸（取代克隆 `:main`）。SDK 负责 header 创建 / parentId 链接 /
+  写锁 / 幂等 / UI 事件。
+- **真幂等**：`message.idempotencyKey` + `idempotencyLookup:"scan"`，key = `sb-alert:<mon>:<id>`，分隔行与
+  正文用不同后缀（`:sep`/`:body`，否则第二行会被当重复跳过）。修掉旧 FS-append"崩溃重放会重复追加"的问题。
+- **6.9 回退**：`session-inject.ts` 用**动态 import** `openclaw/plugin-sdk/session-transcript-runtime`
+  + `.../session-store-runtime`，try/catch；旧 gateway import 失败 → `index.ts` 回落到 legacy
+  `session-append.ts`（纯 node fs，无 openclaw 依赖）。选择在 service `start()` 里做，打一行日志说明走哪条。
+- **deliver:true**：本批保留 `subagent.run` 逐字转发（其 ephemeral turn 已把消息记进该 session，故 **不**再
+  额外 `appendToSession` 以免重复记录）。无 LLM 渠道直发（`plugin-sdk/channel-outbound`）= 后续选项 B。
+  已排除 `sessions.send`/`session.message`（核实会经 `chat.send` 拉起接收方 agent turn = LLM）。
+- **类型校验边界**：`config/format/inject-types/session-append/sink` 5 文件 `tsc --noEmit` 干净；
+  `session-inject.ts`（字面量动态 import openclaw，bundler 需字面量才能 externalize）与 `index.ts`/`api.ts`
+  一样归 bundler 校验。SDK workspace `npm run build` 通过。
+
+### ✅ deliver:false 误投 :main 的 bug 修复（2026-07-16）
+
+**症状**：deliver:false 可投递，但所有 alert 都进了 `agent:<id>:main`，而不是配置的
+`agent:child-safety-agent:cam_child` 等 per-source session。三个 per-source monitor 全中招。
+
+**根因**：**stale `sessionFile`**。新 transcript API 的 `resolveSessionTranscriptRuntimeTarget`
+是从 store entry 的 **`sessionFile` 字段**解析要写的文件的，即使它和 `sessionId` 不一致也照单全收。
+而 legacy `session-append.ts::resolveOrCreateSessionId` 当年铸 per-source session 时是
+**克隆 `:main` entry**（`{...mainEntry, sessionId: newSid}`）——把 `:main` 的 `sessionFile` 一起复制了。
+legacy append 自己按 `sessionId` 拼路径、无视该字段（所以 6.9 时代写对了），但迁到 transcript API 后
+该字段被信任 → 每条 alert 写进 `:main` 的 jsonl。实测：plugin 日志 `sid=ae271ed9`（cam_child，对的），
+但内容落在 `6c541876.jsonl`（main）；`cam_child` entry 的 `sessionFile` 指向 `6c541876…jsonl`。
+
+**修复**（`~/.openclaw/extensions/smartbuilding-alerts` 是仓库 symlink，改仓库即改 runtime）：
+- `src/session-inject.ts`：解析/铸 session 时**把 entry 的 `sessionFile` 钉到该 `sessionId` 的规范路径**
+  （`agents/<agentId>/sessions/<sessionId>.jsonl`），不一致就 `patchSessionEntry` 修（自愈已污染的 entry）。
+  顺带修掉原铸新代码把 `patchSessionEntry.update` 当**对象**传的潜伏 bug——它必须是 **patch 回调**
+  `(entry)=>Partial`（原代码因 entry 已存在从没走到铸新分支，所以一直没暴露；本次自愈分支触发才崩
+  `params.update is not a function`）。
+- `src/session-append.ts`：legacy 克隆 `:main` 时显式 `sessionFile: newJsonl`，杜绝旧 gateway 上再污染。
+- **实机验证**（2026-07-16，rewind cursor 重放 cam_child 321/324/327）：日志打
+  `repaired session … file=ae271ed9….jsonl`；`ae271ed9.jsonl`(cam_child) 8→14 行（3 alert×2 行），
+  `6c541876.jsonl`(main) 保持 136 行不变；`cam_child` entry 的 `sessionFile` 已修正指向自身。
+  两个 elder session 的 entry 仍带旧 `sessionFile`，会在下一条新 alert 到来时按同一路径自愈。
+
 ### ⏳ 剩余（需实机）
 
-- OpenClaw example 端到端实机验证：install.sh 干净环境 → 配 openclaw.json 路由 → 重启 gateway → 真实 alert 落目标 session（本环境无法跑完整 gateway bundler + 运行时）
-- OpenClaw installer.sh 完备度不足
-- OpenClaw 启动后无法进行推送 (terminal 端长连SSE可以接收推送)
+- feishu channel（deliver=true）端到端验证；无 LLM 渠道直发（选项 B）调研
+- ControlUI 实时刷新 + 幂等不重复的 UI 侧复验（注入链路已验证正确）
+- **副带发现（未修，另立项）**：injector 把注入失败吞成 `ok:false` 返回而非 throw，导致 sink 失败时
+  SDK cursor 仍推进（at-least-once 在"注入失败"这一路被短路）。routing bug 修复不依赖它，但值得收口。
+- 计划详见 `~/.claude/plans/openclaw-2026-7-1-session-api-session-sequential-scroll.md`
 
 ---
 
@@ -334,5 +398,14 @@ curl -sS -X POST http://localhost:3100/mcp -H "Content-Type: application/json" \
 - **AlertCallback 已有定义**：[packages/mcp-server/src/video-worker/index.ts:13](../../packages/mcp-server/src/video-worker/index.ts#L13)
 - **onAlert 现状**：在 [index.ts](../../packages/mcp-server/src/index.ts) 已经改写完毕，A.4/A.5 已完成（`getSessionId` 回调路线 + curl smoke test 验证）
 - **保序 & 抗错乱设计**：跨摄像头（uri 分片）、同摄像头（AUTOINCREMENT id + ORDER BY id + adapter 端 per-monitor mutex）、coalescing/丢失（since 游标 + optional 兜底轮询默认关闭）
-- **OpenClaw v2026.6.9 现状**：无一等 raw-append API；smarthome-video 靠 FS-append 到 session JSONL（代码里 `// Hack path`）；session-append 需要写 user+assistant 两行（controlUI UX 约束，连续 same-role 会合并时间戳）
+- **OpenClaw raw-append API 现状**（2026-07-15 重新调研，对比 npm tarball 6.9 vs 7.1）：
+  - **installed = 2026.6.9**（`openclaw --version`），**latest = 2026.7.1**（`npm view openclaw version`；dist-tags latest=2026.7.1, beta=2026.7.1-beta.6）。当前 gateway 仍是 6.9（systemd `openclaw-gateway.service`）。
+  - **6.9（安装版）：仍无一等 by-identity raw-append**。plugin-sdk 只导出低层 `appendSessionTranscriptMessage({ transcriptPath, message, idempotencyLookup, ... })`（via `./plugin-sdk/agent-harness-runtime`），需自己解析 transcript JSONL 路径、且**没有** by-sessionKey 解析器、也没有 ControlUI update publisher。CLI 侧无 append/inject 命令（`message send`=出站渠道；`sessions`=cleanup/compact/export/list/tail；`agent`=跑一整个 model turn）。→ 结论：smarthome-video / 本 example 的 FS-append hack 在 6.9 下仍是必需。
+  - **7.1（最新）：已graduate 成一等 API**。新增 plugin-sdk 子路径 **`./plugin-sdk/session-transcript-runtime`**，提供 by-identity（agentId / sessionKey / sessionId）全套：
+    - `appendSessionTranscriptMessageByIdentity(params)` — 解析 target + 幂等 + 写锁后 append，**正是 raw-append 要的**（无 model turn）。
+    - `appendAssistantMirrorMessageByIdentity(...)` — assistant-mirror 变体。
+    - `publishSessionTranscriptUpdateByIdentity(...)` — 发 ControlUI transcript update（替代 hack 里手工 `emitSessionTranscriptUpdate`）。
+    - `resolveSessionTranscriptTarget` / `resolveSessionTranscriptIdentity` / `resolveSessionTranscriptLegacyFileTarget`（不用再手拼 JSONL 路径）、`withSessionTranscriptWriteLock`、`readSessionTranscriptEvents` / `readLatestAssistantTextByIdentity`。
+    - 校验：6.9 tarball `appendSessionTranscriptMessageByIdentity` 命中 0、不导出 `session-transcript-runtime`；7.1 tarball 两者都有。
+  - **→ migration 结论**：`packages/framework-adapter-sdk/examples/openclaw/src/session-append.ts` 的 `TODO(migrate)` 现在有落点了——**升级 gateway 到 2026.7.1** 后，可用 `appendSessionTranscriptMessageByIdentity` + `publishSessionTranscriptUpdateByIdentity` 替换 vendored FS-append hack（幂等/写锁/UI-update 都由 SDK 负责，user+assistant 两行的 same-role 合并 workaround 也可去掉）。升级前 6.9 下维持现状 hack。
 - **example plugin 部署原则**：0 成本——install.sh 一键 build + symlink + cp 硬拷贝进 example 的 agent personas 到 `~/.openclaw/agents/`（`cp -n` 幂等），提示用户粘贴 openclaw.json snippet + 重启 gateway

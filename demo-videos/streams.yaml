@@ -71,7 +71,7 @@ streams:
     loop: true
 
   cam_elder_bedroom_2:
-    enabled: true
+    enabled: false
     file: cam_elder_bedroom_2/day2_elder_wakeup_expanded_20min.mp4
     rtsp_url: rtsp://localhost:8554/live/elder2
     loop: true
