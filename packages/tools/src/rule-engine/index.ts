@@ -100,8 +100,8 @@ function alertOutcomeToRuleResult(useCase: string, outcome: AlertOutcome | null 
  * Run a Python rule override at the given path, falling back to defaultRuleEvaluator
  * only when overridePath is null.
  *
- * The override script receives parsed fields as JSON on argv[1] and adapter_config
- * as JSON on argv[2]. It prints an AlertOutcome JSON object or null.
+ * The override script receives parsed fields as JSON on argv[1]. It prints an
+ * AlertOutcome JSON object or null.
  *
  * Path is supplied by the caller (typically derived from config.useCaseDict[useCase].evaluate_rules_path)
  * rather than hard-coded — use case adapters live anywhere on disk.
@@ -109,7 +109,6 @@ function alertOutcomeToRuleResult(useCase: string, outcome: AlertOutcome | null 
 export async function evaluateWithOverride(
   context: RuleContext,
   overridePath: string | null,
-  adapterConfig: Record<string, unknown> = {},
 ): Promise<RuleResult> {
   if (!overridePath) {
     return defaultRuleEvaluator(context);
@@ -123,7 +122,6 @@ export async function evaluateWithOverride(
     const { stdout } = await execFileAsync("python3", [
       overridePath,
       JSON.stringify(context.payload?.fields ?? {}),
-      JSON.stringify(adapterConfig),
     ], { timeout: 10_000 });
     const text = stdout.trim();
     const result = text ? JSON.parse(text) : null;

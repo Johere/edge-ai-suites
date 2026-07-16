@@ -6,7 +6,6 @@ the exact protocol implemented by `packages/rule-engine/src/index.ts`
 (`evaluateWithOverride`). Verifies the smart-community contract:
 
     argv[1]  = parsed fields JSON
-    argv[2]  = adapter_config JSON
     stdout   = AlertOutcome JSON or null
 
 Only elder_wakeup ships a Python override. child_safety and fridge intentionally
@@ -28,13 +27,13 @@ ELDER_WAKEUP = USE_CASES_DIR / "elder_wakeup" / "evaluate_rules.py"
 FRIDGE = USE_CASES_DIR / "fridge" / "evaluate_rules.py"
 
 
-def run_override(script: Path, fields: dict, config: dict | None = None, env: dict | None = None) -> dict | None:
+def run_override(script: Path, fields: dict, env: dict | None = None) -> dict | None:
     """Invoke a Python override the same way task-poller does; parse stdout."""
     proc_env = os.environ.copy()
     if env:
         proc_env.update(env)
     result = subprocess.run(
-        [sys.executable, str(script), json.dumps(fields), json.dumps(config or {})],
+        [sys.executable, str(script), json.dumps(fields)],
         capture_output=True, text=True, timeout=10, env=proc_env,
     )
     if result.returncode != 0:
@@ -55,7 +54,7 @@ def test_elder_wakeup(t: TestResult) -> None:
     r = run_override(ELDER_WAKEUP,
         {"severity": "info", "event": "get_up", "desc": "got out of bed",
          "wakeup_time": "25.5"},
-        {"expectedWakeupLocal": "00:00", "graceMinutes": 0})
+        {"ELDER_WAKEUP_EXPECTED_WAKEUP_LOCAL": "00:00", "ELDER_WAKEUP_GRACE_MINUTES": "0"})
     t.check_equal(r["alertType"], "late_wakeup", "elder_wakeup get_up past expected+grace → alert")
     t.check_equal(r["severity"], "warn", "elder_wakeup alert severity=warn")
     t.check_equal(r["wakeupTime"], 25.5, "elder_wakeup includes wakeupTime extra")
@@ -63,13 +62,13 @@ def test_elder_wakeup(t: TestResult) -> None:
     # get_up but within tolerance → skip
     r = run_override(ELDER_WAKEUP,
         {"severity": "info", "event": "get_up", "desc": ""},
-        {"expectedWakeupLocal": "23:59", "graceMinutes": 59})
+        {"ELDER_WAKEUP_EXPECTED_WAKEUP_LOCAL": "23:59", "ELDER_WAKEUP_GRACE_MINUTES": "59"})
     t.check_equal(r, None, "elder_wakeup get_up within tolerance → skip")
 
     # event != get_up → skip regardless of clock
     r = run_override(ELDER_WAKEUP,
         {"severity": "info", "event": "still_in_bed", "desc": ""},
-        {"expectedWakeupLocal": "00:00", "graceMinutes": 0})
+        {"ELDER_WAKEUP_EXPECTED_WAKEUP_LOCAL": "00:00", "ELDER_WAKEUP_GRACE_MINUTES": "0"})
     t.check_equal(r, None, "elder_wakeup non-get_up event → skip")
 
 

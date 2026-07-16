@@ -49,9 +49,8 @@ def evaluate_with_override(context: dict, use_cases_dir: Path) -> dict:
         return default_rule_evaluate(context)
 
     fields = context["payload"]["fields"]
-    config = context.get("adapterConfig") or {}
     result = subprocess.run(
-        [sys.executable, str(override_path), json.dumps(fields), json.dumps(config)],
+        [sys.executable, str(override_path), json.dumps(fields)],
         capture_output=True, text=True, timeout=10,
     )
     if result.returncode != 0:

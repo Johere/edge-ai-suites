@@ -12,7 +12,6 @@ export interface UseCaseRegisterParams {
   video_summary_task?: string;
   description?: string;
   evaluate_rules_path?: string;
-  adapter_config?: Record<string, unknown>;
   reports?: Record<string, unknown>;
   summarize?: Record<string, unknown>;
   prompt_text?: string;
@@ -157,7 +156,6 @@ export async function useCaseRegister(
     const error = await validateEvaluateRulesOverride(
       params.use_case,
       params.evaluate_rules_path,
-      params.adapter_config ?? {},
     );
     if (error) {
       result.errors.push(error);
@@ -170,7 +168,6 @@ export async function useCaseRegister(
   };
   if (params.description !== undefined) entry.description = params.description;
   if (params.evaluate_rules_path !== undefined) entry.evaluate_rules_path = params.evaluate_rules_path;
-  if (params.adapter_config !== undefined) entry.adapter_config = params.adapter_config;
   if (params.reports !== undefined) entry.reports = params.reports;
   if (params.summarize !== undefined) entry.summarize = params.summarize;
 
@@ -211,7 +208,6 @@ export async function useCaseRegister(
 async function validateEvaluateRulesOverride(
   useCase: string,
   overridePath: string,
-  adapterConfig: Record<string, unknown>,
 ): Promise<string | null> {
   const smokeFields = {
     severity: "info",
@@ -223,7 +219,6 @@ async function validateEvaluateRulesOverride(
     const { stdout } = await execFileAsync("python3", [
       overridePath,
       JSON.stringify(smokeFields),
-      JSON.stringify(adapterConfig),
     ], { timeout: 10_000 });
     const text = stdout.trim();
     const parsed = text ? JSON.parse(text) : null;

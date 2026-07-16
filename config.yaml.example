@@ -133,9 +133,6 @@ use_case_dict:
     description: "Elder wakeup monitoring"
     video_summary_task: elder_wakeup_monitor
     evaluate_rules_path: ./use-cases/elder_wakeup/evaluate_rules.py
-    adapter_config:
-      expectedWakeupLocal: "07:00" # HH:MM local time
-      graceMinutes: 30 # tolerated delay before late_wakeup fires
     summarize:
       method: SIMPLE
       processor_kwargs:

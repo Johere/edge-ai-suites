@@ -119,7 +119,7 @@ export class TaskPoller {
           fields: parsed.fields,
         },
       };
-      const ruleResult = await evaluateWithOverride(ruleCtx, overridePath, useCaseCfg?.adapter_config ?? {});
+      const ruleResult = await evaluateWithOverride(ruleCtx, overridePath);
 
       if (ruleResult.shouldAlert) {
         this.db.createAlert({

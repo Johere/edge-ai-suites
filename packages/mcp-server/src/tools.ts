@@ -339,9 +339,6 @@ export function registerTools(
       evaluate_rules_path: z.string().optional().describe(
         "Path to Python evaluate_rules.py override (absolute or relative to cwd of MCP server)"
       ),
-      adapter_config: z.record(z.unknown()).optional().describe(
-        "Optional config object passed to evaluate_rules.py as argv[2]"
-      ),
       reports: z.record(z.unknown()).optional().describe("Report config: {data_source, default_type, filter}"),
       summarize: z.record(z.unknown()).optional().describe("Per-clip summarize config: {method, processor_kwargs}"),
       prompt_text: z.string().optional().describe(

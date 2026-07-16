@@ -3,15 +3,14 @@ import sys, json
 SEVERITY_ORDER = {"info": 0, "warn": 1, "critical": 2}
 
 
-def evaluate_rules(parsed: dict, config: dict) -> dict | None:
+def evaluate_rules(parsed: dict) -> dict | None:
     event = parsed.get("event", "")
     severity = parsed.get("severity", "info").lower()
     desc = parsed.get("desc") or parsed.get("description", "")
     zone = parsed.get("pet_zone", "unknown")
 
-    excluded_events = set(config.get("excludeEvents", ["no_incident", "pet_normal"]))
-    threshold = str(config.get("severityThreshold", "warn")).lower()
-    threshold_level = SEVERITY_ORDER.get(threshold, SEVERITY_ORDER["warn"])
+    excluded_events = {"no_incident", "pet_normal"}
+    threshold_level = SEVERITY_ORDER["warn"]
 
     if event in excluded_events:
         return None
@@ -27,8 +26,7 @@ def evaluate_rules(parsed: dict, config: dict) -> dict | None:
 
 def main():
     parsed = json.loads(sys.argv[1])
-    config = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
-    print(json.dumps(evaluate_rules(parsed, config)))
+    print(json.dumps(evaluate_rules(parsed)))
 
 if __name__ == "__main__":
     main()

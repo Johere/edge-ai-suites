@@ -12,7 +12,6 @@ export interface RuleEvalDeps {
     string,
     {
       evaluate_rules_path?: string;
-      adapter_config?: Record<string, unknown>;
     }
   >;
   /**
@@ -119,7 +118,7 @@ export async function ruleEval(
   };
 
   const overridePath = useCaseCfg?.evaluate_rules_path ?? null;
-  const ruleResult = await evaluateWithOverride(ruleCtx, overridePath, useCaseCfg?.adapter_config ?? {});
+  const ruleResult = await evaluateWithOverride(ruleCtx, overridePath);
 
   const out: RuleEvalResult = {
     monitor_id: params.monitor_id,

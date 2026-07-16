@@ -1,7 +1,6 @@
 """elder_wakeup evaluate_rules override.
 
-Receives parsed VLM fields on argv[1] and adapter_config on argv[2]. Prints an
-AlertOutcome JSON object or null.
+Receives parsed VLM fields on argv[1]. Prints an AlertOutcome JSON object or null.
 
 Fires a `late_wakeup` alert when:
   1. VLM-reported event is `get_up`, and
@@ -40,7 +39,7 @@ def current_minutes() -> int:
     return now.hour * 60 + now.minute
 
 
-def evaluate_rules(parsed: dict, config: dict) -> dict | None:
+def evaluate_rules(parsed: dict) -> dict | None:
     event = parsed.get("event", "")
 
     if event != "get_up":
@@ -48,7 +47,7 @@ def evaluate_rules(parsed: dict, config: dict) -> dict | None:
 
     expected_str = os.environ.get(
         "ELDER_WAKEUP_EXPECTED_WAKEUP_LOCAL",
-        str(config.get("expectedWakeupLocal", DEFAULT_EXPECTED_WAKEUP_LOCAL)),
+        DEFAULT_EXPECTED_WAKEUP_LOCAL,
     )
     expected = hhmm_to_minutes(expected_str)
     if expected is None:
@@ -56,7 +55,7 @@ def evaluate_rules(parsed: dict, config: dict) -> dict | None:
 
     grace = int(os.environ.get(
         "ELDER_WAKEUP_GRACE_MINUTES",
-        str(config.get("graceMinutes", DEFAULT_GRACE_MINUTES)),
+        str(DEFAULT_GRACE_MINUTES),
     ))
 
     observed = current_minutes()
@@ -82,8 +81,7 @@ def evaluate_rules(parsed: dict, config: dict) -> dict | None:
 
 def main() -> None:
     parsed = json.loads(sys.argv[1])
-    config = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
-    print(json.dumps(evaluate_rules(parsed, config)))
+    print(json.dumps(evaluate_rules(parsed)))
 
 
 if __name__ == "__main__":
