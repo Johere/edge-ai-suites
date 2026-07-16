@@ -43,10 +43,6 @@ Wizard choices for a bare install (skip everything online — add it later):
 | Select channel | **Skip for now** |
 | Search provider | **Tavily Search** (Tavily API key required) |
 | Install Tavily plugin? | **Download from npm** |
-| Configure skills now | **No** |
-| Enable hooks | **Skip for now** |
-| How do you want to hatch your bot? | **Do this later** |
-
 
 > - For tavily serach, get an API Key: https://app.tavily.com/home (1,000 free credits per month)
 
@@ -54,8 +50,9 @@ Verify the gateway is up:
 
 ```bash
 openclaw gateway status     # Runtime: running
-openclaw dashboard          # opens the Control UI (prints a tokened URL)
+openclaw dashboard          # opens the Control UI
 ```
+> Read the gateway token in `openclaw.json` manually.
 
 ### 4. Reconfigure any time
 

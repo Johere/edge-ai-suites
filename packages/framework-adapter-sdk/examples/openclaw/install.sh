@@ -88,11 +88,6 @@ else
               alerts: [
                 { agentId: "elder-wakeup-agent", sessionKey: "agent:elder-wakeup-agent:cam_elder_bedroom", deliver: false }
               ]
-            },
-            cam_elder_bedroom_2: {
-              alerts: [
-                { agentId: "elder-wakeup-agent", sessionKey: "agent:elder-wakeup-agent:cam_elder_bedroom_2", deliver: false }
-              ]
             }
           }
         }

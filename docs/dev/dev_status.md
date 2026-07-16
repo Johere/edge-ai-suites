@@ -5,11 +5,11 @@
 | # | Module | Owner | Schedule | Status | Notes |
 |---|---|---|---|---|---|
 | 1 | SmartBuilding Video MCP Server | Jiaojiao | WW24–WW28 | Done | WW24 完成 monorepo + 8 tools + 4 resources + DB + 测试框架 (82/82 pass)；WW25 推 MCP Server 主链路；WW27 resource subscription + framework-adapter SDK 全链路（实机自然触发验证）；WW28 keepalive 协议 MCP 侧闭环（与 VSA :8999 联调） |
-| 2 | Agent Framework Adapter | Jiaojiao | WW29–WW30 | In progress (SDK 完成，OpenClaw plugin 有 bug) | wrapper（framework-adapter-sdk）+ OpenClaw example plugin 已随 WW27 subscription 一并交付；**OpenClaw agent 收不到 alert bug（terminal SSE 正常，问题在 adapter sink 投递）** + 干净环境端到端实机 + 运行时动态订阅缺口待办 |
+| 2 | Agent Framework Adapter | Jiaojiao | WW29–WW30 | Done | wrapper（framework-adapter-sdk）+ OpenClaw example plugin 已随 WW27 subscription 一并交付；干净环境端到端实机 |
 | 3 | Use Case Adapter | Jie | WW28–WW31 | **In progress (集成测试全 pass)** | wrapper + register new use case + 自定义 post-proc；WW27 提前完成 5 UC adapter；WW28 完成 `smartbuilding_use_case_register` tool + 零重启注册 + Phase 2/3/4 集成测试 |
 | 4 | SmartBuilding Video Skills & Workspace | Jiaojiao | WW31–WW32 | Not started | smartbuilding-toolkit / video-understanding skill 调优 + 3 个 assistant workspace |
 | 5 | Video Stream Analytics Microservice | Jie | WW24–WW27 | **Done (联调集成中)** | 微服务结构、motion + NPU prefilter、动态视频源管理全部完成；顶层 roi block + segment.max_duration 重命名（§24.1）；status webhook 与 MCP 端 events-endpoint 已对齐 |
-| 6 | Multi-level Video Understanding Microservice | Jiaojiao | WW25, WW27 | **Done** | Caption only + Dynamic Task 全部完成 |
+| 6 | Multi-level Video Understanding Microservice | Jiaojiao | WW25, WW27 | Done | Caption only + Dynamic Task 全部完成 |
 | 7 | Integration & Documents | Jiaojiao + Jie + Zhonghua | WW31–WW32 | Not started | 联调 + bug fix + E2E validation + 用户文档 |
 
 ---

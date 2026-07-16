@@ -96,8 +96,8 @@ else
   openclaw gateway restart 2>/dev/null || echo "    ! restart failed — start it manually: openclaw gateway run"
 fi
 
-echo "==> Copy private secret key to $OPENCLAW_HOME/.env"
-cp .env $OPENCLAW_HOME/.env
+echo "==> Writing MINIMAX_API_KEY placeholder to $OPENCLAW_HOME/.env"
+echo "MINIMAX_API_KEY=your-api-key" >> "$OPENCLAW_HOME/.env"
 cat <<EOF
 
 ==> Done. Providers applied: minimax (Minimax), vllm-local (Qwen3.5); default = Qwen3.5.
