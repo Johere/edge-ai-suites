@@ -11,9 +11,9 @@
 
 ## Executive Summary
 
-- **Design §5.1 Implementation Status**: Adapter wrapper 核心能力已完整具备，包括默认 parser/rules 流程和可选 Python 规则回调（`evaluate_rules.py`）。`parse_summary.py` / `on_task_completed.py` 两个 override 已移除（见 §6.3）。
+- **Design §5.1 Implementation Status**: Adapter wrapper 核心能力已完整具备，包括默认 parser / rule-free `defaultRuleEvaluator` 流程和可选 Python 规则回调（`evaluate_rules.py`）。`parse_summary.py` / `on_task_completed.py` 两个 override 已移除（见 §6.3）。
 - **Design §5.2 Implementation Status**: 用例注册全流程已由 MCP 工具编排实现（`register`/`unregister` 及 task 管理）。创造性 prompt 编写已从 MCP 层移除（`generate_prompt` action + `prompt_lint` tool 已删），改由 `video-summary-prompt-studio` skill 承担（见 §6.2）。独立交互式 wizard 形态仍属于待补强项。
-- **Design §5.3 Implementation Status**: 后处理主链路（parser/rules/cooldown/alert 写入）功能完整；其中一条 rule_eval 触发广播链路仍需明确 E2E 证据。
+- **Design §5.3 Implementation Status**: 后处理主链路（parser/default evaluator/Python override/alert 写入）功能完整；其中一条 rule_eval 触发广播链路仍需明确 E2E 证据。
 - **Remaining Gaps**: 主要剩余项为设计文档对齐、prompt lint/wizard 产品化，以及自动化与端到端验证覆盖扩展。
 
 ## 1. Design Compliance Matrix
@@ -25,7 +25,7 @@
 | 1 | `use-cases/<name>/evaluate_rules.py` 可选 override | Fully Implemented | 通过 rule engine 中的 `evaluateWithOverride` 支持。
 | 2 | `use-cases/<name>/on_task_completed.py` 可选 callback | Removed | 已移除（见 §6.3）；后处理副作用改由 MCP subscription 侧消费 `resources/updated`。
 | 3 | 内置 parser（按 schema 字段抽取） | Fully Implemented | `parseSummaryFields` 提供默认字段抽取。
-| 4 | 内置默认 rules（阈值 + 排除） | Fully Implemented | `defaultRuleEvaluator` 支持基于 rules 字典判定。
+| 4 | 内置默认规则判断 | Fully Implemented | `defaultRuleEvaluator` 不再消费 YAML rules；只基于解析出的 `severity` 在 warn/critical 时触发。
 | 5 | `use-cases/README.md` callback 编写指南 | Partially Implemented | 规范说明主要在 [use-case-adapter.md](../use-case-adapter.md)，`use-cases/README.md` 相对精简。
 
 ### §5.2 Register New Use Case
@@ -48,7 +48,7 @@
 | # | 设计要求 | 状态 | 当前实现 |
 |---|---|---|---|
 | 1 | 内置 parser + required field 校验 | Fully Implemented | 默认 parser 支持必填字段校验。
-| 2 | 内置 rules + cooldown | Fully Implemented | evaluator 与 poller 流程均遵守 cooldown（`cooldownSeconds`）。
+| 2 | 内置 default evaluator | Fully Implemented | `defaultRuleEvaluator` 基于 parsed fields 判定；自定义规则交给 `evaluate_rules.py`。
 | 3 | Python callback: `parse_summary.py` | Removed | 已移除（见 §6.3）；summary 解析统一由内置 `parseSummaryFields` 处理。
 | 4 | Python callback: `evaluate_rules.py` | Fully Implemented | 支持 override，且可回落默认 evaluator。
 | 5 | Python callback: `on_task_completed.py` | Removed | 已移除（见 §6.3）。
@@ -58,10 +58,10 @@
 ## 2. Current Architecture Notes
 
 - `prompt.md` 在当前实现中已是 use case 核心工件，与配置和规则逻辑并列构成关键输入。
-- `rules` 字典机制是通用扩展面，可在运行时上下文中传递，供默认 evaluator 与 override 共同消费。
+- YAML `rules` 字典机制已移除；运行时 `RuleContext.payload` 只承载 parsed `fields` 等核心上下文。
 - 运行时注册是可变模型：`useCaseDict` 可经由 MCP 注册流程动态更新，不受仅启动期静态加载限制。
 - 动态 task 在校验链路中可用：`use_case_validate` 对 dynamic task 与 builtin task 均可通过 task API 进行解析校验。
-- 默认 evaluator 覆盖常见条件较完整（`requireEvent`、`requireDirection`、`excludeZones`、`alertMessageExtraField`），复杂逻辑可选择保留 Python override。
+- 默认 evaluator 只覆盖 `severity=warn|critical`；事件过滤、方向/zone 约束、时间比较和自定义消息应放入 Python override。
 - summary 解析统一由内置 `parseSummaryFields`（schema-aware）处理，不再有 per-UC parser override（`parse_summary_path` 已移除，见 §6.3）。
 
 ## 3. Completion Assessment
@@ -179,18 +179,17 @@ smartbuilding_rule_eval
     prompt（需自带 LLM 客户端或改用 prompt-studio skill）。这是本次为「最大化 agent harness + router」付出的
     代价，已被采纳。
 
-### 6.3 `on_task_completed_path` / `parse_summary_path`（已移除）/ `rules`（保留）
+### 6.3 `on_task_completed_path` / `parse_summary_path` / `rules`（已移除）
 
-- **问题**：`UseCaseConfig` 原有 3 个 per-UC 字段。`rules` 是声明式规则配置（在用）；两个 `*_path` 是 Python
+- **问题**：`UseCaseConfig` 原有 3 个 per-UC 字段。`rules` 曾作为声明式规则配置；两个 `*_path` 是 Python
   override 钩子（零 UC 配置）。
 - **评审意见**：两个 `*_path` out of design scope。含义：不该在 MCP 配置层预埋 per-UC Python hook，增加 MCP 与
   use-case 实现的耦合面。
 - **处理结果**：
-  - **`rules` 保留**：它是规则 DSL（severityThreshold/cooldownSeconds/requireEvent…），`defaultRuleEvaluator`
-    直接消费（[rule-engine/index.ts:116](../../packages/tools/src/rule-engine/index.ts#L116)：`const rules = context.payload?.rules`），
-    删了默认用例的规则判定 + 冷却全丢。in-scope，**保留**。
-    （注：[rule-engine/index.ts:81](../../packages/tools/src/rule-engine/index.ts#L81) 的 doc-comment "built-in evaluator
-    ignores it" 与实现相反，是过时注释——内置 evaluator 恰恰消费 `rules`。）
+  - **`rules` 已移除**：不再在 `config.yaml` 中提供 YAML DSL，也不再进入 `RuleContext.payload.rules`。
+    `defaultRuleEvaluator` 只读取 parsed `fields`，在 `severity=warn|critical` 时触发；`child_safety` 直接走该默认路径。
+    需要时间比较、事件组合或其他特定判定时，由 agent 生成/维护 `evaluate_rules.py`（`elder_wakeup` 是示例）。
+    `fridge` 不提供 override，正常 prompt 不产出 `severity`，因此默认 evaluator 短路为不告警。
   - **`parse_summary_path` + `on_task_completed_path` 已移除**。连带清理：config.ts 字段定义、task-poller 的
     `parseSummary` override 分支 + `runOnTaskCompleted` 方法及触发块、use-case-register.ts 入参接口与 yaml 写回、
     tools.ts 的 zod input schema。理由：①零使用（YAGNI）；②把「任意 Python 子进程」引进 MCP 主链路是稳定性/
@@ -201,18 +200,13 @@ smartbuilding_rule_eval
 ### 6.4 Alerts cooldown 归属
 
 - **问题**：潜在两层 cooldown，语义不同，易「双重抑制」或「都不抑制」。
-- **原代码**：唯一实现在
-  [task-poller.ts:145-153](../../packages/mcp-server/src/video-worker/task-poller.ts#L145)（`cooldownSec` 取自
-  `rules.cooldownSeconds`，`db.latestAlertWithin` 命中就不写行）；通知侧
-  [task-poller.ts:166 onAlert](../../packages/mcp-server/src/video-worker/task-poller.ts#L166) →
+- **当前代码**：rules-coupled cooldown 已从 task-poller / rule_eval 移除；每次 `shouldAlert=true` 都写入 alert 并触发通知回调。通知侧
+  [task-poller.ts onAlert](../../packages/mcp-server/src/video-worker/task-poller.ts) →
   [index.ts:111](../../packages/mcp-server/src/index.ts#L111) 对**每条** alert broadcast；
   [mcp-subscriber-registry.ts](../../packages/mcp-server/src/mcp-subscriber-registry.ts) **无去重**。
 - **评审意见**：「cooldown 已在 subscription 阶段做，UC 后处理可不管」。**但实测 subscription 侧无去重代码**
   ——要么在插件侧、要么还没合入本仓。
-- **架构建议**：**单一职责——cooldown 只该有一层**，放哪层取决于抑制对象：抑制 **DB 行**（现状，alerts 变
-  「已去重事件」丢审计）还是抑制 **用户可见通知**（alerts 全量审计、用户不被刷屏，产品语义通常要这个）。
-  **顺序不能反**：现在 subscription 无去重，先删 task-poller 会变 0 去重。推荐：①定 alerts 表语义（建议
-  全量审计）→②通知层落地「每 (monitor,useCase) N 秒最多推一次」→③再移除 task-poller 行级 cooldown。
+- **架构建议**：若后续仍需要 cooldown，应放在明确的通知层策略，而不是重新挂回 use-case `rules`。alerts 表保持全量审计语义更清晰。
 
 ### 6.5 已回退（本轮，记录用）
 

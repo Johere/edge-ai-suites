@@ -1,6 +1,6 @@
 ---
 name: video-summary-prompt-studio
-description: "Author, register, list, edit, and delete prompt-driven video summary tasks on the multilevel-video-understanding service via `/v1/tasks` REST endpoints. Use when the user wants to add a new video analytics scenario (pet watch, elder fall, warehouse safety, ...), refine an existing custom task's prompt, inspect what tasks are registered, or remove one. The calling agent drafts the four-section prompt (LOCAL / MACRO / GLOBAL / T-1) following the guidance here, then POSTs via `curl`."
+description: "Use when: creating or registering a new Smart Building video analytics use case, generating `use-cases/<name>/prompt.md`, generating `use-cases/<name>/evaluate_rules.py` when custom alert logic is needed, adding scenarios such as pet_safety/elder fall/parking safety, refining prompts, or managing multilevel-video-understanding `/v1/tasks`. From a use case name plus natural-language description, infer events/schema, draft the four-section prompt (GLOBAL / MACRO / LOCAL / T_MINUS_1), save prompt.md and any needed evaluate_rules.py, then register through `smartbuilding_use_case_register` when MCP is available; otherwise use `/v1/tasks` curl recipes."
 homepage: https://github.com/open-edge-platform/edge-ai-libraries
 metadata:
   {
@@ -19,7 +19,12 @@ four prompts that drive a multi-level hierarchy: **LOCAL** (per micro-chunk)
 → **MACRO** (per macro-chunk) → **GLOBAL** (whole video) + a **T_MINUS_1**
 context envelope for continuity.
 
-Pure skill, no plugin — the agent uses `bash` + `curl` to hit `/v1/tasks`.
+Pure skill, no plugin. In Smart Building use-case creation, the agent authors
+`use-cases/<use_case>/prompt.md` and, when the default severity rule is not
+enough, `use-cases/<use_case>/evaluate_rules.py`. It should call the MCP tool
+`smartbuilding_use_case_register` with `prompt_text` and `evaluate_rules_path`
+when available. For direct video-summary task management without the Smart
+Building MCP server, use `bash` + `curl` against `/v1/tasks`.
 
 ---
 
@@ -33,6 +38,7 @@ Pure skill, no plugin — the agent uses `bash` + `curl` to hit `/v1/tasks`.
 | Optional placeholder — `GLOBAL`, `MACRO`, `LOCAL` | `{question}` |
 | `task_name` regex | `^[a-z][a-z0-9_]{1,63}$` (lowercase ASCII + underscore) |
 | Name suffix convention | `_zh` or `_en` (`pet_guard_zh`, `warehouse_ppe_en`) |
+| Smart Building parser output | `LOCAL_PROMPT` must require plain line-oriented text with schema fields as `KEY: value` lines. Never ask for JSON, YAML, Markdown tables, arrays, or code blocks as the VLM output. |
 | Banned tokens anywhere in any section | Triple-backtick code fences, and the literal string `<<<` |
 | Built-in names (never shadow, never modify, never delete) | `summary`, `engine_valves_sop`, `refrigerator_monitor`, `daily_report`, `daily_report_en`, `refrigerator_monitor_en`, `child_safety_monitor` |
 | Final gate before POST/PATCH | Run the 6-item checklist in `Lint checklist (self-check before POST)` |
@@ -56,6 +62,133 @@ reference template — fix and retry. The anchor names are case-sensitive:
 
 ---
 
+## Smart Building Use Case Workflow
+
+Use this workflow when the user asks OpenClaw or another agent to create a
+video analytics use case from a name plus description, for example
+`pet_safety -- 检测宠物逃跑、受困、攻击性行为`.
+
+### Inputs
+
+Minimum input:
+- `use_case`: lowercase snake_case identifier, e.g. `pet_safety`
+- `description`: natural-language event description in the user's language
+
+Optional input:
+- explicit event names and severity mapping
+- schema fields such as `pet_zone`, `parking_zone`, or `motion_direction`
+- custom alert behavior such as excluded events, zone filters, time windows,
+  custom alert messages, or preview-before-register
+
+### Defaults
+
+- `use_case` must match `^[a-z][a-z0-9_]{1,63}$`; ask for a corrected name if
+  it does not.
+- `video_summary_task` defaults to `<use_case>_monitor`.
+- Prompt file path defaults to `use-cases/<use_case>/prompt.md` under the
+  Smart Building repo root.
+- Default action is generate + register. If the user asks to preview, or if
+  event/rule inference is ambiguous, show a concise draft summary before
+  registration.
+- Default rule behavior for simple alert-style use cases is the built-in
+  `defaultRuleEvaluator`: alert when parsed `severity` is `warn` or `critical`.
+- If the use case needs event filters, zone filters, custom alert text, or any
+  behavior beyond warn/critical severity, generate an `evaluate_rules.py` and
+  register it via `evaluate_rules_path`.
+- Default `summarize` for monitor-alert use cases:
+  - `method: "SIMPLE"`
+  - `processor_kwargs: { levels: 1, level_sizes: [-1], process_fps: 2 }`
+- Default `reports`: `{ data_source: "alerts", default_type: "daily", filter: {} }`
+
+### Infer Events And Fields
+
+Infer event names from the description using lowercase snake_case. Prefer 3-6
+events total: the risky events the user named plus safe/no-incident events.
+
+Severity mapping:
+- `critical`: immediate injury, trapped/stuck, violent attack, fall, fire,
+  drowning, severe intrusion, or a person/animal unable to self-resolve.
+- `warn`: escape attempts, abnormal agitation, risk proximity, forbidden-area
+  entry, unsafe parking, suspicious behavior, or conditions that may escalate.
+- `info`: normal activity, expected activity, no visible actor, no incident.
+- `normal`: only use as a severity keyword inside prose when the domain already
+  uses it; for structured `SEVERITY` prefer `info` for safe/no-incident rows.
+
+Safe event defaults:
+- `<domain>_normal` when the actor is visible and safe.
+- `no_incident` when the actor is absent or nothing relevant is happening.
+
+Schema field defaults:
+- Always include required schema fields `event`, `severity`, and `desc` when
+  they are declared by config.
+- Add at most one optional location/context field when useful for alerts, such
+  as `pet_zone`, `parking_zone`, `fall_zone`, or `motion_direction`.
+- Schema extension names are lowercase snake_case. Prompt output keys may be
+  uppercase (`EVENT:`, `SEVERITY:`, `DESC:`, `PET_ZONE:`) because the runtime
+  parser matches schema fields case-insensitively, but include the lowercase
+  schema name somewhere in LOCAL guidance so validation can find it.
+
+Example inference for `pet_safety -- 检测宠物逃跑、受困、攻击性行为`:
+- events: `pet_stuck` critical, `pet_escape` warn, `pet_aggression` warn or
+  critical depending on contact/injury risk, `pet_normal` info, `no_incident`
+  info
+- schema_extensions: `{ name: "pet_zone", type: "text", required: false }`
+- rule decision: generate `evaluate_rules.py` to exclude `pet_normal` /
+  `no_incident`, alert on warn/critical, and append `pet_zone` to the message
+
+### Generate, Save, Register
+
+1. Read the schema before drafting (see `Read The Output Schema`).
+2. Draft a complete Markdown `prompt.md` with exactly these top-level section
+   headers: `## GLOBAL_PROMPT`, `## MACRO_CHUNK_PROMPT`, `## LOCAL_PROMPT`,
+   `## T_MINUS_1_PROMPT`.
+3. Run the lint checklist in this skill. Fix all failures before writing or
+   registering.
+4. Save the prompt to `use-cases/<use_case>/prompt.md` if the user requested a
+   Smart Building use case. If the file already exists, do not overwrite unless
+   the user explicitly requested replacement.
+5. If custom alert behavior is needed, save `use-cases/<use_case>/evaluate_rules.py`.
+   It must accept parsed fields on argv[1], optional `adapter_config` on argv[2],
+   and print an AlertOutcome object or `null`.
+  Minimal shape:
+
+  ```python
+  import json, sys
+
+  def main():
+     fields = json.loads(sys.argv[1])
+     config = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+     should_alert = fields.get("severity") in {"warn", "critical"}
+     outcome = {
+       "alertType": fields.get("event", "alert"),
+       "severity": fields.get("severity", "warn"),
+       "description": fields.get("desc", ""),
+     } if should_alert else None
+     print(json.dumps(outcome))
+
+  if __name__ == "__main__":
+     main()
+  ```
+
+6. Prefer registering through MCP:
+   - tool: `smartbuilding_use_case_register`
+   - `action: "register"`
+   - `use_case: <use_case>`
+   - `video_summary_task: <use_case>_monitor`
+   - `description: <user description>`
+  - `evaluate_rules_path: use-cases/<use_case>/evaluate_rules.py` when a generated rule override is needed
+  - `adapter_config: {...}` only when the generated `evaluate_rules.py` needs tunable parameters
+  - `reports`, `summarize` from defaults plus user overrides
+   - `prompt_text: <full prompt.md text>`
+   - `schema_extensions: <inferred/user fields>`
+   - `persist: true`
+   - `overwrite: false` unless the user explicitly asks to update
+7. If MCP is unavailable and the user only asked for a video-summary task, use
+   the `/v1/tasks` curl recipes below. Do not claim the Smart Building use case
+   is registered unless `smartbuilding_use_case_register` succeeds.
+
+---
+
 ## Prerequisites
 
 ```bash
@@ -72,6 +205,21 @@ Always read schema first, then draft prompts. Field names in
 `schema.video_summary_tasks.extensions` are consumed downstream by
 `parseSummaryFields`; the model must emit those exact field names as
 `field_name: value` lines, or extraction/rules can silently miss.
+
+The Smart Building runtime is **not** a JSON parser for summary output. It scans
+plain text for one field per line. For alert use cases, the LOCAL output must end
+with structured text lines such as:
+
+```text
+SEVERITY: warn
+EVENT: pet_escape
+DESC: pet is trying to leave through the balcony door
+PET_ZONE: balcony
+```
+
+Do not ask the VLM to output JSON like `{ "severity": "warn", ... }`; those keys
+will remain inside `summary_text` and the parser will not populate the `event`,
+`severity`, `desc`, or optional extension columns needed by the rule engine.
 
 1. Prefer workspace runtime config: `config.yaml`
 2. Fallback: `config.yaml.example`
@@ -119,6 +267,7 @@ Must contain:
   - On-screen text: original + parenthetical translation
   - If no actor visible, describe the scene truthfully; no hallucination
   - No `[` `]` characters; no echo of the time lines
+  - **Do not output JSON/YAML/Markdown tables. The final structured part must be plain text lines.**
   - After narrative, append structured lines for schema extraction:
     - One line per required field: `<field_name>: <value>`
     - Optional fields: include only when detected
@@ -170,6 +319,75 @@ Small templated section. Must contain:
   {past_summary}
   ]
   ```
+
+---
+
+## Markdown prompt.md Template For Smart Building
+
+When writing `use-cases/<use_case>/prompt.md`, use Markdown sections instead of
+Python constants. `smartbuilding_use_case_register` accepts this format through
+`prompt_text` and converts it for the video-summary service.
+
+```text
+## GLOBAL_PROMPT
+## 任务:
+生成面向 <domain> 的安全摘要。
+- 如果出现 critical 事件，以「【注意】<最严重事件>」开头。
+- 如果只有 warn 事件，以「出现 N 次 warn 级别事件」开头。
+- 如果没有风险，以「整体安全」开头。
+- 按事件类型总结风险、干预和恢复情况，不要编造未出现在 MACRO 摘要中的内容。
+- 不要在正文中输出时间戳。
+用户问题: {question}
+
+## MACRO_CHUNK_PROMPT
+## 任务:
+合并本时间窗内的片段摘要，优先保留 critical 和 warn 事件。
+Start time: {st_tm}s
+End time: {end_tm}s
+## 指南:
+- 将连续安全或无活动片段压缩成一句话。
+- 保持同一对象身份一致，例如根据外观、位置或动作描述区分。
+- 不要把已经消失的对象、动作或风险延续到后续描述中。
+- 不要使用方括号，不要复述时间行。
+用户问题: {question}
+
+## LOCAL_PROMPT
+## 任务:
+分析这段短视频中与 <domain> 相关的活动，并输出可解析的结构化字段。
+Start time: {st_tm}s
+End time: {end_tm}s
+## 重点关注的内容:
+1. <actor> 是否出现、所在位置、外观或状态。
+2. 周围是否有危险物、边界、出口、禁区或异常环境。
+3. 是否发生 <event_1>、<event_2>、<event_3> 等风险行为。
+4. 是否有人干预、风险是否解除。
+5. 正常活动或无事件情况只用 1-2 句说明。
+## 输出规则:
+- 先用 2-5 句自然语言描述观察结果。
+- 每个风险都必须带 severity 关键词: critical、warn、info 或 normal。
+- 如果没有相关对象出现，如实说明，不要臆测。
+- 不要使用方括号，不要复述时间行。
+- 不要输出 JSON、YAML、Markdown 表格或代码块；结构化部分必须是纯文本 `字段名: 值` 行。
+- 最后追加结构化字段，每个字段单独一行，字段名必须和 schema 语义一致:
+  SEVERITY: critical/warn/info
+  EVENT: <event_1>/<event_2>/<safe_event>/no_incident
+  DESC: <一句话描述>
+  <OPTIONAL_FIELD>: <只在可见时输出>
+
+## T_MINUS_1_PROMPT
+## 上下文:
+下面是前 {dur}s 的历史摘要，只能作为连续性参考，不要复制到当前输出。
+观察 <domain> 风险是否仍然存在、是否已经解除、对象是否仍在同一区域。
+[
+Start time: {st_tm}s
+End time: {end_tm}s
+{past_summary}
+]
+```
+
+Before saving, replace placeholders such as `<domain>`, `<actor>`, `<event_1>`,
+and `<OPTIONAL_FIELD>` with concrete domain terms. Remove optional field lines
+when no optional schema field is inferred.
 
 ---
 
@@ -272,6 +490,12 @@ Fix: rewrite as bullet lists or explicit sentence rules; no pipe enums.
 Symptom: `<think>` markup remains from model output.
 Fix: strip all `<think>...</think>` blocks before submission.
 
+7. `json_summary_output`
+Symptom: LOCAL_PROMPT asks for JSON/YAML/arrays/tables, or examples show
+`{"severity": ...}` instead of line-oriented `SEVERITY: ...` output.
+Fix: rewrite the output contract as plain text with one schema field per line,
+for example `SEVERITY: warn`, `EVENT: pet_escape`, `DESC: ...`.
+
 After POST/PATCH, optionally run server-side validation via
 `smartbuilding_use_case_validate` for a second gate (task registration +
 schema consistency).
@@ -373,7 +597,10 @@ Retry budget: ≤ 2 attempts on 4xx. On the third failure, surface the server's
 
 | User utterance (sample) | Action |
 |---|---|
-| "Add a pet-at-home monitoring task" / "给视频摘要服务加个宠物看家任务" | Draft 4 sections in the user's language → POST `/v1/tasks` mode=full |
+| "创建 use case pet_safety，检测宠物逃跑、受困、攻击性行为" | Infer events/rules/schema → draft `use-cases/pet_safety/prompt.md` with 4 Markdown sections → call `smartbuilding_use_case_register` with `persist=true` |
+| "先预览 parking_safety 的 prompt，不要注册" | Infer and draft the prompt → show events/rules/schema/path summary → do not call registration until confirmed |
+| "覆盖更新 pet_safety prompt 并重新注册" | Read existing prompt if present → rewrite/refine → save with overwrite intent → call `smartbuilding_use_case_register` with `overwrite=true` |
+| "Add a pet-at-home monitoring task" / "给视频摘要服务加个宠物看家任务" | If Smart Building MCP is available, use the generate + register workflow; otherwise draft 4 sections in the user's language → POST `/v1/tasks` mode=full |
 | "List all video summary tasks" / "列一下任务" | GET `/v1/tasks` |
 | "Show me the `child_safety_monitor` prompt" | GET `/v1/tasks/child_safety_monitor` |
 | "Make `pet_guard_en`'s local prompt stricter" | GET the task → edit `content` → confirm with user → PATCH mode=full |

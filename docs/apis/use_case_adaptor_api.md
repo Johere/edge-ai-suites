@@ -71,7 +71,6 @@ tick — no restart required.
 | `video_summary_task` | `string` | ⚠️ | register | VLM task name. Default `<use_case>_monitor`. Must match the same regex and must **not** collide with a VLM builtin (`summary`, `summary_zh`). |
 | `description` | `string` | ⚠️ | register | Human description; shown by `/v1/tasks`. |
 | `prompt_text` | `string` | ⚠️ | register | Full prompt. Either Markdown with `## LOCAL_PROMPT` / `## GLOBAL_PROMPT` sections, **or** a raw 4-constant Python source (detected by a `GLOBAL_PROMPT =` / `LOCAL_PROMPT =` token). Omit to skip VLM-task registration (see §2.5). |
-| `rules` | `object` | ⚠️ | register | Free-form rules dict, copied **verbatim** into `use_case_dict.<uc>.rules`. Consumed by `defaultRuleEvaluator` (see §4) or passed to a Python override at `payload.rules`. |
 | `schema_extensions` | `Array<{name, type, required}>` | ⚠️ | register | Extra `video_summary_tasks` columns. `type ∈ {text, integer, real}`. Applied via idempotent `ALTER TABLE ADD COLUMN` and merged into the in-memory schema. |
 | `evaluate_rules_path` | `string` | ⚠️ | register | Path to a Python `evaluate_rules.py` override. Omit for zero-Python (`defaultRuleEvaluator`) use cases. |
 | `reports` | `object` | ⚠️ | register | Report config `{data_source, default_type, filter}`. Stored verbatim. |
@@ -146,12 +145,7 @@ builtin) or will be registered separately via `smartbuilding_video_summary_task`
   "use_case": "pet_safety",
   "video_summary_task": "pet_safety_monitor",
   "description": "Pet safety monitoring (dynamic)",
-  "rules": {
-    "severityThreshold": "warn",
-    "excludeEvents": ["pet_normal", "no_incident"],
-    "alertMessageExtraField": "pet_zone",
-    "cooldownSeconds": 60
-  },
+  "evaluate_rules_path": "./use-cases/pet_safety/evaluate_rules.py",
   "summarize": { "method": "SIMPLE", "processor_kwargs": { "levels": 1, "level_sizes": [-1], "process_fps": 2 } },
   "prompt_text": "## LOCAL_PROMPT\n…",
   "schema_extensions": [{ "name": "pet_zone", "type": "text", "required": false }],
@@ -253,31 +247,26 @@ stage failed.
 
 ---
 
-## 4. The `rules` contract (consumed by `defaultRuleEvaluator`)
+## 4. Rule evaluation contract
 
-The `rules` object passed to `register` is copied verbatim into
-`use_case_dict.<uc>.rules` and reaches the rule engine at `payload.rules`. When
-no Python override is wired (`evaluate_rules_path` omitted),
-[`defaultRuleEvaluator`](../../packages/tools/src/rule-engine/index.ts) interprets
-these keys (all optional):
+When no Python override is wired (`evaluate_rules_path` omitted),
+[`defaultRuleEvaluator`](../../packages/tools/src/rule-engine/index.ts) reads
+`RuleContext.payload.fields` and alerts only when `fields.severity` is `warn` or
+`critical`. It does not consume YAML `rules`.
 
-| `rules` key | Type | Effect | Default |
-|-------------|------|--------|---------|
-| `severityThreshold` | `"info" \| "warn" \| "critical"` | Fires only when `fields.severity` is at or above this | `"warn"` |
-| `excludeEvents` | `string[]` | These `fields.event` values never fire | `[]` |
-| `requireEvent` | `string` | Whitelist a single `fields.event`; only it fires (still subject to severity) | — |
-| `requireDirection` | `string` | `fields.motion_direction` must equal this (case-insensitive) | — |
-| `excludeZones` | `string[]` | Matched against `fields.parking_zone`; matches never fire | — |
-| `alertMessageExtraField` | `string` | Append `(label=value)` from `fields[<key>]` to the alert text; `label` is a short alias (`parking_zone`/`pet_zone`→`zone`, `motion_direction`→`direction`, else the field name) | — |
-| `cooldownSeconds` | `number` | Suppress repeat alerts for the same use case within this window (applied by the caller when `create_alert=true`) | — |
+Use `evaluate_rules_path` for use cases that need event filters, zone filters,
+time comparisons, custom thresholds, or custom alert messages. The Python script
+receives the full `RuleContext` as `sys.argv[1]` and returns
+`{"should_alert": boolean, "alert_message"?: string}` on stdout.
 
 > If `fields.severity` is missing or unrecognised, `defaultRuleEvaluator`
-> short-circuits to `shouldAlert=false` **before** any threshold/filter check —
+> short-circuits to `shouldAlert=false` —
 > this is why a `SEVERITY`-less prompt (e.g. `fridge`) is report-only.
 
-Anything the `rules` keys cannot express (time comparisons, multi-event joins,
-external calls) needs a Python override via `evaluate_rules_path`. Full override
-I/O contract: [use-cases/README.md](../../use-cases/README.md).
+Anything beyond the built-in warn/critical severity rule (event filters, zone
+filters, time comparisons, multi-event joins, external calls) needs a Python
+override via `evaluate_rules_path`. Full override I/O contract:
+[use-cases/README.md](../../use-cases/README.md).
 
 ---
 

@@ -15,14 +15,12 @@ enough.
 use-cases/
 ├── README.md                     # this file
 ├── child_safety/
-│   ├── evaluate_rules.py         # optional Python rule override (see §1)
 │   └── prompt.md                 # VLM task prompt (see §2)
 ├── elder_wakeup/
 │   ├── evaluate_rules.py
 │   └── prompt.md
 └── fridge/
     ├── config.md                 # per-use-case notes
-    ├── evaluate_rules.py         # no-alert stub
     ├── prompt.md                 # Chinese task prompt
     └── prompt_en.md              # English variant
 ```
@@ -53,9 +51,6 @@ Invoked by `packages/rule-engine/src/index.ts` (`evaluateWithOverride`) via
       "event":       "child_fall",
       "desc":        "child fell from sofa",
       "description": "child fell from sofa"    // legacy alias
-    },
-    "rules": {                                 // from config.yaml use_case_dict.<name>.rules
-      "severityThreshold": "warn"
     }
   }
 }
@@ -154,9 +149,9 @@ video-worker. The only per-use-case Python override that remains is
 set (fridge / child_safety / elder_wakeup), so they are intentionally kept out of
 `config.yaml.example`, `monitors.yaml.example`, and `demo-videos/streams.yaml`.
 Their definitions are preserved here — copy the blocks you need into your own
-`config.yaml` / `monitors.yaml` / `streams.yaml` to enable them. Both are
-threshold-based, alert-only use cases handled entirely by `defaultRuleEvaluator`
-(no Python `evaluate_rules.py`).
+`config.yaml` / `monitors.yaml` / `streams.yaml` to enable them. The built-in
+`defaultRuleEvaluator` only handles `severity=warn|critical`; generate an
+`evaluate_rules.py` override when you need event, direction, or zone gates.
 
 **`config.yaml` → `schema.video_summary_tasks.extensions`** (add only when enabling these UCs — they are use-case-specific fields):
 
@@ -171,13 +166,8 @@ threshold-based, alert-only use cases handled entirely by `defaultRuleEvaluator`
 high_altitude_safety:
   description: "High-altitude object throwing detection"
   video_summary_task: high_altitude_monitor
-  # No evaluate_rules_path — defaultRuleEvaluator honours requireEvent +
-  # requireDirection to gate on downward-throw events only.
-  rules:
-    severityThreshold: warn # fire when severity >= warn
-    requireEvent: high_altitude_throw # only fires when VLM reports event=high_altitude_throw
-    requireDirection: downward # only fires when VLM reports motion_direction=downward
-    cooldownSeconds: 30 # short window: consecutive throws should each alert
+  # Add evaluate_rules_path when you need to gate on event=high_altitude_throw
+  # and motion_direction=downward instead of using the default severity rule.
   reports:
     data_source: alerts
     default_type: daily
@@ -186,14 +176,8 @@ high_altitude_safety:
 parking_safety:
   description: "Community parking violation detection (fire lane / entrance / handicapped)"
   video_summary_task: parking_safety_monitor
-  # No evaluate_rules_path — defaultRuleEvaluator handles zone exclusion and
-  # alert-message suffix from the `rules` block below.
-  rules:
-    severityThreshold: warn # fire when severity >= warn
-    excludeEvents: [ no_incident, uncertain ] # short-circuit non-violation events
-    # excludeZones: [normal, unknown]          # optional: whitelist zones that should not alert
-    alertMessageExtraField: parking_zone # appends "(zone=<value>)" to alertMessage
-    cooldownSeconds: 600 # 10 min: a parked car re-triggers only after cooldown
+  # Add evaluate_rules_path when you need to suppress non-violation events,
+  # exclude normal zones, or append parking_zone details to the alert message.
   reports:
     data_source: alerts
     default_type: daily
