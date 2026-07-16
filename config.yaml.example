@@ -76,6 +76,9 @@ events_webhook:
 # MCP server auto-applies ALTER TABLE on startup if columns are missing.
 # The parser writes the parsed VLM output into these columns.
 # `alerts` table is intentionally kept use-case-agnostic — no extensions.
+# (Note: alerts also has a built-in core column `notified` — delivery status,
+# 1=pushed to users, 0=cooled down but still stored for audit. It is NOT a
+# use-case extension; you never configure it here.)
 schema:
   video_summary_tasks:
     extensions:
@@ -117,7 +120,7 @@ use_case_dict:
     # filtering entirely from the `rules` block below.
     rules:
       severityThreshold: warn # "info" | "warn" | "critical" — fires at or above this
-      cooldownSeconds: 60 # suppress duplicate alerts within N seconds per (monitor, use_case)
+      cooldownSeconds: 60 # suppress the user NOTIFICATION for duplicates within N seconds per (monitor, use_case); the alert row is still written (notified=0) for full audit
     # Per-clip summarize tuning. Defaults (single LOCAL_PROMPT pass) suit most use cases;
     # override only when you need multi-level roll-up or T-1 temporal context.
     summarize:
@@ -129,6 +132,9 @@ use_case_dict:
     reports:
       data_source: alerts
       default_type: daily
+      # Reports over `alerts` default to notified=1 (events actually pushed to
+      # users), so cooled-down audit rows don't inflate counts. Override with
+      # `filter: { notified: 0 }` for an audit-only report, or set it explicitly.
       filter: {}
 
   elder_wakeup:

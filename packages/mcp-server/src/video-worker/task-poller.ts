@@ -123,35 +123,37 @@ export class TaskPoller {
       const ruleResult = await evaluateWithOverride(ruleCtx, overridePath);
 
       if (ruleResult.shouldAlert) {
-        // Cooldown check: suppress if another alert for the same monitor +
-        // use case is still within the configured window. `rules.cooldownSeconds`
-        // is honoured for the built-in evaluator and — by convention — read by
-        // Python overrides that want the same behaviour. A missing / zero /
-        // negative value disables cooldown.
+        // Cooldown suppresses the user-facing NOTIFICATION only — the alert row
+        // is ALWAYS written for a full audit trail. `rules.cooldownSeconds` is
+        // honoured for the built-in evaluator and — by convention — read by
+        // Python overrides. A missing / zero / negative value disables cooldown.
+        // The window anchors on the most recent *notified* alert, so cooled-down
+        // rows (notified=0) never extend it → at most one notification per
+        // (monitor, use_case) per cooldown window.
         const cooldownSec = Number((useCaseCfg?.rules as any)?.cooldownSeconds ?? 0);
-        let suppressed = false;
+        let notified = true;
         if (cooldownSec > 0) {
           const recent = this.db.latestAlertWithin(monitorId, useCase, cooldownSec);
           if (recent) {
-            suppressed = true;
+            notified = false;
             logger.debug(
-              `[task-poller] cooldown suppressed alert for ${monitorId}/${useCase} ` +
-              `(previous alert id=${recent.id} at ${recent.createdAt}, cooldown=${cooldownSec}s)`,
+              `[task-poller] cooldown suppressed NOTIFICATION (audit row still written) for ` +
+              `${monitorId}/${useCase} (previous notified alert id=${recent.id} at ${recent.createdAt}, ` +
+              `cooldown=${cooldownSec}s)`,
             );
           }
         }
 
-        if (!suppressed) {
-          this.db.createAlert({
-            monitorId,
-            taskId: task.id,
-            eventId: task.eventId,
-            useCase,
-            description: ruleResult.alertMessage,
-          });
-          if (this.onAlert) {
-            this.onAlert(monitorId);
-          }
+        this.db.createAlert({
+          monitorId,
+          taskId: task.id,
+          eventId: task.eventId,
+          useCase,
+          description: ruleResult.alertMessage,
+          notified,
+        });
+        if (notified && this.onAlert) {
+          this.onAlert(monitorId);
         }
       }
     } catch (err: any) {

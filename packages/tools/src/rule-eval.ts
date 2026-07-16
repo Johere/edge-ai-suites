@@ -32,8 +32,9 @@ export interface RuleEvalParams {
    */
   task_id?: number;
   /**
-   * If true and the evaluator returns `shouldAlert`, insert a new alert row
-   * (subject to cooldown when configured). Default `false` — dry-run.
+   * If true and the evaluator returns `shouldAlert`, insert a new alert row.
+   * The row is always written; cooldown (when configured) only sets
+   * `notified=false` on it. Default `false` — dry-run (no row).
    */
   create_alert?: boolean;
 }
@@ -45,6 +46,8 @@ export interface RuleEvalResult {
   rule_result: RuleResult;
   alert_created?: boolean;
   alert_id?: number;
+  /** true = the alert's notification would be broadcast; false = cooled down (row still written). */
+  notified?: boolean;
   suppressed_by_cooldown?: boolean;
 }
 
@@ -135,15 +138,12 @@ export async function ruleEval(
     return out;
   }
 
-  // Cooldown parity with task-poller.
+  // Cooldown parity with task-poller: the alert row is ALWAYS written (audit);
+  // cooldown only decides whether it counts as a delivered notification.
   const cooldownSec = Number((useCaseCfg?.rules as any)?.cooldownSeconds ?? 0);
-  if (cooldownSec > 0) {
-    const recent = db.latestAlertWithin(params.monitor_id, useCase, cooldownSec);
-    if (recent) {
-      out.suppressed_by_cooldown = true;
-      out.alert_created = false;
-      return out;
-    }
+  let notified = true;
+  if (cooldownSec > 0 && db.latestAlertWithin(params.monitor_id, useCase, cooldownSec)) {
+    notified = false;
   }
 
   const alert = db.createAlert({
@@ -152,8 +152,11 @@ export async function ruleEval(
     eventId: task.eventId,
     useCase,
     description: ruleResult.alertMessage,
+    notified,
   });
   out.alert_created = true;
   out.alert_id = alert.id;
+  out.notified = notified;
+  out.suppressed_by_cooldown = !notified;
   return out;
 }
