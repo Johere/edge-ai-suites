@@ -73,7 +73,7 @@ Env overrides: `OPENCLAW_HOME` (target home, default `~/.openclaw`), `MCP_URL` (
 | `monitors.<id>.alerts[]` | Where this monitor's alerts go. `<id>` maps to `smartbuilding://monitor/<id>/alerts`. |
 | `agentId` | Agent owning the target session (resolves the JSONL path for FS-append). |
 | `sessionKey` | Target OpenClaw session key, `agent:<agentId>:<session>`. The examples route each monitor into its own session (`…:cam_child`), so alerts don't mix with the agent's `main` chat. |
-| `deliver` | `false` (default) → raw FS-append into the session, zero LLM. `true` → channel delivery via `subagent.run` (e.g. a Feishu group session) — *not yet verified end-to-end*. |
+| `deliver` | `false` (default) → inject the alert turn into the session, zero LLM. `true` → channel delivery via `subagent.run` (e.g. a Feishu group session) — *not yet verified end-to-end*. `deliver` no longer selects the write mechanism (both share the same session-injection primitive); it only decides whether to *also* push to an external channel. |
 | `cursorFile` | *(optional)* delivery cursor path. Default `<OPENCLAW_HOME>/smartbuilding-alerts-cursor.json`. |
 | `pollFallbackMs` | *(optional)* safety-net poll (ms) against a lost notification. Default `0` (off). |
 
@@ -94,11 +94,17 @@ MCP server  --notifications/resources/updated-->  SDK adapter (this plugin)
 ```
 
 - The SDK owns the protocol layer (subscribe, cursor dedup, per-monitor ordering, reconnect).
-- `src/sink.ts` owns the OpenClaw injection layer.
-- `src/session-append.ts` is the raw-append path. **See its `TODO(migrate)`**: OpenClaw v2026.6.9
-  has no first-class raw-append API, so it writes directly to the session JSONL. It writes *both* a
-  user separator line and an assistant line because ControlUI merges consecutive same-role turns
-  into one timestamped block.
+- `src/sink.ts` owns the OpenClaw injection layer. Both routes share ONE session-injection primitive
+  (`appendToSession`), selected once at startup:
+  - **gateway ≥ 2026.7.1** → `src/session-inject.ts`, the first-class transcript API
+    (`openclaw/plugin-sdk/session-transcript-runtime` + `.../session-store-runtime`). The SDK owns
+    header creation, parentId linking, the write lock, and **idempotency** (`idempotencyLookup:"scan"`
+    keyed on `alert.id` → an at-least-once replay is a no-op, not a duplicate), plus a real
+    `publishUpdate` so ControlUI refreshes live.
+  - **older gateways** → `src/session-append.ts`, the legacy FS-append fallback (writes the session
+    JSONL directly). `index.ts` picks this automatically when the 2026.7.1 subpaths fail to import.
+- Both paths still write *both* a user separator line and an assistant line, because ControlUI merges
+  consecutive same-role turns into one timestamped block.
 
 ## Files
 
@@ -107,9 +113,11 @@ MCP server  --notifications/resources/updated-->  SDK adapter (this plugin)
 | `index.ts` | plugin entry: parse config → build adapter → `registerService` |
 | `openclaw.plugin.json` | plugin metadata + config schema |
 | `src/config.ts` | validate/normalize `api.pluginConfig` |
-| `src/sink.ts` | OpenClaw `AlertSink` (deliver:false FS-append / deliver:true channel) |
+| `src/sink.ts` | OpenClaw `AlertSink` — unified `appendToSession` for both routes; deliver:true adds the channel hop |
 | `src/format.ts` | `formatSeparator` + `formatAlert` (raw, no persona) |
-| `src/session-append.ts` | vendored raw-append helper (with migration TODO) |
+| `src/inject-types.ts` | shared `SessionAppender` / `AppendResult` / `InjectParams` contract |
+| `src/session-inject.ts` | 2026.7.1 first-class transcript-API injector (dynamic-import probed) |
+| `src/session-append.ts` | legacy FS-append fallback for gateways < 2026.7.1 |
 | `agents/` | hard-copied agent personas (self-contained; seeded by `install.sh`) |
 | `scripts/` | dev helpers (`fire_models.sh` — re-apply this machine's model providers after a reinstall) |
 

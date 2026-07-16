@@ -1,11 +1,11 @@
 import type { AlertSink, AlertPayload, Logger } from "@smartbuilding-video/framework-adapter-sdk";
 import type { PluginConfig } from "./config.js";
+import type { SessionAppender } from "./inject-types.js";
 import { formatAlert, formatSeparator } from "./format.js";
-import { appendAlertTurns } from "./session-append.js";
 
 /**
- * Subset of OpenClaw's `api.runtime.subagent` that we use. Runs an ephemeral subagent whose reply
- * is delivered to `sessionKey` (used only for the `deliver:true` / channel-bound path).
+ * Subset of OpenClaw's `api.runtime.subagent` we use: runs an ephemeral subagent whose reply is
+ * delivered to `sessionKey` (only for the `deliver:true` channel path).
  */
 export interface SubagentLike {
   run(params: {
@@ -18,27 +18,30 @@ export interface SubagentLike {
   }): Promise<{ runId: string }>;
 }
 
-// For channel-bound targets we still pay one LLM hop (the channel adapter runs an LLM), but pin it
-// to a verbatim relay so the raw alert passes through unrewritten. Drops away once OpenClaw exposes
-// a raw channel-send API.
+// deliver:true still costs one LLM hop (the channel adapter runs an LLM); pin it to a verbatim
+// relay so the raw alert passes through unrewritten.
 const RELAY_PROMPT =
   "You are a message relay. Output the user's message verbatim — no rewriting, no additions, no questions.";
 
 /**
- * OpenClaw AlertSink: routes each alert to the configured targets for its monitor.
- * - `deliver:false` (agent main session) → raw FS-append, zero LLM.
- * - `deliver:true`  (channel-bound session, e.g. Feishu) → subagent.run with a verbatim relay prompt.
+ * OpenClaw AlertSink: routes each alert to its monitor's configured targets.
  *
- * Idempotent per `alert.id` (the SDK guarantees at-least-once): the FS-append is naturally
- * idempotent-enough for a demo feed, and the `deliver:true` path passes an idempotencyKey so the
- * gateway suppresses a duplicate run.
+ * `deliver` decides whether to ALSO push to an external channel, not which mechanism is used:
+ * - `deliver:false` → inject the alert turn into the session (appendToSession), zero LLM.
+ * - `deliver:true`  → channel-bound session (e.g. Feishu): `subagent.run` with a verbatim relay.
+ *   That turn both delivers to the channel and records itself in the session, so we do NOT also
+ *   appendToSession (would double-record).
+ *
+ * Idempotent per `alert.id`: appendToSession gets a stable idempotencyKey, and the deliver:true
+ * path passes the same key so the gateway suppresses a duplicate run.
  */
 export function createOpenClawSink(deps: {
   config: PluginConfig;
   logger: Logger;
+  appendToSession: SessionAppender;
   subagent?: SubagentLike;
 }): AlertSink {
-  const { config, logger, subagent } = deps;
+  const { config, logger, appendToSession, subagent } = deps;
 
   return {
     async push({ monitorId, alert }: AlertPayload): Promise<void> {
@@ -77,11 +80,12 @@ export function createOpenClawSink(deps: {
             return;
           }
 
-          const r = appendAlertTurns({
+          const r = await appendToSession({
             agentId: t.agentId,
             sessionKey: t.sessionKey,
             separatorText: separator,
             assistantText: body,
+            idempotencyKey,
             logger,
           });
           if (r.ok) {

@@ -1,30 +1,31 @@
-# Clean OpenClaw — install & uninstall
+# OpenClaw — install & uninstall
 
 Install and uninstall a **plain OpenClaw** — no demo, no plugins, no baked-in models.
-You add your own models yourself — during onboarding (step 3) or later (step 4). Tested on OpenClaw `2026.6.9`.
+You add your own models yourself — during onboarding (step 3) or later (step 4).
 
 ## Install
 
 ### 1. Pre-requisites
+
 ```bash
 # Configure npm previledge
 mkdir -p ~/.npm-global 
-npm config set prefix '~/.npm-global' 
-echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.bashrc
+npm config set prefix '~/.npm-global'
 
 # Node.js >= 24
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
 ```
-> Re-login to make npm previledge effective
+> If you have already met the requirements, please skip this step.
 
 ### 2. CLI
 
 ```bash
 
-npm install -g openclaw
+npm install -g openclaw@2026.7.1
 openclaw --version
 ```
+> This guide is verified against the pinned version `2026.7.1`. To try the latest release instead, run `npm install -g openclaw@latest`.
 
 ### 3. Onboard (creates `~/.openclaw` + the gateway service)
 

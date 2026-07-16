@@ -4,12 +4,12 @@
 
 | # | Module | Owner | Schedule | Status | Notes |
 |---|---|---|---|---|---|
-| 1 | SmartBuilding Video MCP Server | Jiaojiao | WW24–WW28 | In progress | WW24 完成 monorepo + 8 tools + 4 resources + DB + 测试框架 (82/82 pass)；WW25 推 MCP Server 主链路 |
-| 2 | Agent Framework Adapter | Jiaojiao | WW29–WW30 | Not started | 含 wrapper + OpenClaw plugin |
+| 1 | SmartBuilding Video MCP Server | Jiaojiao | WW24–WW28 | Done | WW24 完成 monorepo + 8 tools + 4 resources + DB + 测试框架 (82/82 pass)；WW25 推 MCP Server 主链路；WW27 resource subscription + framework-adapter SDK 全链路（实机自然触发验证）；WW28 keepalive 协议 MCP 侧闭环（与 VSA :8999 联调） |
+| 2 | Agent Framework Adapter | Jiaojiao | WW29–WW30 | In progress (SDK 完成，OpenClaw plugin 有 bug) | wrapper（framework-adapter-sdk）+ OpenClaw example plugin 已随 WW27 subscription 一并交付；**OpenClaw agent 收不到 alert bug（terminal SSE 正常，问题在 adapter sink 投递）** + 干净环境端到端实机 + 运行时动态订阅缺口待办 |
 | 3 | Use Case Adapter | Jie | WW28–WW31 | **In progress (集成测试全 pass)** | wrapper + register new use case + 自定义 post-proc；WW27 提前完成 5 UC adapter；WW28 完成 `smartbuilding_use_case_register` tool + 零重启注册 + Phase 2/3/4 集成测试 |
 | 4 | SmartBuilding Video Skills & Workspace | Jiaojiao | WW31–WW32 | Not started | smartbuilding-toolkit / video-understanding skill 调优 + 3 个 assistant workspace |
 | 5 | Video Stream Analytics Microservice | Jie | WW24–WW27 | **Done (联调集成中)** | 微服务结构、motion + NPU prefilter、动态视频源管理全部完成；顶层 roi block + segment.max_duration 重命名（§24.1）；status webhook 与 MCP 端 events-endpoint 已对齐 |
-| 6 | Multi-level Video Understanding Microservice | Jiaojiao | WW25, WW27 | Not started | Caption only + Dynamic Task |
+| 6 | Multi-level Video Understanding Microservice | Jiaojiao | WW25, WW27 | **Done** | Caption only + Dynamic Task 全部完成 |
 | 7 | Integration & Documents | Jiaojiao + Jie + Zhonghua | WW31–WW32 | Not started | 联调 + bug fix + E2E validation + 用户文档 |
 
 ---
@@ -20,15 +20,16 @@
 |---|------|--------|----------|--------|
 | 1 | MCP Server structure dev | 2W | WW24–WW25 | Done |
 | 2 | TypeScript library (tools) | 1W | WW26 | Done |
-| 3 | MCP resource subscription | 1W | WW27 | In progress (alert subscription pending) |
+| 3 | MCP resource subscription | 1W | WW27 | Done (Phase A–F：registry + cursor + subscribe + onAlert 广播 + framework-adapter SDK + OpenClaw example + docs；对真实实例自然触发 3 alert → SSE → since 游标增量全链路验证，见 [mcp_subscription_status.md](mcp_subscription_status.md)。剩 OpenClaw 端到端实机 + 运行时动态订阅缺口) |
 | 4 | Support DB schema customization | 1W | WW28 | Done (delivered together with WW26 use_case_dict refactor) |
+| 4b | Keepalive 协议 MCP 侧闭环（与 VSA 联调，WW28 计划外补齐） | — | WW28 | Done (register 注入 pipeline.keepalive 武装 watchdog + heartbeat loop；见下方 Tracing) |
 
 ## Agent Framework Adapter
 
 | # | Task | Effort | Schedule | Status |
 |---|------|--------|----------|--------|
-| 5 | Agent framework adapter wrapper | 1W | WW29 | Not started |
-| 6 | OpenClaw adapter: plugin | 1W | WW30 | Not started |
+| 5 | Agent framework adapter wrapper | 1W | WW29 | Done (提前，WW27) — `packages/framework-adapter-sdk`：通用 MCP client（subscribe / cursor dedup / per-monitor 保序 / 断连重连 / poll fallback），7 单测全绿 |
+| 6 | OpenClaw adapter: plugin | 1W | WW30 | **In progress（参考实现完成，实机有 bug）** — `framework-adapter-sdk/examples/openclaw` plugin（sink FS-append / channel deliver + install.sh + 硬拷贝 personas）。**已知 bug：OpenClaw agent 收不到 alert；terminal 长连 SSE 能收到订阅的 alert → MCP server 订阅/推送正常，问题在 adapter sink → OpenClaw session 投递路径（sink.ts / session-append.ts）** |
 
 ## SmartBuilding Video Skills and Agent Workspace
 
@@ -41,8 +42,8 @@
 
 | # | Task | Effort | Schedule | Status |
 |---|------|--------|----------|--------|
-| 9 | Caption only | 1W | WW25 | Not started |
-| 10 | Dynamic Task | 1W | WW27 | Not started |
+| 9 | Caption only | 1W | WW25 | Done |
+| 10 | Dynamic Task | 1W | WW27 | Done |
 
 ## Integration & Documents
 
@@ -197,8 +198,20 @@
 
 **Monitor ctl integration with videostream-analytics wrapper（与 Jie 联调）**
 
-- [ ] 接口清单核对: docs/implements/monitor-ctl-analytics-integration.md
-- [ ] 端到端集成测试：webhook → pending task → multilevel-video-understanding → rule eval (含 Python override) → alert → MCP notification
+- [x] 接口清单核对: [monitor-ctl-analytics-integration.md](../implements/monitor-ctl-analytics-integration.md) —— 全部端点对齐；唯一遗留 keepalive 协议已在 WW28 闭环（见下）
+- [x] 端到端集成测试：webhook → pending task → multilevel-video-understanding → rule eval (含 Python override) → alert → MCP notification
+
+### Done (WW28) — Keepalive 协议 MCP 侧闭环（与 Jie 联调）
+
+VSA 侧 keepalive endpoint（`POST /sources/{id}/keepalive`）+ watchdog 已部署上线（:8999）。MCP 侧此前只有两个 `[TODO]`：注册未带 keepalive config、活跃期无定时心跳。本周补齐，[monitor-ctl-analytics-integration.md §6](../implements/monitor-ctl-analytics-integration.md) 从 `[TODO: analytics-side]` 改为"已实现"。
+
+- [x] **注册时武装 watchdog**：`register_source` 在 analytics `POST /register_source` 的 `pipeline.keepalive` 注入 `{enabled, timeout_seconds, check_interval_seconds}`（VSA 默认 `enabled=false`，不注入则 watchdog 不生效）。注入逻辑在 [monitor-ctl.ts `analyticsRegister`](../../packages/tools/src/monitor-ctl.ts)；monitor 自带 `pipeline_config.keepalive` 时以其为准（per-monitor override）。两条注册路径——`smartbuilding_monitor_ctl` 直接调用（[tools.ts](../../packages/mcp-server/src/tools.ts)）+ `monitors_compose`/`autoRegisterMonitors`（[monitor-bootstrap.ts](../../packages/mcp-server/src/monitor-bootstrap.ts)）——均从 config 注入。
+- [x] **心跳发送 loop**：新增 [keepalive-sender.ts `startKeepaliveSender`](../../packages/mcp-server/src/keepalive-sender.ts)，`index.ts` 每 `interval_ms` 对 DB `status=online` 的 monitor POST keepalive；失败静默 debug log；shutdown `stopKeepalive()` 清理（对齐 `startStorageCleaner` 模式）。
+- [x] **配置**：`config.yaml` 顶层 `keepalive` 块（`enabled` 默认 true / `interval_ms` 30s / `timeout_seconds` 90s / `check_interval_seconds` 10s）；`config.ts` ServerConfig 加 `keepalive` + loadConfig 默认值。`enabled: false` 时既不注入 watchdog 也不启动 loop。
+- [x] **文档**：§6 改"已实现"并**修正 endpoint GET→POST**（早期约定写错，实际服务是 POST）+ §5 端点表补 keepalive 行；`videostream_analytics_api.md` Appendix A "Keepalive sender loop" 行由"not yet wired"改为 aligned。
+- [x] build 通过（`npm run build`）；对 :8999 实测 `/health` ok + `POST /sources/__nope__/keepalive` → 404（endpoint live）。
+- [x] 端到端（待实机 monitor 跑起）：注册后观察 `last_keepalive_at` 随心跳刷新；停心跳 > 90s 后 watchdog 自动 pause。
+- [ ] **已知缺口**：VSA watchdog pause 是 terminal，MCP DB 仍显示 `online` 且不会自动 resume；当前无对账检测 VSA 侧被动 pause，恢复需手动 `start`/`register_source`。是否加 reconcile 检测待与 Jie 讨论。
 
 ---
 

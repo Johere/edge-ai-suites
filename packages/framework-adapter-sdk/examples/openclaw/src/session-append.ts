@@ -3,23 +3,15 @@ import path from "node:path";
 import os from "node:os";
 import { randomBytes } from "node:crypto";
 import type { Logger } from "@smartbuilding-video/framework-adapter-sdk";
+import type { AppendResult, InjectParams } from "./inject-types.js";
 
 /**
- * Raw session append for OpenClaw — vendored from the smarthome-video plugin
- * (`src/session-delete.ts::appendAlertGroupToMainSession`).
+ * Fallback session append using plain node fs (no `openclaw` import), used when the transcript API
+ * in `session-inject.ts` is unavailable.
  *
- * TODO(migrate): OpenClaw v2026.6.9 exposes no first-class "raw session append" API.
- * `api.runtime.subagent.run` always drives an LLM; the lower-level `patchSessionEntry`
- * is not surfaced through the plugin SDK. So — like smarthome-video in production — we
- * append directly to the agent's session JSONL. When OpenClaw ships an official
- * `api.runtime.session.append(sessionKey, message)`, replace the appendFileSync() below
- * with that call. This is the current raw-append fact-path, not a workaround to hide.
- *
- * Why BOTH a user line and an assistant line (neither produced by an LLM):
- *   ControlUI groups consecutive same-role messages into one visual block whose header
- *   shows the FIRST message's timestamp. Appending only assistant lines would glue every
- *   alert to the previous group and freeze the displayed time. A one-line user "separator"
- *   breaks the group and stays readable at a glance.
+ * Writes BOTH a user line and an assistant line (neither from an LLM): ControlUI groups consecutive
+ * same-role messages into one block stamped with the first message's time, so a one-line user
+ * separator keeps each alert visually distinct.
  */
 
 function openclawHome(): string {
@@ -97,7 +89,14 @@ function resolveOrCreateSessionId(
     return null;
   }
 
-  store[sessionKey] = { ...(mainEntry as SessionEntry), sessionId: newSid, updatedAt: Date.now() };
+  // Clone :main for a provisioned-looking entry, but pin sessionId AND sessionFile to the new
+  // session — else the clone inherits :main's sessionFile, which the transcript API would follow.
+  store[sessionKey] = {
+    ...(mainEntry as SessionEntry),
+    sessionId: newSid,
+    sessionFile: newJsonl,
+    updatedAt: Date.now(),
+  };
   if (!writeSessionsJsonAtomic(storePath, store)) {
     logger.warn(`[sb-alerts] failed to write sessions.json for ${sessionKey}`);
     return null;
@@ -110,26 +109,11 @@ function shortId(bytes = 4): string {
   return randomBytes(bytes).toString("hex");
 }
 
-export interface AppendResult {
-  ok: boolean;
-  sessionKey: string;
-  sessionId?: string;
-  reason?: string;
-}
-
 /**
- * Append an alert turn — a short user separator + the raw alert text as an assistant reply —
- * to an agent's session JSONL. Both lines are synthesized by this plugin; zero LLM.
+ * Append an alert turn (user separator + raw alert as assistant reply) to an agent's session JSONL.
+ * `idempotencyKey` is accepted for signature parity with session-inject.ts but ignored here.
  */
-export function appendAlertTurns(params: {
-  agentId: string;
-  /** Defaults to `agent:<agentId>:main`. */
-  sessionKey?: string;
-  separatorText: string;
-  assistantText: string;
-  model?: string;
-  logger: Logger;
-}): AppendResult {
+export function appendAlertTurns(params: InjectParams): AppendResult {
   const { agentId, separatorText, assistantText, model, logger } = params;
   const sessionKey = params.sessionKey ?? `agent:${agentId}:main`;
 
@@ -137,7 +121,16 @@ export function appendAlertTurns(params: {
   if (!sid) return { ok: false, sessionKey, reason: `sessionId not found / could not mint for ${sessionKey}` };
 
   const jsonlPath = sessionJsonlPath(agentId, sid);
-  if (!fs.existsSync(jsonlPath)) return { ok: false, sessionKey, reason: `jsonl missing: ${jsonlPath}` };
+  // Recreate the transcript file if missing (e.g. sid from an existing entry whose jsonl was swept)
+  // instead of failing. lastId then stays null and this alert becomes the first turn.
+  if (!fs.existsSync(jsonlPath)) {
+    try {
+      fs.writeFileSync(jsonlPath, "", "utf-8");
+      logger.info(`[sb-alerts] recreated missing jsonl for ${sessionKey} (sid=${sid})`);
+    } catch (err) {
+      return { ok: false, sessionKey, reason: `jsonl missing and recreate failed: ${jsonlPath}: ${err}` };
+    }
+  }
 
   // parentId chains to the last message so ControlUI's tree stays connected.
   let lastId: string | null = null;
