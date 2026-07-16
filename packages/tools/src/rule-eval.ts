@@ -4,15 +4,15 @@ import { evaluateWithOverride } from "./rule-engine/index.js";
 
 /**
  * Configuration slice needed by `ruleEval`. The tool must be able to look up
- * `evaluate_rules_path` and `rules` for the monitor's use case — the same
- * data path used by TaskPoller.
+ * `evaluate_rules_path` for the monitor's use case — the same data path used
+ * by TaskPoller.
  */
 export interface RuleEvalDeps {
   useCaseDict: Record<
     string,
     {
       evaluate_rules_path?: string;
-      rules?: Record<string, unknown>;
+      adapter_config?: Record<string, unknown>;
     }
   >;
   /**
@@ -32,9 +32,8 @@ export interface RuleEvalParams {
    */
   task_id?: number;
   /**
-   * If true and the evaluator returns `shouldAlert`, insert a new alert row.
-   * The row is always written; cooldown (when configured) only sets
-   * `notified=false` on it. Default `false` — dry-run (no row).
+    * If true and the evaluator returns `shouldAlert`, insert a new alert row.
+    * Default `false` — dry-run (no row).
    */
   create_alert?: boolean;
 }
@@ -46,17 +45,13 @@ export interface RuleEvalResult {
   rule_result: RuleResult;
   alert_created?: boolean;
   alert_id?: number;
-  /** true = the alert's notification would be broadcast; false = cooled down (row still written). */
-  notified?: boolean;
-  suppressed_by_cooldown?: boolean;
 }
 
 /**
  * Manual rule-engine re-evaluation for an already-completed task.
  *
  * Rebuilds the same `RuleContext` `TaskPoller` would have used (fields parsed
- * from the stored `summary_text` plus `payload.rules` from the use-case
- * config) and runs `evaluateWithOverride`. Useful for:
+ * from the stored `summary_text`) and runs `evaluateWithOverride`. Useful for:
  *
  *   - Debugging why a task did or did not produce an alert.
  *   - Re-running the evaluator after editing an override script.
@@ -120,12 +115,11 @@ export async function ruleEval(
     summaryText: task.summaryText ?? "",
     payload: {
       fields,
-      rules: useCaseCfg?.rules ?? {},
     },
   };
 
   const overridePath = useCaseCfg?.evaluate_rules_path ?? null;
-  const ruleResult = await evaluateWithOverride(ruleCtx, overridePath);
+  const ruleResult = await evaluateWithOverride(ruleCtx, overridePath, useCaseCfg?.adapter_config ?? {});
 
   const out: RuleEvalResult = {
     monitor_id: params.monitor_id,
@@ -138,25 +132,15 @@ export async function ruleEval(
     return out;
   }
 
-  // Cooldown parity with task-poller: the alert row is ALWAYS written (audit);
-  // cooldown only decides whether it counts as a delivered notification.
-  const cooldownSec = Number((useCaseCfg?.rules as any)?.cooldownSeconds ?? 0);
-  let notified = true;
-  if (cooldownSec > 0 && db.latestAlertWithin(params.monitor_id, useCase, cooldownSec)) {
-    notified = false;
-  }
-
   const alert = db.createAlert({
     monitorId: params.monitor_id,
     taskId: task.id,
     eventId: task.eventId,
     useCase,
     description: ruleResult.alertMessage,
-    notified,
+    notified: true,
   });
   out.alert_created = true;
   out.alert_id = alert.id;
-  out.notified = notified;
-  out.suppressed_by_cooldown = !notified;
   return out;
 }

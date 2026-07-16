@@ -1,4 +1,6 @@
+import { execFile } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+import { promisify } from "node:util";
 import { parseDocument, isMap } from "yaml";
 import { SchemaManager, type SchemaDefinition, type SchemaExtension } from "@smartbuilding-video/db";
 import type { UseCaseValidateResult } from "./use-case-validate.js";
@@ -10,7 +12,7 @@ export interface UseCaseRegisterParams {
   video_summary_task?: string;
   description?: string;
   evaluate_rules_path?: string;
-  rules?: Record<string, unknown>;
+  adapter_config?: Record<string, unknown>;
   reports?: Record<string, unknown>;
   summarize?: Record<string, unknown>;
   prompt_text?: string;
@@ -62,6 +64,7 @@ const VLM_BUILTIN_TASKS = new Set([
   "summary",
   "summary_zh",
 ]);
+const execFileAsync = promisify(execFile);
 
 export async function useCaseRegister(
   params: UseCaseRegisterParams,
@@ -150,12 +153,24 @@ export async function useCaseRegister(
     );
   }
 
+  if (params.evaluate_rules_path) {
+    const error = await validateEvaluateRulesOverride(
+      params.use_case,
+      params.evaluate_rules_path,
+      params.adapter_config ?? {},
+    );
+    if (error) {
+      result.errors.push(error);
+      return result;
+    }
+  }
+
   const entry: any = {
     video_summary_task: taskName,
   };
   if (params.description !== undefined) entry.description = params.description;
   if (params.evaluate_rules_path !== undefined) entry.evaluate_rules_path = params.evaluate_rules_path;
-  if (params.rules !== undefined) entry.rules = params.rules;
+  if (params.adapter_config !== undefined) entry.adapter_config = params.adapter_config;
   if (params.reports !== undefined) entry.reports = params.reports;
   if (params.summarize !== undefined) entry.summarize = params.summarize;
 
@@ -191,6 +206,38 @@ export async function useCaseRegister(
 
   result.ok = result.errors.length === 0;
   return result;
+}
+
+async function validateEvaluateRulesOverride(
+  useCase: string,
+  overridePath: string,
+  adapterConfig: Record<string, unknown>,
+): Promise<string | null> {
+  const smokeFields = {
+    severity: "info",
+    event: "no_incident",
+    desc: "validation smoke",
+  };
+
+  try {
+    const { stdout } = await execFileAsync("python3", [
+      overridePath,
+      JSON.stringify(smokeFields),
+      JSON.stringify(adapterConfig),
+    ], { timeout: 10_000 });
+    const text = stdout.trim();
+    const parsed = text ? JSON.parse(text) : null;
+    if (parsed === null) return null;
+    if (!parsed || typeof parsed !== "object") {
+      return `evaluate_rules_path "${overridePath}" must print JSON object or null`;
+    }
+    if (typeof parsed.alertType !== "string" || typeof parsed.severity !== "string") {
+      return `evaluate_rules_path "${overridePath}" must return {alertType, severity, description?} or null`;
+    }
+    return null;
+  } catch (err: any) {
+    return `evaluate_rules_path "${overridePath}" failed smoke test: ${err.message}`;
+  }
 }
 
 async function unregister(

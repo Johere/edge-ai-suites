@@ -38,15 +38,10 @@ export interface UseCaseConfig {
   video_summary_task: string;
   /** Optional path to Python override script for rule evaluation. */
   evaluate_rules_path?: string;
+  /** Optional config passed to evaluate_rules.py as argv[2]. Not used by defaultRuleEvaluator. */
+  adapter_config?: Record<string, unknown>;
   /** Optional per-clip summarization tuning (see SummarizeConfig). */
   summarize?: SummarizeConfig;
-  /**
-   * Per-use-case rules block, passed verbatim to the Python override at
-   * `RuleContext.payload.rules`. Free-form because different use cases carry
-   * different keys (child_safety: severityThreshold; elder_wakeup:
-   * expectedWakeupLocal / graceMinutes; etc.).
-   */
-  rules?: Record<string, unknown>;
   /** Optional default report configuration consumed by smartbuilding_generate_report. */
   reports?: {
     data_source: "events" | "alerts" | "video_summary_tasks";

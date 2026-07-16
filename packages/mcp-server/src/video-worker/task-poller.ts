@@ -117,42 +117,20 @@ export class TaskPoller {
         summaryText: result.summary ?? "",
         payload: {
           fields: parsed.fields,
-          rules: useCaseCfg?.rules ?? {},
         },
       };
-      const ruleResult = await evaluateWithOverride(ruleCtx, overridePath);
+      const ruleResult = await evaluateWithOverride(ruleCtx, overridePath, useCaseCfg?.adapter_config ?? {});
 
       if (ruleResult.shouldAlert) {
-        // Cooldown suppresses the user-facing NOTIFICATION only — the alert row
-        // is ALWAYS written for a full audit trail. `rules.cooldownSeconds` is
-        // honoured for the built-in evaluator and — by convention — read by
-        // Python overrides. A missing / zero / negative value disables cooldown.
-        // The window anchors on the most recent *notified* alert, so cooled-down
-        // rows (notified=0) never extend it → at most one notification per
-        // (monitor, use_case) per cooldown window.
-        const cooldownSec = Number((useCaseCfg?.rules as any)?.cooldownSeconds ?? 0);
-        let notified = true;
-        if (cooldownSec > 0) {
-          const recent = this.db.latestAlertWithin(monitorId, useCase, cooldownSec);
-          if (recent) {
-            notified = false;
-            logger.debug(
-              `[task-poller] cooldown suppressed NOTIFICATION (audit row still written) for ` +
-              `${monitorId}/${useCase} (previous notified alert id=${recent.id} at ${recent.createdAt}, ` +
-              `cooldown=${cooldownSec}s)`,
-            );
-          }
-        }
-
         this.db.createAlert({
           monitorId,
           taskId: task.id,
           eventId: task.eventId,
           useCase,
           description: ruleResult.alertMessage,
-          notified,
+          notified: true,
         });
-        if (notified && this.onAlert) {
+        if (this.onAlert) {
           this.onAlert(monitorId);
         }
       }
