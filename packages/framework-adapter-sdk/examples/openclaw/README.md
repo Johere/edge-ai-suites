@@ -107,10 +107,7 @@ This runs on the host in the background — continue in the same terminal.
 
 ```bash
 cd videostream-analytics
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[npu,dev]"
-videostream-analytics serve --config config/config.yaml   # first edit the OpenVINO model path in the config
+docker compose -f docker/docker-compose.yaml up -d  # first edit the OpenVINO model path in the config
 ```
 
 This runs on the host in the foreground — open **another terminal** to continue with the next step.
