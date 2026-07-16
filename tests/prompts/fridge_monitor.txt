@@ -1,4 +1,4 @@
-"""Dynamic task registration content for fridge_monitor_en (English).
+"""Dynamic task registration content for fridge_monitor (English).
 
 Two execution modes share this single task name:
 

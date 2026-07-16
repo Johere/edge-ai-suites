@@ -13,7 +13,7 @@
 
 | Action | 语义 | 本文档节 |
 |---|---|---|
-| `generate_prompt` | 从 3 个语义输入让 vLLM 生成 `## LOCAL_PROMPT` 骨架（不 mutate 任何状态）| §3 |
+| ~~`generate_prompt`~~ | ⛔ 已移除（2026-07，迁至 `video-summary-prompt-studio` skill）；§3 仅存历史记录 | §3 |
 | `register` | schema ALTER + VLM POST /v1/tasks + inject useCaseDict（可选 `persist=true` 写回 config.yaml）| §4-§6 |
 | `unregister` | 反向清除（可选 `persist=true` 从 config.yaml 删条目）| §10 |
 
@@ -141,9 +141,14 @@ curl -sf -X POST http://localhost:3100/mcp \
 
 ---
 
-## 3. `action=generate_prompt`：让 vLLM 生成 prompt.md 骨架（2026-07-03 晚新增）
+## 3. `action=generate_prompt`：让 vLLM 生成 prompt.md 骨架（2026-07-03 晚新增；⛔ 2026-07 已移除）
 
-**目的**：验证"零 prompt 手工"入口——从 3 个语义输入让 vLLM 生成 `## LOCAL_PROMPT` 骨架，不 mutate 任何状态。
+> **⛔ 本节已过时（历史记录，保留不删）**。`action=generate_prompt` 已从 MCP 移除，
+> prompt 起草改由 `video-summary-prompt-studio` skill（agent + router）承担，落地经
+> `action=register` 的 `prompt_text`。下文命令仅作历史留档，勿再照此调用。理由见
+> [gap-analysis §6.2](./use-case-adapter-gap-analysis.md)。
+
+**目的（历史）**：验证"零 prompt 手工"入口——从 3 个语义输入让 vLLM 生成 `## LOCAL_PROMPT` 骨架，不 mutate 任何状态。
 
 ```bash
 curl -sS -X POST http://localhost:3100/mcp \
@@ -226,7 +231,7 @@ curl -sf -X POST http://localhost:3100/mcp \
 
 先在磁盘上准备 evaluate_rules.py（**这是磁盘 side effect，MCP 不会替你建**）。
 
-**注意**：以下 prompt.md 是**简化占位**（Convention 1 反例，仅示例用）。生产环境用 §3 的 `generate_prompt` + `vim refine` 得到合规版；或参考现有 `use-cases/child_safety/prompt.md` 手写。
+**注意**：以下 prompt.md 是**简化占位**（Convention 1 反例，仅示例用）。生产环境用 `video-summary-prompt-studio` skill（agent + router）起草 + `vim refine` 得到合规版；或参考现有 `use-cases/child_safety/prompt.md` 手写。（§3 的 `generate_prompt` 已移除。）
 
 ```bash
 cd /home/user/jie/smarthome/smart-community
@@ -865,7 +870,7 @@ grep pet_safety_persisted config.yaml.example
 |---|---|---|
 | ~~**重启丢失**~~ | ~~重启 MCP 后 `smartbuilding_use_case_validate use_case=pet_safety` 返回 `unknown use_case`~~ | ✅ **已修**（Plan §27 Step 2）：register 时传 `persist: true` 让 tool 用 yaml Document API 写回 config.yaml；MCP 重启后自动从磁盘加载。见 §5 |
 | ~~**`config.yaml` 不写回**~~ | ~~磁盘上的 config.yaml 永远只有启动时的内容~~ | ✅ **已修**（Plan §27 Step 2）：`persist: true` 参数上线 |
-| ~~**`prompt.md` 需手写**~~ | ~~Tool 不生成 prompt，用户从空白起步~~ | ✅ **已缓解**（Plan §29）：`action=generate_prompt` 让 vLLM 从 3 个语义输入生成骨架，见 §3；用户仍需 refine 业务边界（Convention 3），human-in-the-loop 设计 |
+| **`prompt.md` 需手写** | Tool 不生成 prompt | ⛔ 早期 `action=generate_prompt`（Plan §29）已于 2026-07 移除；prompt 起草改由 `video-summary-prompt-studio` skill（agent + router）承担，落地经 `action=register` 的 `prompt_text`。见 [gap-analysis §6.2](./use-case-adapter-gap-analysis.md) |
 | **`evaluate_rules.py` 需手写** | Tool 不生成 Python 脚本，只登记路径 | ✅ **已缓解**（Plan §27 Step 1）：`defaultRuleEvaluator` 加 4 keys（`requireEvent` / `requireDirection` / `excludeZones` / `alertMessageExtraField`）后，简单 UC 完全用 rules dict 表达，**无需 evaluate_rules.py**。见 §4 结尾的"替代方案" |
 | **schema 列不能撤销** | `unregister` 保留 `pet_zone` 列 | 手动 `ALTER TABLE ... DROP COLUMN`（sqlite 3.35+） |
 | **prompt_text 换行处理** | Markdown 里含 `'''` 会污染 Python 源码字符串 | 目前用 `'''` 作 heredoc；如 prompt 里有三单引号需要人工 escape。P3 改用 `"""` + smart quoting |

@@ -390,15 +390,15 @@ schema extension 列被剥离**。修复：rule_eval **直接查 raw SQLite row*
 
 | 建议 | 状态 | 落地位置 |
 |---|---|---|
-| #2 `smartbuilding_prompt_lint` tool | ✅ **已完成 core** — lint 已抽成 [prompt-lint.ts](../../packages/tools/src/prompt-lint.ts)，`generate_prompt` 复用同一检查并返回结构化 `lint`；MCP 暴露独立 `smartbuilding_prompt_lint`，覆盖 `LOCAL_PROMPT` / code fence / pipe enum / missing event / required schema field / `<think>`；contract test 见 [test_prompt_lint.py](../../tests/dev-mcp-server/test_prompt_lint.py) | [prompt-lint.ts](../../packages/tools/src/prompt-lint.ts) / [tools.ts](../../packages/mcp-server/src/tools.ts) |
+| #2 `smartbuilding_prompt_lint` tool | ⛔ **已移除（2026-07，迁至 skill）** — lint 曾抽成 `prompt-lint.ts` 并暴露为独立 tool；现已删除，校验规则内联进 `video-summary-prompt-studio` skill 的 invariant（见 [gap-analysis §6.2](./use-case-adapter-gap-analysis.md)） | — |
 | #3 `use_case_validate` 支持 dynamic task | ✅ **已完成** —— `useCaseValidate` 里 `GET /v1/tasks/<name>` 对 dynamic 和 builtin 一视同仁；`register` tool 内部第 4 步也调 validate 复核 | [use-case-validate.ts](../../packages/tools/src/use-case-validate.ts) |
 | #4 `parseSummaryFields` 缩进容差 | ✅ **已在 §Round 2 验证过** —— 现有 `^\s*KEY:` 正则容忍前导空白 + 开场白；实际 5 UC 都能 parse |  |
 | #1 v3 prompt 再验证 4s 视频 | 未特意跑 | — |
 
 补充建议（gap-analysis §5 优先级表 P3 项）：
 
-5. **真实 vLLM 对 3 个已实现 UC 做 `generate_prompt` 保真度抽检（dogfood）** —— Plan §29 新加的 autogen 骨架能否覆盖 child_safety / parking_safety / high_altitude_safety 的原 prompt 语义？人肉 diff meta-prompt 生成结果 vs 磁盘上现有 prompt.md
-6. ~~**`smartbuilding_prompt_lint` 独立 tool**~~ —— 已完成 core；后续可补 auto-fix suggestion / 更细 prompt 语义评分
+5. ~~**真实 vLLM 对 3 个已实现 UC 做 `generate_prompt` 保真度抽检（dogfood）**~~ —— autogen 已从 MCP 移除（迁至 `video-summary-prompt-studio` skill）；此保真度抽检随之移到 skill 侧
+6. ~~**`smartbuilding_prompt_lint` 独立 tool**~~ —— 已移除（2026-07，迁至 skill invariant，见 [gap-analysis §6.2](./use-case-adapter-gap-analysis.md)）
 7. **rule_eval `create_alert=true` MCP `resources/updated` broadcast e2e 测试** —— 消除 gap-analysis §5.3 #7 的 "未测"
 
 ---

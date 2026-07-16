@@ -19,13 +19,13 @@
 | **Phase 0** | 清场（可选，重新起环境时用）| 无 | §3 上面的清理命令 |
 | **Phase 1** | 起底层服务（VLM / VSA / MCP / mediamtx）| Docker + NPU（可选）| §3 |
 | **Phase 2** | 基线 U1–U10（3 内置 UC：fridge / child_safety / elder_wakeup + cooldown）| 现有 4 条 loop 视频（已在 demo-videos/）| §5 |
-| **Phase 3** | 零重启动态注册新 use case（`pet_safety` 主例 + `high_altitude` / `parking` 扩展）+ 持久化 + LLM prompt autogen | VLM 服务 + `--config` 启动 MCP + 现有 pet_safety.mp4 / building-throwing-2.mp4 / false-parking.mp4 | §9 |
+| **Phase 3** | 零重启动态注册新 use case（`pet_safety` 主例 + `high_altitude` / `parking` 扩展）+ 持久化 | VLM 服务 + `--config` 启动 MCP + 现有 pet_safety.mp4 / building-throwing-2.mp4 / false-parking.mp4 | §9 |
 
 **每个 use case 从"零"到"跑通"的核心 5 步**（§9 详解）：
 
-1. `smartbuilding_use_case_register action=generate_prompt` —— 提供 event_types + description，让 vLLM 生成 `## LOCAL_PROMPT` 骨架
+1. 用 `video-summary-prompt-studio` skill（agent + router）起草 `## LOCAL_PROMPT` 骨架
 2. 人工 review + refine 骨架，存到 `use-cases/<uc>/prompt.md`
-3. `smartbuilding_use_case_register action=register persist=true` —— 一次搞定 schema ALTER + VLM POST /v1/tasks + inject useCaseDict + 写回 config.yaml
+3. `smartbuilding_use_case_register action=register persist=true` —— 一次搞定 schema ALTER + VLM POST /v1/tasks + inject useCaseDict + 写回 config.yaml（prompt 经 `prompt_text` 传入）
 4. `smartbuilding_monitor_ctl action=register_source` —— 绑一个 RTSP monitor
 5. VSA motion → task-poller → VLM → rule engine → alert，观察 `alerts` 表
 
@@ -36,7 +36,7 @@
 | 零 TypeScript 代码 | ✅ |
 | 零 curl 手工 | ✅（一次 MCP tool call）|
 | 零 YAML 手工 | ✅（`persist: true` 自动写回 config.yaml.example）|
-| 零 prompt 手工 | ✅ 骨架自动生成（`action=generate_prompt` 兑现）+ ⚠️ 用户仍需人工 refine 业务细节（human-in-the-loop 设计）|
+| 零 prompt 手工 | ✅ 骨架由 `video-summary-prompt-studio` skill（agent + router）生成 + ⚠️ 用户仍需人工 refine 业务细节（human-in-the-loop 设计）|
 | 零 Python 手工 | ✅ 简单 UC 完全靠 `rules` dict（`child_safety` / `high_altitude_safety` / `parking_safety` 均无 override）；`fridge` 为无规则 report-only；仅 `elder_wakeup`（时间比较）保留 override |
 
 ---
@@ -119,12 +119,12 @@ groundtruth：[day1_elder_wakeup_groundtruth.srt](../demo-videos/cam_elder_bedro
 
 用 [demo-videos/cam_fridge/demo006-2_expanded_20min_v2.mp4](../demo-videos/cam_fridge/demo006-2_expanded_20min_v2.mp4)（20 分钟 loop，取用/放置行为）。
 
-`fridge` **已不再有 `evaluate_rules.py` stub，也没有 `rules` 块**（见 [config.yaml.example](../config.yaml.example) `use_case_dict.fridge`），因此走内置 `defaultRuleEvaluator`。它的 VLM task `refrigerator_monitor_en` 不产出 `SEVERITY` 行，`defaultRuleEvaluator` 在 severity 缺失时**短路返回 false** —— 这才是 fridge "只报告不告警" 的真实机制。
+`fridge` **已不再有 `evaluate_rules.py` stub，也没有 `rules` 块**（见 [config.yaml.example](../config.yaml.example) `use_case_dict.fridge`），因此走内置 `defaultRuleEvaluator`。它的 VLM task `fridge_monitor` 不产出 `SEVERITY` 行，`defaultRuleEvaluator` 在 severity 缺失时**短路返回 false** —— 这才是 fridge "只报告不告警" 的真实机制。
 
 | ID | 视频行为片段 | Rule 期望 | 覆盖点 |
 |----|-------------|-----------|--------|
 | **FR-normal** | 开冰箱取物 / 放置 | ❌ 不触发（输出无 `SEVERITY` → severity 短路） | 无 severity 短路 |
-| **FR-inject-critical** | 手工 UPDATE DB 塞入 `severity=critical` | ✅ **会触发** `[fridge] <event>: critical — ...` | **关键**：fridge 未声明任何抑制规则，一旦有合格 severity 就走 default 触发；旧版"stub 恒 false"随 stub 移除已消失。要 pin 住不告警需加 `rules`（抬高 `severityThreshold` 或 `excludeEvents`）或重新提供 `evaluate_rules.py` |
+| **FR-inject-critical** | 手工 UPDATE DB 塞入 `severity=critical` | ✅ **会触发** `[fridge] <event>: critical — ...` | **关键**：fridge 未声明任何抑制规则，一旦有合格 severity 就走 default 触发。要 pin 住不告警需加 `rules`（抬高 `severityThreshold` 或 `excludeEvents`）或提供 `evaluate_rules.py` |
 
 groundtruth：[demo006-2_expanded_20min_v2_groundtruth.srt](../demo-videos/cam_fridge/demo006-2_expanded_20min_v2_groundtruth.srt)。
 
@@ -182,19 +182,20 @@ WEBHOOK_URL=http://localhost:3101/events \
 
 ```bash
 # task 注册脚本（省略变量赋值，见 vlm-integration-gsg.md §3.2）
-# 只注册 2 个基线 dynamic task；扩展 UC（pet_safety / high_altitude_safety / parking_safety）
+# 注册 3 个基线 dynamic task；扩展 UC（pet_safety / high_altitude_safety / parking_safety）
 # 的 VLM task 由 §9 的 smartbuilding_use_case_register 自动 POST，无需在此预注册
 for pair in \
+  "fridge:fridge_monitor" \
     "child_safety:child_safety_monitor" \
     "elder_wakeup:elder_wakeup_monitor"; do
     ...
 done
 
-# 校验：应看到 6 builtin + 2 dynamic
+# 校验：应看到 builtin task + 3 baseline dynamic task
 curl -sf http://localhost:8192/v1/tasks | jq '.tasks[].name'
 ```
 
-`fridge` 用内置 task `refrigerator_monitor_en`，不用注册。
+`fridge` 用 dynamic task `fridge_monitor`，需要和 `child_safety_monitor` / `elder_wakeup_monitor` 一起注册。
 
 **T3 — MCP server（含 use case adapter 装载）**
 
@@ -445,7 +446,7 @@ MCP。期望 alerts 无新增。
 
 ### U7. `fridge`：report-only + 无抑制规则
 
-`cam_fridge` loop 推冰箱视频；正常运行期望 alerts 无新增——因为 `refrigerator_monitor_en` 输出不含 `SEVERITY`，`defaultRuleEvaluator` 在 severity 检查处短路（见 §2.3）。
+`cam_fridge` loop 推冰箱视频；正常运行期望 alerts 无新增——因为 `fridge_monitor` 输出不含 `SEVERITY`，`defaultRuleEvaluator` 在 severity 检查处短路（见 §2.3）。
 
 **FR-inject-critical**：手工塞一条带 `severity=critical` 的 task，再 dry-run `smartbuilding_rule_eval`。**注意与旧文档不同**：fridge 已无 stub，此时 `shouldAlert` 会是 **true**——用来印证"fridge 没声明任何抑制规则"这一事实。
 
@@ -706,28 +707,18 @@ override 用 `datetime.now()` 读实时。测试时用**热改 rules**（改 `ex
 
 任一环节断，问题聚焦到那一层，往上游查。
 
-### 8.6 prompt lint 校验项 & 独立预检（`smartbuilding_prompt_lint`）
+### 8.6 prompt.md 编写自查项
 
-`generate_prompt`（§9.3 步骤 A0）的返回体里已内嵌一份 `lint` 结果，正常流程**无需额外操作**。以下两种情况才用到本节。
+prompt 由 `video-summary-prompt-studio` skill（agent + router）起草，skill 已把下列校验作为
+**invariant** 内联，起草/POST 前自动自查；手写 `prompt.md` 时也照此对照。服务端 `POST /v1/tasks`
+还会对缺失 anchor 返回 422 + 参考模板兜底。
 
-**读懂 `lint.warnings`**——常见告警项及处理：
-
-| warning | 含义 | 处理 |
+| 问题 | 含义 | 处理 |
 |---|---|---|
-| `contains triple-backtick code fence` | vLLM 输出里有 ```，会被 `/v1/tasks` 拒收 | **必须**手工删掉 code fence |
-| `contains A \| B \| C pipe-separated enum` | 小 VLM 可能照抄 pipe 枚举 | **建议**手工 refine 成逐行取值范围 |
-| `event names missing` | 某些 event 没进 prompt | **必须**补上遗漏的 event |
-
-**独立严格预检**——对 LLM 生成稿或手写 `prompt.md` 单独跑一次（`strict=true` 时 warning 也会让 `ok=false`）：
-
-```bash
-PROMPT_TEXT=$(cat use-cases/pet_safety/prompt.md)
-mcp_call smartbuilding_prompt_lint "$(jq -n --arg prompt "$PROMPT_TEXT" \
-  '{prompt_text:$prompt, strict:true,
-    event_types:[{name:"pet_stuck"},{name:"pet_escape"},{name:"pet_normal"},{name:"no_incident"}],
-    schema_extensions:[{name:"pet_zone",required:false}]}')" \
-  | jq '.result.content[0].text | fromjson'
-```
+| 三反引号 code fence | prompt 里有 ```，会被 `/v1/tasks` 拒收（`banned_token`） | **必须**删掉 code fence |
+| `A \| B \| C` pipe 枚举 | 小 VLM 可能照抄 pipe 枚举 | **建议** refine 成逐行取值范围 |
+| event 名遗漏 | 某些 event 没进 prompt | **必须**补上遗漏的 event |
+| anchor 大小写 / 必填 placeholder 缺失 | `LOCAL_PROMPT` 等锚点大小写敏感；`{st_tm}` 等占位符必填 | 按 skill invariant 表对照修正 |
 
 ---
 
@@ -749,12 +740,11 @@ mcp_call smartbuilding_prompt_lint "$(jq -n --arg prompt "$PROMPT_TEXT" \
 1. **MediaMTX + 推流**：`cd demo-videos && ./start-streams.sh`（脚本自起 mediamtx，配置在 `videostream-analytics/tools/mediamtx.yml`）。pet 视频可另行 `ffmpeg -nostdin -re -stream_loop -1 -i demo-videos/cam_pet/pet_safety.mp4 -c copy -f rtsp rtsp://localhost:8554/live/pet </dev/null &`（放到 Phase 4 推也行；`-nostdin` 必加，否则后台 ffmpeg 被 SIGTTIN 挂起 → RTSP 404）。
 2. **VSA `:8999`**：本地 `cd videostream-analytics && .venv/bin/videostream-analytics serve --config config/config.yaml`，或 `docker compose -f videostream-analytics/docker/docker-compose.yaml up -d`。
 3. **VLM stack**：`cd docker/video-summary && source set_env.sh && docker compose -f compose.yaml up -d` → vLLM `:41091` + multilevel `:8192`，等 healthy。
-   - ⚠️ 目录是 **`docker/video-summary/`**、compose 文件是 **`compose.yaml`**（不是 `docker/multilevel-video-understanding/` / `docker-compose.yaml`）。
+   - ⚠️ 目录是 **`docker/video-summary/`**、compose 文件是 **`compose.yaml`**。
 4. **MCP `:3100`+`:3101`**：`node packages/mcp-server/dist/index.js --http --config config.yaml.example --monitors monitors.yaml.example`。
-   - 当前 [monitors.yaml.example](../monitors.yaml.example) 只含 4 个基线 monitor（`cam_fridge` / `cam_child` / `cam_elder_bedroom` / `cam_elder_bedroom_2`），已无 high_altitude / parking。只要这 4 条流都在推（§3.1 已验证），带 `--monitors monitors.yaml.example` 启动即可，不会有 RTSP 噪声。
+   - 当前 [monitors.yaml.example](../monitors.yaml.example) 只含 4 个基线 monitor（`cam_fridge` / `cam_child` / `cam_elder_bedroom` / `cam_elder_bedroom_2`。只要这 4 条流都在推（§3.1 已验证），带 `--monitors monitors.yaml.example` 启动即可，不会有 RTSP 噪声。
    - ⚠️ 若只想单验 pet_safety、又不想拉起这 4 个基线 monitor，可省略 `--monitors`（启动后只靠 §9.3 步骤 B 动态注册 `cam_pet`）；`cam_pet` **不要**写进 `monitors.yaml.example`，否则未 persist use case 时重启会因 unknown use_case 退出（见 §9.4）。
    - ⚠️ config.yaml.example 里**没有预置** pet_safety（只有 fridge/child_safety/elder_wakeup）——它靠 Phase 2 的 `register persist:true` 动态写入。
-   - ⚠️ `vlm_service.model` 必须等于 `curl :41091/v1/models` 返回的真实模型名（当前为 `Qwen/Qwen3.5-35B-A3B`，config.yaml.example 已对齐），否则 `generate_prompt` 报 `The model default does not exist`。
 
 #### Phase 1 — 素材（仓库已备好，无需生成）
 
@@ -762,7 +752,7 @@ mcp_call smartbuilding_prompt_lint "$(jq -n --arg prompt "$PROMPT_TEXT" \
 
 #### Phase 2 —（可选）生成 prompt 骨架 + 零重启注册
 
-- **（可选，§9.3 步骤 A0）`action=generate_prompt`**：给 description + event_types(+schema_extensions)，vLLM 生成 `## LOCAL_PROMPT` 骨架，不 mutate 任何状态；存到 `use-cases/pet_safety/prompt.md` 后人工 refine。返回体已带 `lint`，通常够用；需严格检查再单独跑 `smartbuilding_prompt_lint`（见 §8.6）。不想用可跳过，直接手写 prompt.md。
+- **（可选）起草 prompt 骨架**：用 `video-summary-prompt-studio` skill（agent + router）产出 `## LOCAL_PROMPT` 骨架，存到 `use-cases/pet_safety/prompt.md` 后人工 refine（自查项见 §8.6）。不想用可直接手写 prompt.md。
 - **`action=register`（§9.3 步骤 A）一次干 4 件事**（persist 是可跳过的第 5 件）：
   1. `schema_extensions` → `ALTER TABLE video_summary_tasks ADD COLUMN`（幂等）+ merge 到内存 schema
   2. `prompt_text` → POST `/v1/tasks`（409 自动 PATCH）
@@ -825,9 +815,9 @@ MCP server 启动时把 `config.yaml` 的 `use_case_dict` 一次性快照到 `Se
 
 **当 `persist: true`** 时，register 和 unregister 都会用 yaml `Document` API 把改动**写回 `--config` 指定的 config.yaml 文件**（注释和字段顺序保留）—— MCP 重启后仍在，不再是 in-memory-only。
 
-**`action=generate_prompt`**（本节主打）：**不 mutate 任何状态**，仅调 vLLM 生成 `## LOCAL_PROMPT` 骨架并返回；返回里包含结构化 `lint` 结果。用户 review + refine 后再走 `action=register`。设计为 human-in-the-loop，兑现 Design §5.2 Step 3 "LLM 生成 VIDEO_SUMMARY prompt"。
-
-**`smartbuilding_prompt_lint`**：独立 prompt 预检工具，可用于 LLM 生成稿或手写 `prompt.md`。它静态检查 `## LOCAL_PROMPT` 段、markdown code fence、`A | B | C` pipe enum、遗漏 event、遗漏 required schema field、残留 `<think>` 等问题；`strict=true` 时 warning 也会让 `ok=false`。
+**prompt 起草**：Design §5.2 Step 3 "LLM 生成 VIDEO_SUMMARY prompt" 由 `video-summary-prompt-studio`
+skill（agent + router）承担——agent 起草 `## LOCAL_PROMPT`，用户 review + refine 后经 `action=register`
+的 `prompt_text` 落地。prompt 静态校验规则内联在 skill invariant 里（见 §8.6）。
 
 ### 9.3 零代码 + 零重启操作步骤（`pet_safety` 实测例子）
 
@@ -841,57 +831,23 @@ MCP server 启动时把 `config.yaml` 的 `use_case_dict` 一次性快照到 `Se
 4. 启动 MCP：`node packages/mcp-server/dist/index.js --http --config config.yaml.example`
 5. 用 `smartbuilding_monitor_ctl register_source` 动态注册 `cam_pet`
 
-**vLLM 模型名必须与服务端一致**。`generate_prompt` 走 MCP 的 `vlm_service`，会调用 `http://localhost:41091/v1/chat/completions`。先查实际模型名：
+#### 步骤 A0 —（推荐）用 `video-summary-prompt-studio` skill 生成 prompt.md 骨架
 
-```bash
-curl -sS http://localhost:41091/v1/models | jq '.data[].id'
-```
+`video-summary-prompt-studio` skill（agent + router 自动选型/回退）负责起草：给 skill "3 个语义输入"
+（use case 名 + 一句描述 + event_types 表 + 可选 schema_extensions），agent 起草遵循 prompt writing
+convention 的 `## LOCAL_PROMPT` 骨架（无 `A | B | C` 枚举、无 code fence、含正/反输出示例），并按 skill
+invariant 自查 anchor/placeholder/banned token。产物存到 `use-cases/pet_safety/prompt.md`。
 
-若返回 `Qwen/Qwen3.5-35B-A3B`，则 [config.yaml.example](../config.yaml.example) 里必须是：
+以 pet_safety 为例，交给 skill 的语义输入：
 
-```yaml
-vlm_service:
-  url: http://localhost:41091/v1
-  model: Qwen/Qwen3.5-35B-A3B
-```
-
-如果仍是 `model: default`，`generate_prompt` 会失败：`The model default does not exist`。改完 config 后要重启 MCP。
-
-#### 步骤 A0 —（推荐）用 `generate_prompt` 生成 prompt.md 骨架
-
-给"3 个语义输入"（use case 名 + 一句描述 + event_types 表 + 可选 schema_extensions），vLLM 生成遵循 4 条 prompt writing convention 的 `## LOCAL_PROMPT` 骨架（无 `A | B | C` 枚举、无 markdown code fence、含正/反输出示例、末尾重复禁令），并在返回体里附带一份内置 `lint` 结果。
-
-一步到位：生成并直接写盘（先按 §3.3 跑过 `mcp_init`）：
-
-```bash
-mkdir -p use-cases/pet_safety
-mcp_call smartbuilding_use_case_register '{
-  "action":"generate_prompt",
-  "use_case":"pet_safety",
-  "description":"监控家里的宠物是否处于危险状态，包括被卡住、困住、异常挣扎、尝试从门窗逃离，以及正常休息玩耍等情况",
-  "event_types":[
-    {"name":"pet_stuck","severity":"critical","desc":"宠物被卡住、困在狭窄处、无法正常移动或明显挣扎"},
-    {"name":"pet_escape","severity":"warn","desc":"宠物尝试从门、窗、栏杆、阳台等位置逃离"},
-    {"name":"pet_normal","severity":"info","desc":"宠物正常休息、玩耍、进食或走动"},
-    {"name":"no_incident","severity":"info","desc":"画面中没有宠物或没有异常事件"}
-  ],
-  "schema_extensions":[{"name":"pet_zone","type":"text","required":false}],
-  "language":"zh"
-}' | jq -r '.result.content[0].text | fromjson | .generated_prompt' \
-  > use-cases/pet_safety/prompt.md
-```
-
-想先**看返回体**（`ok` / `lint` / `next_steps` / 骨架预览）再决定是否落盘，把末段 `jq` 换成：
-
-```bash
-  ... | jq '.result.content[0].text | fromjson | {ok, lint, next_steps, preview: (.generated_prompt|.[0:400])}'
-```
-
-期望 `ok:true`、`lint.ok:true`。**返回体里已带 `lint` 结果，通常无需再单独校验**；只有 `lint` 报 warning、或你想更严格时，才用 `smartbuilding_prompt_lint` 独立预检（校验项清单 + 命令见 §8.6）。
+- **use_case**：`pet_safety`
+- **description**：监控家里的宠物是否处于危险状态（被卡住/困住/异常挣扎/尝试逃离/正常休息玩耍）
+- **event_types**：`pet_stuck`(critical) / `pet_escape`(warn) / `pet_normal`(info) / `no_incident`(info)
+- **schema_extensions**：`pet_zone`(text, 可选)
 
 然后 review `use-cases/pet_safety/prompt.md`，人工 refine 业务边界（例如补充"宠物在门缝里挣扎"、"宠物爬向阳台栏杆"等具体例子）；但不需要从空白手写 prompt。
 
-> **不想用 generate_prompt？** 完全跳过 §A0，直接进 §A（手写 prompt.md）。tool 不强制。
+> **不想用 skill？** 完全跳过 §A0，直接进 §A（手写 prompt.md）。register 只需要 `prompt_text`，不关心 prompt 怎么来的。
 
 #### 步骤 A — 注册 use case（不写 Python override）
 
@@ -993,7 +949,7 @@ mcp_call smartbuilding_monitor_ctl '{
 }' | jq '.result.content[0].text | fromjson'
 ```
 
-**期望输出**：`{ ok: true, monitor_id: "cam_pet", status: "online", ... }`。
+**期望输出**：`{ success: true, monitor_id: "cam_pet", status: "online", ... }`。
 
 约 20-40 秒后应能在 `alerts` 表 / `smartbuilding_alert_query` 里看到 pet_safety 的告警
 （如果视频里有 critical 事件）。
@@ -1010,7 +966,7 @@ sqlite3 "$SMARTBUILDING_DATA_DIR/smartbuilding.db" \
    FROM video_summary_tasks
    WHERE monitor_id='cam_pet'
    ORDER BY id DESC
-   LIMIT 10;"
+   LIMIT 20;"
 ```
 
 期望类似（时间戳为示例）：
@@ -1134,8 +1090,7 @@ mcp_call smartbuilding_use_case_register '{"action":"unregister","use_case":"pet
 
 | Tool | action | 什么时候用 |
 |---|---|---|
-| `smartbuilding_use_case_register` | `generate_prompt` | 从 3 个语义输入（description + event_types + schema_extensions）让 vLLM 生成 `## LOCAL_PROMPT` 骨架；不写盘、不 mutate；human-in-the-loop refine |
-| `smartbuilding_use_case_register` | `register` | 一次搞定：schema ALTER + VLM POST /v1/tasks + inject useCaseDict + 可选 `persist=true` 写回 config.yaml |
+| `smartbuilding_use_case_register` | `register` | 一次搞定：schema ALTER + VLM POST /v1/tasks + inject useCaseDict + 可选 `persist=true` 写回 config.yaml（prompt 经 `prompt_text` 传入）|
 | `smartbuilding_use_case_register` | `unregister` | 反向清除：DELETE /v1/tasks + remove from useCaseDict + 可选 `persist=true` 从 config.yaml 删条目 |
 | `smartbuilding_use_case_validate` | — | 校验现有 use case 的三层（存在 / VLM task 注册 / prompt schema）|
 | `smartbuilding_video_summary_task` | `list` / `get` / `delete` | 直接管理 VLM `/v1/tasks`：list 看全部、get 看单条 4 常量、delete 单条 dynamic |
@@ -1149,7 +1104,7 @@ mcp_call smartbuilding_use_case_register '{"action":"unregister","use_case":"pet
 
 | 层 | 证据 | 结论 |
 |---|---|---|
-| Prompt autogen | `use-cases/pet_safety/prompt.md` 由 `generate_prompt` 生成，并通过 `smartbuilding_prompt_lint` | 零 prompt 从空白手写成立 |
+| Prompt 起草 | `use-cases/pet_safety/prompt.md` 由 `video-summary-prompt-studio` skill（agent + router）生成，skill invariant 自查 | 零 prompt 从空白手写成立 |
 | VLM task | `register` 返回 `vlm_task=registered/updated`，`use_case_validate.valid=true` | 零手工 VLM curl 成立 |
 | Schema | `video_summary_tasks.pet_zone` 可查询，值为 `阳台` | 动态 schema 扩展生效 |
 | Parser | `summaryText` 中 `pet_zone: 阳台` 被写入 DB `pet_zone` 列 | schema-aware parser 生效 |

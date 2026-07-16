@@ -12,7 +12,7 @@
 ## Executive Summary
 
 - **Design §5.1 Implementation Status**: Adapter wrapper 核心能力已完整具备，包括默认 parser/rules 流程和可选 Python 规则回调（`evaluate_rules.py`）。`parse_summary.py` / `on_task_completed.py` 两个 override 已移除（见 §6.3）。
-- **Design §5.2 Implementation Status**: 用例注册全流程已由 MCP 工具编排实现（`register`/`unregister`/`generate_prompt` 及 task 管理）。独立交互式 wizard 形态仍属于待补强项。
+- **Design §5.2 Implementation Status**: 用例注册全流程已由 MCP 工具编排实现（`register`/`unregister` 及 task 管理）。创造性 prompt 编写已从 MCP 层移除（`generate_prompt` action + `prompt_lint` tool 已删），改由 `video-summary-prompt-studio` skill 承担（见 §6.2）。独立交互式 wizard 形态仍属于待补强项。
 - **Design §5.3 Implementation Status**: 后处理主链路（parser/rules/cooldown/alert 写入）功能完整；其中一条 rule_eval 触发广播链路仍需明确 E2E 证据。
 - **Remaining Gaps**: 主要剩余项为设计文档对齐、prompt lint/wizard 产品化，以及自动化与端到端验证覆盖扩展。
 
@@ -34,14 +34,14 @@
 |---|---|---|---|
 | 1 | 向导收集输入（`name/description/event_types`） | Partially Implemented | 输入契约已通过 `smartbuilding_use_case_register` 实现；独立 wizard 交互层仍待补齐。
 | 2 | schema 决策（默认/扩展） | Fully Implemented | `schema_extensions` + `SchemaManager.applySchema` 支持幂等 schema 更新。
-| 3 | LLM 生成 `VIDEO_SUMMARY` prompt | Fully Implemented | `smartbuilding_use_case_register action=generate_prompt` 可基于语义输入生成 `LOCAL_PROMPT` 骨架。
-| 4 | prompt 与 schema 一致性校验 | Fully Implemented | `smartbuilding_use_case_validate` 提供一致性校验，注册流程可联动复核。
+| 3 | LLM 生成 `VIDEO_SUMMARY` prompt | Moved to Skill | 已从 MCP 移除（`generate_prompt` action 删）；改由 `video-summary-prompt-studio` skill（agent + router）起草，落地时经 `use_case_register` 的 `prompt_text` 入参。见 §6.2。
+| 4 | prompt 与 schema 一致性校验 | Fully Implemented | `smartbuilding_use_case_validate` 提供一致性校验，注册流程可联动复核。（`smartbuilding_prompt_lint` 静态校验已删，规则内联进 skill invariant。）
 | 5 | 注册 VLM task | Fully Implemented | 注册流程包含 `POST /v1/tasks`，并处理冲突（`409`）场景。
 | 6 | 创建 DB schema（`ALTER TABLE`） | Fully Implemented | 启动时与运行时路径均支持幂等 schema 应用。
 | 7 | 注册 source（RTSP） | Fully Implemented | `smartbuilding_monitor_ctl register_source` 可用。
 | 8 | 启动/接管 WorkerService | Fully Implemented | source 注册后处理链路可自动接管。
 | 9 | `smartbuilding_db_manager action=register_use_case` | Not Applicable | 当前实现已统一为 `smartbuilding_use_case_register`。
-| 10 | `smartbuilding_video_summary_task action=autogen` | Partially Implemented | prompt 自动生成能力存在于 `smartbuilding_use_case_register action=generate_prompt`，仅命名与设计文本不同。
+| 10 | `smartbuilding_video_summary_task action=autogen` | Moved to Skill | autogen 已从 MCP 移除；prompt 起草改由 `video-summary-prompt-studio` skill（agent + router）承担。见 §6.2。
 
 ### §5.3 Post-processing Callback
 
@@ -81,7 +81,7 @@
 |---|---|---|
 | `smartbuilding_daily_report` | `smartbuilding_generate_report` | 代码中的当前工具名为 `smartbuilding_generate_report`。
 | `smartbuilding_db_manager action=register_use_case` | `smartbuilding_use_case_register action=register` | 注册能力已收敛至 use case register 工具。
-| `smartbuilding_video_summary_task action=autogen` | `smartbuilding_use_case_register action=generate_prompt` | prompt 自动生成能力在 register 工具 action 下提供。
+| `smartbuilding_video_summary_task action=autogen` | （已移除，迁至 skill） | prompt 起草改由 `video-summary-prompt-studio` skill 承担；MCP 不再提供 autogen action。
 | `smartbuilding_video_summary_task action=list/get/delete` | `smartbuilding_video_summary_task action=list/get/delete` | task 清单与生命周期操作能力可用。
 | `smartbuilding_use_case_validate` dynamic 行为 | `smartbuilding_use_case_validate` | 当前实现支持基于 task API 的 dynamic task 校验。
 
@@ -89,7 +89,7 @@
 
 ### Current Tool Set
 
-以 `packages/mcp-server/src/tools.ts` 的 `registerTool(...)` 为准，共 **12** 个：
+以 `packages/mcp-server/src/tools.ts` 的 `registerTool(...)` 为准，共 **11** 个：
 
 ```text
 smartbuilding_alert_query
@@ -101,27 +101,28 @@ smartbuilding_monitors_compose
 smartbuilding_video_db
 smartbuilding_use_case_validate
 smartbuilding_use_case_register
-smartbuilding_prompt_lint
 smartbuilding_video_summary_task
 smartbuilding_rule_eval
 ```
 
 > 变更记录：
 > - `smartbuilding_state_query` 已移除（`monitor_state` 存储回退，见下方 §6）。
-> - **待 review（jiaojiao 反馈）**：`smartbuilding_prompt_lint` / `smartbuilding_video_summary_task` /
->   `smartbuilding_use_case_register action=generate_prompt` 建议迁移为面向 multilevel-video-understanding
->   的 **skill**（agent + router 生成），而非 MCP tool；`smartbuilding_rule_eval` 保留为调试工具。
+> - **`smartbuilding_prompt_lint` 已移除**（tool + `prompt-lint.ts` + `test_prompt_lint.py`），
+>   **`smartbuilding_use_case_register action=generate_prompt` 已移除**（连带 `prompt-autogen.ts`）。
+>   两者的创造性 prompt 编写职责改由兄弟仓的 `video-summary-prompt-studio` skill（agent + router）承担，
+>   见 §6.2。`smartbuilding_video_summary_task`（`/v1/tasks` 的 list/get/delete 确定性原语）**保留**；
+>   `smartbuilding_rule_eval` 保留为调试工具。
 
 ### Design Names Requiring Alignment
 
 - `smartbuilding_daily_report` -> 建议改为 `smartbuilding_generate_report`。
 - `smartbuilding_db_manager action=register_use_case` -> 建议改为 `smartbuilding_use_case_register action=register`。
-- `smartbuilding_video_summary_task action=autogen` -> 建议改为 `smartbuilding_use_case_register action=generate_prompt`。
+- `smartbuilding_video_summary_task action=autogen` -> **已移除**（不再迁 tool）；prompt 起草归 `video-summary-prompt-studio` skill，见 §6.2。design:356/359/789 已同步消歧。
 
 ### Recommended Documentation Updates
 
 - 将设计文档中的工具命名与当前 MCP 接口命名统一。
-- 增补 `smartbuilding_use_case_register` action 说明（`register` / `unregister` / `generate_prompt`）。
+- 增补 `smartbuilding_use_case_register` action 说明（`register` / `unregister`）。（`generate_prompt` 已移除，见 §6.2）
 - 增补 `smartbuilding_video_summary_task` action 说明（`list` / `get` / `delete`）。
 
 ## 6. Outstanding Gaps
@@ -153,20 +154,30 @@ smartbuilding_rule_eval
   [:321](../../packages/mcp-server/src/tools.ts#L321)（use_case_register 的 `generate_prompt` action）。
 - **评审意见**：「能用 skill 解决尽量用 skill，最大化 agent harness + router」。含义：autogen 是创造性
   LLM 生成，放 skill 里可让 agent 推理 + router 自动选模型/回退；放 MCP tool 等于在确定性层重造 LLM 客户端。
-- **架构建议（含修正）**：
-  - 方向认同：本仓 **design §6 本就有 Skills Layer**（`smartbuilding-toolkit` / `video-understanding`，
-    design:73/94；design:513 的 `tasks.mjs --autogen` 也在 skill 脚本里）。但 design §5.2 又把 autogen 写成
-    tool（design:789）——**design 自身矛盾，评审意见等于替 design 消歧到 skill 层**。
-  - **但归属要澄清**：smart-community **当前没有实现 skills/ 层**（真正的 skill 在 agent-ai.smarthome/
-    `openclaw-skills/`）。所以本仓 in-scope 的动作**只有「删不删 autogen/lint tool」**；skill 本体在哪落地、
-    谁写，是**跨仓**的事，不属于 smart-community 的编码任务。
-  - **反驳（保留理由）**：本仓定位是 framework-agnostic（CLAUDE.md：「agents can autonomously create
-    use cases without modifying core components」）。MCP-native 的 autogen 让**任何** MCP client 都能自助生成，
-    不依赖消费方有 OpenClaw skill/router；且它调的是本仓**已依赖**的 VLM，不是新依赖类别。直接删会让本仓从
-    「自足」退成「必须配特定 agent 框架才能生成」。
-  - **推荐切法**：MCP 保留确定性原语（`use_case_register action=register` = POST /v1/tasks 落地）+ 可保留一个
-    **薄的、模型可配**的 autogen；lint 降为纯函数（不注册成 tool）；真正「多轮/需 router 选型」的创造性编排交给
-    skill 层。**锁步**：skill 落地后再删 tool，别在替代品到位前删。
+- **处理结果**：按评审「能用 skill 尽量用 skill，最大化 agent harness + router」执行——
+  **删除 autogen action + lint tool，创造性 prompt 编写归 skill；MCP 只留确定性原语**。
+  - **背景澄清**：本仓 **design §6 本就有 Skills Layer**（`smartbuilding-toolkit` / `video-understanding`，
+    design:73/94；design:513 `tasks.mjs --autogen` 也在 skill 脚本里）。但 design §5.2/§8 又把 autogen 写成
+    tool（design:356/359/789）——**design 自身矛盾**；本次同步把 design 里这几处消歧到 skill 层（见 §6.1 后续）。
+  - **skill 已存在（写此文时的新事实）**：真正的 skill 落在兄弟仓 `agent-ai.smarthome/openclaw-skills/`，
+    其中 **`video-summary-prompt-studio`** 恰好覆盖三者职责——agent 用 `bash`+`curl` 打 `/v1/tasks`，自己起草
+    LOCAL/MACRO/GLOBAL/T-1 四段 prompt（吃下 autogen），并内联 anchor/placeholder/`task_name` regex/banned
+    token/builtin 保护等 invariant（吃下 lint）。**注意**：dev_status 该 skill 标 WW31–32 *Not started*
+    （SKILL.md 已在但未调优/未验证），本次先删 tool 属于**违反原「锁步：skill 落地后再删」的判断**，是显式选择，
+    风险记录在此——迁移期若无 OpenClaw runtime，本仓将暂时不具备自助 prompt 生成能力。
+  - **本仓实际改动（in-scope，已完成）**：
+    ① `tools.ts` 删 `smartbuilding_prompt_lint` 注册；`use_case_register` action 收敛为 `register|unregister`，
+       删 `event_types`/`language` 入参与描述里的 generate_prompt 段。
+    ② `use-case-register.ts` 删 `generatePromptAction`/分派分支/相关类型字段/`vlmUrl`/`vlmModel` deps。
+    ③ 删源文件 `prompt-autogen.ts` + `prompt-lint.ts`，及 `index.ts` 对应 export。
+    ④ 删 `test_prompt_lint.py` 及 `run_all.py` 引用。`npm run build` 通过。
+  - **保留的确定性原语**：`use_case_register action=register`（= 应用 schema + POST `/v1/tasks` 落地 + 注入
+    useCaseDict + 可选 yaml 写回）、`video_summary_task`（`/v1/tasks` list/get/delete）、`rule_eval`（调试）。
+    prompt 文本仍可经 `use_case_register` 的 `prompt_text` 入参落地——只是「怎么写出这段 prompt」交给 skill。
+  - **framework-agnostic 的取舍（保留争议记录）**：CLAUDE.md 称本仓「agents can autonomously create use cases
+    without modifying core components」。删掉 MCP-native autogen 后，非 OpenClaw 的 MCP client 无法自助生成
+    prompt（需自带 LLM 客户端或改用 prompt-studio skill）。这是本次为「最大化 agent harness + router」付出的
+    代价，已被采纳。
 
 ### 6.3 `on_task_completed_path` / `parse_summary_path`（已移除）/ `rules`（保留）
 
@@ -219,8 +230,9 @@ smartbuilding_rule_eval
 - **原代码**：[tests/dev-mcp-server/](../../tests/dev-mcp-server/) 有 `test_db/schema/tools_mcp/events_webhook/
   rule_engine/use_cases/prompt_lint`；**无** `test_use_case_register`、**无** video_summary_task 测试。
 - **架构建议**：加 `test_use_case_register.py`：`register → validate → unregister` 全循环 + `persist=true` 的
-  yaml 写回/重启读回 + 幂等（重复 register）+ 负例（非法名 / 撞 builtin task / 缺 overwrite）。若 6.2 把 autogen
-  迁 skill，`generate_prompt` 契约测试随之移到 skill 侧。
+  yaml 写回/重启读回 + 幂等（重复 register）+ 负例（非法名 / 撞 builtin task / 缺 overwrite）。
+- **已完成（本轮）**：`generate_prompt` 与 `prompt_lint` 契约测试随 §6.2 迁移——`test_prompt_lint.py` 已删；
+  autogen 契约测试改由 skill 侧（`video-summary-prompt-studio`）覆盖，本仓不再持有。
 
 ### 6.7 Broadcast E2E verification
 
@@ -238,8 +250,8 @@ Current Assessment:
 - Zero TypeScript Changes: Supported
 - Zero Manual API Registration: Supported
 - Zero Manual YAML Editing: Supported
-- Prompt Generation Assisted by LLM: Supported
-- Prompt Static Lint Gate: Supported
+- Prompt Generation Assisted by LLM: Moved to Skill（`video-summary-prompt-studio`；MCP autogen 已删，见 §6.2）
+- Prompt Static Lint Gate: Moved to Skill（lint invariant 内联进 skill；`smartbuilding_prompt_lint` 已删）
 - Python Override Optional for Advanced Logic: Supported
 
 Conclusion:

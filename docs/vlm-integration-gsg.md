@@ -53,7 +53,7 @@ docker/
 │                 multilevel-video-understanding            │
 │  当前内置 task（以 /v1/tasks 实际返回为准）：                │
 │    summary / summary_zh                                    │
-│  其他 use-case task（含 refrigerator_monitor_en /           │
+│  其他 use-case task（含 fridge_monitor /                    │
 │    child_safety_monitor / elder_wakeup_monitor /           │
 │    high_altitude_monitor / parking_safety_monitor）        │
 │    **必须运行时通过 POST /v1/tasks 动态注册**              │
@@ -264,7 +264,7 @@ Python-style 常量组成：
 
 | use case | task_name | prompt 文件 |
 |---|---|---|
-| `fridge` | `refrigerator_monitor_en` | `use-cases/fridge/prompt_en.md` |
+| `fridge` | `fridge_monitor` | `use-cases/fridge/prompt_en.md` |
 | `child_safety` | `child_safety_monitor` | `use-cases/child_safety/prompt.md` |
 | `elder_wakeup` | `elder_wakeup_monitor` | `use-cases/elder_wakeup/prompt.md` |
 | `high_altitude_safety` | `high_altitude_monitor` | `use-cases/high_altitude_safety/prompt.md` |
@@ -436,7 +436,7 @@ PY
 }
 
 for pair in \
-    "fridge:refrigerator_monitor_en:prompt_en.md" \
+    "fridge:fridge_monitor:prompt_en.md" \
     "child_safety:child_safety_monitor:prompt.md" \
     "elder_wakeup:elder_wakeup_monitor:prompt.md" \
     "high_altitude_safety:high_altitude_monitor:prompt.md" \
@@ -455,7 +455,7 @@ curl -sS ${VLM}/v1/tasks | jq '.tasks[] | {name, source}'
 
 ```
 "summary", "summary_zh",          ← builtin
-"refrigerator_monitor_en",        ← dynamic
+"fridge_monitor",                 ← dynamic
 "child_safety_monitor",           ← dynamic
 "elder_wakeup_monitor",           ← dynamic
 "high_altitude_monitor",          ← dynamic
@@ -730,7 +730,7 @@ status 是 `Created` 或不存在——它在等 vllm healthy 后才 start。看
 不在列表。
 
 **判定**：这个 task 未注册。当前 builtin 通常只有 `summary` / `summary_zh`，包括
-`refrigerator_monitor_en` 在内的 use-case task 都需要动态注册——回 §3。
+`fridge_monitor` 在内的 use-case task 都需要动态注册——回 §3。
 
 **校验**：
 

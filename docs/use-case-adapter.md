@@ -288,7 +288,7 @@ Wired into `config.yaml.example`:
 |----------|---------------------|-----------------|
 | `child_safety` | none — `rules` block | Fires when `severity ≥ severityThreshold` (default `warn`); `info`-severity clips never fire. |
 | `elder_wakeup` | present | Fires `late_wakeup` when `event=get_up` AND current local time > `expectedWakeupLocal + graceMinutes`. |
-| `fridge` | none — no `rules` block | Report-only: the `refrigerator_monitor_en` task emits no `SEVERITY` line, so `defaultRuleEvaluator` short-circuits to `shouldAlert=false`. ⚠️ It is *not* a hard stub — if a task's `severity` column is manually set to `warn`/`critical`, the evaluator **will** fire. |
+| `fridge` | none — no `rules` block | Report-only: the `fridge_monitor` task emits no `SEVERITY` line, so `defaultRuleEvaluator` short-circuits to `shouldAlert=false`. ⚠️ It is *not* a hard stub — if a task's `severity` column is manually set to `warn`/`critical`, the evaluator **will** fire. |
 
 Prompt-only extension templates (in `use-cases/` but **not** wired into
 `config.yaml.example` — register them per

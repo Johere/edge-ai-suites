@@ -14,12 +14,14 @@ these are **JSON-RPC `tools/call` methods** delivered over the MCP transport
 [use-case-adapter.md](../use-case-adapter.md) for the adapter model and
 [use-case-adapter-gsg.md](../use-case-adapter-gsg.md) for an end-to-end recipe.
 
+The prompt itself is authored in the `video-summary-prompt-studio` skill (agent +
+router), then handed to `register` via `prompt_text`; these tools only cover the
+deterministic primitives — schema, VLM-task registration, wiring, validation.
+
 Implementation entry points:
 - Tool registration: [packages/mcp-server/src/tools.ts](../../packages/mcp-server/src/tools.ts)
 - `smartbuilding_use_case_register`: [packages/tools/src/use-case-register.ts](../../packages/tools/src/use-case-register.ts)
 - `smartbuilding_use_case_validate`: [packages/tools/src/use-case-validate.ts](../../packages/tools/src/use-case-validate.ts)
-- `smartbuilding_prompt_lint`: [packages/tools/src/prompt-lint.ts](../../packages/tools/src/prompt-lint.ts)
-- `generate_prompt` backend: [packages/tools/src/prompt-autogen.ts](../../packages/tools/src/prompt-autogen.ts)
 - Rule evaluator (consumes `rules`): [packages/tools/src/rule-engine/index.ts](../../packages/tools/src/rule-engine/index.ts)
 
 ---
@@ -36,46 +38,46 @@ These are MCP tools, not REST endpoints. A client calls them via the standard
 | Session | Stateful HTTP requires an `initialize` handshake first; reuse the returned `Mcp-Session-Id` header on every subsequent call. A bare `tools/call` without a session is rejected with `Server not initialized`. See [use-case-adapter-gsg.md §3.3](../use-case-adapter-gsg.md). |
 | Auth | None (loopback / intranet deployment) |
 | Result shape | `result.content[0].text` is a **JSON string** — parse it once more to get the structured object documented below. |
-| Error flag | Each tool sets `isError: true` in the tool result when the operation did not fully succeed (`register`/`generate_prompt`: `ok=false`; `validate`: `valid=false`; `prompt_lint`: `ok=false`). The structured body is still returned in `content[0].text`. |
+| Error flag | Each tool sets `isError: true` in the tool result when the operation did not fully succeed (`register`: `ok=false`; `validate`: `valid=false`). The structured body is still returned in `content[0].text`. |
 
 ### 1.1 Tool inventory
 
 | Tool | Purpose | Mutates state? |
 |------|---------|----------------|
-| `smartbuilding_use_case_register` | Lifecycle management: `generate_prompt` (draft a prompt), `register` (schema + VLM task + wiring + optional config write-back), `unregister` (reverse). | `register`/`unregister`: yes. `generate_prompt`: no. |
+| `smartbuilding_use_case_register` | Lifecycle management: `register` (schema + VLM task + wiring + optional config write-back), `unregister` (reverse). | `register`/`unregister`: yes. |
 | `smartbuilding_use_case_validate` | Read-only three-stage validation of an existing use case (known → task registered → prompt/schema consistent). | No |
-| `smartbuilding_prompt_lint` | Static lint of a prompt string before registration. | No |
 | `smartbuilding_video_summary_task` | Low-level management of VLM `/v1/tasks` (`list` / `get` / `delete`). Complements `register`. | `delete`: yes |
 
-> The register tool is the one-call front door. `validate` / `prompt_lint` /
-> `video_summary_task` are the read/inspect/low-level companions.
+> The register tool is the one-call front door. `validate` /
+> `video_summary_task` are the read/inspect/low-level companions. Drafting the
+> prompt itself is done in the `video-summary-prompt-studio` skill, then passed
+> to `register` via `prompt_text`.
 
 ---
 
 ## 2. `smartbuilding_use_case_register`
 
-Manage a use case's full lifecycle at runtime. One tool, three `action`s. The
-in-memory `use_case_dict` is mutated by reference, so the task-poller and every
-other tool observe changes on their next tick — no restart required.
+Manage a use case's full lifecycle at runtime. One tool, two `action`s
+(`register` / `unregister`). The in-memory `use_case_dict` is mutated by
+reference, so the task-poller and every other tool observe changes on their next
+tick — no restart required.
 
 ### 2.1 Input schema (all actions)
 
 | Field | Type | Required | Applies to | Description |
 |-------|------|----------|------------|-------------|
-| `action` | `"register" \| "unregister" \| "generate_prompt"` | ✅ | all | Which lifecycle operation to run. |
+| `action` | `"register" \| "unregister"` | ✅ | all | Which lifecycle operation to run. |
 | `use_case` | `string` | ✅ | all | Use case key. Must match `/^[a-z][a-z0-9_]{1,63}$/`. |
 | `video_summary_task` | `string` | ⚠️ | register | VLM task name. Default `<use_case>_monitor`. Must match the same regex and must **not** collide with a VLM builtin (`summary`, `summary_zh`). |
-| `description` | `string` | ⚠️ | register / generate_prompt | Human description; shown by `/v1/tasks`. Required for `generate_prompt`. |
-| `prompt_text` | `string` | ⚠️ | register | Full prompt. Either Markdown with `## LOCAL_PROMPT` / `## GLOBAL_PROMPT` sections, **or** a raw 4-constant Python source (detected by a `GLOBAL_PROMPT =` / `LOCAL_PROMPT =` token). Omit to skip VLM-task registration (see §2.6). |
-| `rules` | `object` | ⚠️ | register | Free-form rules dict, copied **verbatim** into `use_case_dict.<uc>.rules`. Consumed by `defaultRuleEvaluator` (see §5) or passed to a Python override at `payload.rules`. |
-| `schema_extensions` | `Array<{name, type, required}>` | ⚠️ | register / generate_prompt | Extra `video_summary_tasks` columns. `type ∈ {text, integer, real}`. Applied via idempotent `ALTER TABLE ADD COLUMN` and merged into the in-memory schema. |
+| `description` | `string` | ⚠️ | register | Human description; shown by `/v1/tasks`. |
+| `prompt_text` | `string` | ⚠️ | register | Full prompt. Either Markdown with `## LOCAL_PROMPT` / `## GLOBAL_PROMPT` sections, **or** a raw 4-constant Python source (detected by a `GLOBAL_PROMPT =` / `LOCAL_PROMPT =` token). Omit to skip VLM-task registration (see §2.5). |
+| `rules` | `object` | ⚠️ | register | Free-form rules dict, copied **verbatim** into `use_case_dict.<uc>.rules`. Consumed by `defaultRuleEvaluator` (see §4) or passed to a Python override at `payload.rules`. |
+| `schema_extensions` | `Array<{name, type, required}>` | ⚠️ | register | Extra `video_summary_tasks` columns. `type ∈ {text, integer, real}`. Applied via idempotent `ALTER TABLE ADD COLUMN` and merged into the in-memory schema. |
 | `evaluate_rules_path` | `string` | ⚠️ | register | Path to a Python `evaluate_rules.py` override. Omit for zero-Python (`defaultRuleEvaluator`) use cases. |
 | `reports` | `object` | ⚠️ | register | Report config `{data_source, default_type, filter}`. Stored verbatim. |
 | `summarize` | `object` | ⚠️ | register | Per-clip summarize config `{method, processor_kwargs}`. Stored verbatim. |
 | `overwrite` | `boolean` | ⚠️ | register | Replace an existing `use_case_dict` entry. Default `false`; without it, registering an existing key is an error. |
 | `persist` | `boolean` | ⚠️ | register / unregister | Mirror the mutation to the config.yaml the server booted from (comment-preserving via `yaml.Document`). Requires the server to have been started with `--config <path>`. A write failure is only a warning; the in-memory change still stands. |
-| `event_types` | `Array<{name, severity, desc}>` | ⚠️ | generate_prompt | Semantic event triples the autogen meta-prompt turns into a `## LOCAL_PROMPT` draft. Must be non-empty for `generate_prompt`. |
-| `language` | `"zh" \| "en"` | ⚠️ | generate_prompt | Output language of the generated prompt. Default `"zh"`. |
 
 ### 2.2 Output schema (all actions)
 
@@ -91,9 +93,6 @@ other tool observe changes on their next tick — no restart required.
     "config_yaml":   "written",          // written | removed | skipped
     "validate":      { /* UseCaseValidateResult — see §3.2 */ }
   },
-  "generated_prompt": "## LOCAL_PROMPT\n…",  // generate_prompt only
-  "lint":             { /* PromptLintResult — see §4.2 */ },  // generate_prompt only
-  "next_steps":       ["1. Save …", "2. Refine …", "3. Register …"],  // generate_prompt only
   "warnings": [],
   "errors":   []
 }
@@ -106,24 +105,7 @@ other tool observe changes on their next tick — no restart required.
 | `use_case_dict` | `added` \| `updated` \| `removed` \| `skipped` | In-memory wiring outcome. `updated` requires `overwrite=true`. |
 | `config_yaml` | `written` \| `removed` \| `skipped` | `written`/`removed` only when `persist=true` **and** the server has a `--config` path. Otherwise `skipped` (with a warning). |
 
-### 2.3 `action=generate_prompt`
-
-No state is mutated. Given `description` + `event_types` (+ optional
-`schema_extensions`), the tool builds a meta-prompt encoding the four
-production-tested prompt conventions (no pipe enums, no code fences, concrete
-boundary examples, repeated "don't copy the example") and asks the configured
-vLLM (`vlm_service.url`) to draft a `## LOCAL_PROMPT`. Human-in-the-loop by
-design: review and refine `generated_prompt`, then call `action=register`.
-
-**Preconditions**: `vlm_service` configured on the server; `description`
-present; `event_types` non-empty. Missing any → `ok=false` with a message in
-`errors`.
-
-**Returns**: `generated_prompt` (draft text), `lint` (a `PromptLintResult`, see
-§4.2, run over the draft), and `next_steps`. Any lint finding (code fence, pipe
-enum, missing event) is surfaced in `warnings`.
-
-### 2.4 `action=register`
+### 2.3 `action=register`
 
 Runs up to five steps in order; the first hard failure populates `errors` and
 returns `ok=false`:
@@ -138,7 +120,7 @@ returns `ok=false`:
 > `overwrite=true` returns `ok=false` (`errors: ["… already exists …"]`) and
 > mutates nothing.
 
-### 2.5 `action=unregister`
+### 2.4 `action=unregister`
 
 `DELETE /v1/tasks/<video_summary_task>` and `delete config.useCaseDict[use_case]`.
 If `persist=true`, the entry is also removed from config.yaml. Schema extension
@@ -147,14 +129,14 @@ rewrite). A builtin/absent VLM task yields `vlm_task: "skipped"` with a warning;
 the `use_case_dict` removal still happens. Returns `ok=true` even when the VLM
 delete is skipped.
 
-### 2.6 Registering without a prompt
+### 2.5 Registering without a prompt
 
 If `prompt_text` is omitted, step 2 is skipped (`vlm_task: "skipped"`) and a
 warning is added: the VLM task must be registered out-of-band before this use
 case can produce alerts. This is valid when the task already exists (e.g. a
 builtin) or will be registered separately via `smartbuilding_video_summary_task`.
 
-### 2.7 Example — register a zero-Python use case (`pet_safety`)
+### 2.6 Example — register a zero-Python use case (`pet_safety`)
 
 **Input** (`tools/call arguments`):
 
@@ -202,7 +184,7 @@ builtin) or will be registered separately via `smartbuilding_video_summary_task`
 }
 ```
 
-### 2.8 Example — unregister
+### 2.7 Example — unregister
 
 **Input**: `{ "action": "unregister", "use_case": "pet_safety", "persist": true }`
 
@@ -265,57 +247,13 @@ stage failed.
 | 2 | `task_registered` | `GET /v1/tasks/<task>` returns 404, non-2xx, or the summary service is unreachable | `error`: task not registered / HTTP status / unreachable |
 | 3 | `schema_consistent` | A **required** `schema.video_summary_tasks.extensions` field is absent from the task's `LOCAL_PROMPT` | `suggestion`: which required fields to append; `prompt_tail` for context |
 
-> `register` (§2.4 step 5) and `monitor_ctl register_source` both call this
+> `register` (§2.3 step 5) and `monitor_ctl register_source` both call this
 > internally as a pre-check, so a registered use case is validated the moment it
 > is wired in.
 
 ---
 
-## 4. `smartbuilding_prompt_lint`
-
-Static, offline lint of a prompt string. No network, no state. Use it as a
-quality gate for both LLM-generated drafts and hand-written `prompt.md`.
-
-### 4.1 Input schema
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `prompt_text` | `string` | ✅ | Full prompt text to lint (typically `prompt.md` content). |
-| `event_types` | `Array<{name, severity?, desc?}>` | ⚠️ Optional | Expected event names. Lint fails (`missing_event`) if any name is absent from `prompt_text`. |
-| `schema_extensions` | `Array<{name, type?, required?, values?}>` | ⚠️ Optional | Schema fields. **Required** fields must appear in `prompt_text` (`missing_required_schema_field`). |
-| `strict` | `boolean` | ⚠️ Optional | When `true`, warning-level findings also force `ok=false`. Default `false`. |
-
-### 4.2 Output schema
-
-```jsonc
-{
-  "ok":       true,          // errors empty AND (not strict OR warnings empty)
-  "errors":   [],            // messages of severity=error
-  "warnings": [],            // messages of severity=warning
-  "issues": [               // full structured findings
-    { "code": "pipe_enum", "severity": "warning", "message": "…", "details": { … } }
-  ]
-}
-```
-
-### 4.3 Lint checks
-
-| `code` | Severity | Triggered by |
-|--------|----------|--------------|
-| `missing_local_prompt` | error | No `## LOCAL_PROMPT` section header. |
-| `code_fence` | error | Contains triple-backtick ` ``` ` — `POST /v1/tasks` rejects these with `banned_token`. |
-| `missing_event` | error | An expected `event_types[].name` does not appear in the prompt. |
-| `missing_required_schema_field` | error | A `required` `schema_extensions` field name does not appear in the prompt. |
-| `pipe_enum` | warning | Contains `A \| B \| C` pipe-separated enum syntax — small VLMs may echo the line verbatim. |
-| `think_block` | warning | Contains Qwen-style `<think>` markup left in the draft. |
-
-> `generate_prompt` (§2.3) runs this lint automatically over its draft and nests
-> the result at `lint`; a standalone `prompt_lint` call with `strict=true` is the
-> stricter gate for a human-refined `prompt.md`.
-
----
-
-## 5. The `rules` contract (consumed by `defaultRuleEvaluator`)
+## 4. The `rules` contract (consumed by `defaultRuleEvaluator`)
 
 The `rules` object passed to `register` is copied verbatim into
 `use_case_dict.<uc>.rules` and reaches the rule engine at `payload.rules`. When
@@ -343,7 +281,7 @@ I/O contract: [use-cases/README.md](../../use-cases/README.md).
 
 ---
 
-## 6. Restart persistence
+## 5. Restart persistence
 
 Which layer survives an MCP server restart depends on `persist`:
 
@@ -362,7 +300,7 @@ Which layer survives an MCP server restart depends on `persist`:
 
 ---
 
-## 7. Related documents
+## 6. Related documents
 
 - Adapter model & authoring recipe: [docs/use-case-adapter.md](../use-case-adapter.md)
 - End-to-end test recipe (register → monitor → alert): [docs/use-case-adapter-gsg.md](../use-case-adapter-gsg.md)
