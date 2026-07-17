@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { dirname, resolve } from "node:path";
 import type { ServerConfig } from "./config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
 import type { VideoSummaryClient } from "@smartbuilding-video/tools";
@@ -147,7 +148,6 @@ export function registerTools(
         const v = await useCaseValidate({ use_case: params.use_case }, {
           useCaseDict: config.useCaseDict,
           summaryServiceUrl: config.summaryService.url,
-          schema: config.schema,
         });
         if (!v.valid) {
           throw new Error(
@@ -306,7 +306,6 @@ export function registerTools(
       const result = await useCaseValidate(params, {
         useCaseDict: config.useCaseDict,
         summaryServiceUrl: config.summaryService.url,
-        schema: config.schema,
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -320,18 +319,17 @@ export function registerTools(
   // --- smartbuilding_use_case_register ---
   server.registerTool("smartbuilding_use_case_register", {
     description:
-      "Manage use_case lifecycle at runtime without restarting the MCP server. Three actions: " +
-      "action=generate_prompt: given description + event_types (+ optional schema_extensions), ask vLLM " +
-      "to draft a `## LOCAL_PROMPT` for use-cases/<uc>/prompt.md. Human-in-the-loop — the caller reviews " +
-      "and refines the draft, then re-invokes with action=register. Nothing else is touched. " +
+      "Manage use_case lifecycle at runtime without restarting the MCP server. Two actions: " +
       "action=register: (1) apply schema_extensions via ALTER TABLE (idempotent), " +
       "(2) POST /v1/tasks to multilevel-video-understanding (auto-PATCH on 409), " +
       "(3) inject the entry into in-memory use_case_dict so task-poller / other tools see it, " +
       "(4) re-run use_case_validate. When persist=true, also writes the entry back to config.yaml " +
       "(comment-preserving via yaml.Document). action=unregister: DELETE /v1/tasks/<name> and remove " +
-      "from use_case_dict; also deletes the yaml entry if persist=true.",
+      "from use_case_dict; also deletes the yaml entry if persist=true. " +
+      "Prompt authoring is out of scope here — draft the `## LOCAL_PROMPT` with the " +
+      "video-summary-prompt-studio skill (agent + router), then pass it via prompt_text.",
     inputSchema: {
-      action: z.enum(["register", "unregister", "generate_prompt"]).describe("register | unregister | generate_prompt"),
+      action: z.enum(["register", "unregister"]).describe("register | unregister"),
       use_case: z.string().describe("Use case key (lowercase ascii, matches /^[a-z][a-z0-9_]{1,63}$/)"),
       video_summary_task: z.string().optional().describe(
         "VLM task name (default: <use_case>_monitor). Must not collide with VLM builtins."
@@ -339,11 +337,6 @@ export function registerTools(
       description: z.string().optional().describe("Human description shown by /v1/tasks"),
       evaluate_rules_path: z.string().optional().describe(
         "Path to Python evaluate_rules.py override (absolute or relative to cwd of MCP server)"
-      ),
-      on_task_completed_path: z.string().optional().describe("Path to on_task_completed.py override"),
-      parse_summary_path: z.string().optional().describe("Path to custom parse_summary.py override"),
-      rules: z.record(z.unknown()).optional().describe(
-        "Free-form rules dict passed verbatim to evaluate_rules.py at payload.rules"
       ),
       reports: z.record(z.unknown()).optional().describe("Report config: {data_source, default_type, filter}"),
       summarize: z.record(z.unknown()).optional().describe("Per-clip summarize config: {method, processor_kwargs}"),
@@ -357,7 +350,8 @@ export function registerTools(
         required: z.boolean(),
       })).optional().describe(
         "Additional video_summary_tasks columns this use_case needs (e.g. motion_direction, parking_zone). " +
-        "Applied via ALTER TABLE ADD COLUMN if missing (idempotent). Also merged into config.schema in memory."
+        "Applied via ALTER TABLE ADD COLUMN if missing (idempotent). Stored under this use_case's own " +
+        "schema (use_case_dict.<uc>.schema) — never a global shared schema."
       ),
       overwrite: z.boolean().optional().describe(
         "When true, replace an existing use_case entry. Default false."
@@ -368,73 +362,17 @@ export function registerTools(
         "with --config <path>. Failure to write only produces a warning; in-memory " +
         "registration still stands."
       ),
-      event_types: z.array(z.object({
-        name: z.string(),
-        severity: z.string(),
-        desc: z.string(),
-      })).optional().describe(
-        "Only used by action=generate_prompt. Semantic input triples that the autogen " +
-        "meta-prompt turns into a ## LOCAL_PROMPT draft. Each event: name (event id), " +
-        "severity (critical|warn|info), desc (one-sentence Chinese/English description)."
-      ),
-      language: z.enum(["zh", "en"]).optional().describe(
-        "Only used by action=generate_prompt. Output language for the generated prompt (default: zh)."
-      ),
     },
   }, async (params) => {
     try {
       const { useCaseRegister } = await import("@smartbuilding-video/tools");
-      if (!config.schema) config.schema = {};
       const result = await useCaseRegister(params as any, {
         useCaseDict: config.useCaseDict,
-        schema: config.schema,
         summaryServiceUrl: config.summaryService.url,
         db: (db as any).db,
         configPath: config.configPath,
-        vlmUrl: config.vlmService.url,
-        vlmModel: config.vlmService.model,
+        baseDir: config.configPath ? dirname(resolve(config.configPath)) : process.cwd(),
       });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        isError: !result.ok,
-      };
-    } catch (err: any) {
-      return { content: [{ type: "text" as const, text: `Error: ${err.message}` }], isError: true };
-    }
-  });
-
-  // --- smartbuilding_prompt_lint ---
-  server.registerTool("smartbuilding_prompt_lint", {
-    description:
-      "Statically lint a VLM prompt before registering it as a video summary task. " +
-      "Checks for banned markdown code fences, pipe-separated enums, missing event names, " +
-      "missing required schema fields, missing ## LOCAL_PROMPT section, and Qwen-style <think> leftovers. " +
-      "Use this as a quality gate for both LLM-generated and hand-written prompt.md content.",
-    inputSchema: {
-      prompt_text: z.string().describe("Full prompt text to lint, typically prompt.md content"),
-      event_types: z.array(z.object({
-        name: z.string(),
-        severity: z.string().optional(),
-        desc: z.string().optional(),
-      })).optional().describe(
-        "Expected event names. The lint fails if any event name is missing from prompt_text."
-      ),
-      schema_extensions: z.array(z.object({
-        name: z.string(),
-        type: z.string().optional(),
-        required: z.boolean().optional(),
-        values: z.array(z.string()).optional(),
-      })).optional().describe(
-        "Schema extension fields. Required fields must appear in prompt_text."
-      ),
-      strict: z.boolean().optional().describe(
-        "When true, warning-level findings also make ok=false. Default false."
-      ),
-    },
-  }, async (params) => {
-    try {
-      const { promptLint } = await import("@smartbuilding-video/tools");
-      const result = promptLint(params as any);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
         isError: !result.ok,
@@ -493,7 +431,6 @@ export function registerTools(
         db,
         {
           useCaseDict: config.useCaseDict,
-          schemaExtensions: config.schema?.video_summary_tasks?.extensions,
         },
         params as any,
       );

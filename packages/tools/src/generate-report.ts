@@ -166,6 +166,15 @@ function queryData(
   ];
   const bindings: any[] = [monitorId, periodStart, periodEnd];
 
+  // Reports over `alerts` reflect what was actually pushed to users: default to
+  // notified=1 so cooled-down audit rows don't inflate counts. Callers can
+  // override by putting `notified` explicitly in the report filter (e.g. an
+  // audit report using `filter: { notified: 0 }` or listing both).
+  if (dataSource === "alerts" && !("notified" in filter)) {
+    whereClauses.push("notified = ?");
+    bindings.push(1);
+  }
+
   for (const [key, value] of Object.entries(filter)) {
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
       throw new Error(`Invalid filter key: "${key}" — only letters, digits and underscores allowed`);

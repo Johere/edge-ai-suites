@@ -1,35 +1,23 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { parseDocument, isMap } from "yaml";
-import { SchemaManager, type SchemaDefinition, type SchemaExtension } from "@smartbuilding-video/db";
+import { SchemaManager, type SchemaExtension } from "@smartbuilding-video/db";
 import type { UseCaseValidateResult } from "./use-case-validate.js";
 import { useCaseValidate } from "./use-case-validate.js";
-import {
-  generatePrompt,
-  type GeneratePromptResult,
-  type PromptAutogenEventType,
-} from "./prompt-autogen.js";
 
 export interface UseCaseRegisterParams {
-  action: "register" | "unregister" | "generate_prompt";
+  action: "register" | "unregister";
   use_case: string;
   video_summary_task?: string;
   description?: string;
   evaluate_rules_path?: string;
-  on_task_completed_path?: string;
-  parse_summary_path?: string;
-  rules?: Record<string, unknown>;
   reports?: Record<string, unknown>;
   summarize?: Record<string, unknown>;
   prompt_text?: string;
   schema_extensions?: SchemaExtension[];
   overwrite?: boolean;
-  /**
-   * Only used by `action=generate_prompt`. Semantic input triples that the
-   * autogen meta-prompt turns into a `## LOCAL_PROMPT` draft.
-   */
-  event_types?: PromptAutogenEventType[];
-  /** Output language for autogen. Default `"zh"`. */
-  language?: "zh" | "en";
   /**
    * When true, mirror the mutation to `deps.configPath` on disk (comment-
    * preserving via yaml.Document). Requires deps.configPath to be set.
@@ -42,7 +30,6 @@ export interface UseCaseRegisterParams {
 
 export interface UseCaseRegisterDeps {
   useCaseDict: Record<string, any>;
-  schema?: SchemaDefinition;
   summaryServiceUrl: string;
   db: any;
   /**
@@ -52,16 +39,15 @@ export interface UseCaseRegisterDeps {
    */
   configPath?: string;
   /**
-   * vllm-serving-ipex base URL (e.g. `http://localhost:41091/v1`). Required
-   * for `action=generate_prompt`; ignored by register / unregister.
+   * Root directory that holds `use-cases/<use_case>/{prompt.md,evaluate_rules.py}`.
+   * When `prompt_text` / `evaluate_rules_path` are omitted, register auto-picks
+   * these conventional files. Defaults to `process.cwd()` when unset.
    */
-  vlmUrl?: string;
-  /** vLLM model name for autogen. Default `"default"`. */
-  vlmModel?: string;
+  baseDir?: string;
 }
 
 export interface UseCaseRegisterResult {
-  action: "register" | "unregister" | "generate_prompt";
+  action: "register" | "unregister";
   use_case: string;
   ok: boolean;
   steps: {
@@ -74,12 +60,6 @@ export interface UseCaseRegisterResult {
     validate?: UseCaseValidateResult;
     config_yaml?: "written" | "removed" | "skipped";
   };
-  /** Only present for `action=generate_prompt`. Draft `## LOCAL_PROMPT` text. */
-  generated_prompt?: string;
-  /** Only present for `action=generate_prompt`. Structured lint report for the draft. */
-  lint?: GeneratePromptResult["lint"];
-  /** Only present for `action=generate_prompt`. Next-step hints. */
-  next_steps?: string[];
   warnings: string[];
   errors: string[];
 }
@@ -87,12 +67,9 @@ export interface UseCaseRegisterResult {
 const TASK_NAME_RE = /^[a-z][a-z0-9_]{1,63}$/;
 const VLM_BUILTIN_TASKS = new Set([
   "summary",
-  "engine_valves_sop",
-  "refrigerator_monitor",
-  "refrigerator_monitor_en",
-  "daily_report",
-  "daily_report_en",
+  "summary_zh",
 ]);
+const execFileAsync = promisify(execFile);
 
 export async function useCaseRegister(
   params: UseCaseRegisterParams,
@@ -110,10 +87,6 @@ export async function useCaseRegister(
   if (!params.use_case || !TASK_NAME_RE.test(params.use_case)) {
     result.errors.push(`use_case "${params.use_case}" must match ${TASK_NAME_RE}`);
     return result;
-  }
-
-  if (params.action === "generate_prompt") {
-    return await generatePromptAction(params, deps, result);
   }
 
   if (params.action === "unregister") {
@@ -142,59 +115,102 @@ export async function useCaseRegister(
 
   if (params.schema_extensions && params.schema_extensions.length > 0) {
     try {
+      // ALTER the shared video_summary_tasks table (idempotent). The fields
+      // belong to THIS use case only — they are carried on the use_case_dict
+      // entry (entry.schema) below, never merged into any global schema.
       const schemaMgr = new SchemaManager(deps.db);
       const applied = schemaMgr.applySchema({
         video_summary_tasks: { extensions: params.schema_extensions },
       });
       result.steps.schema = { added: applied.added, warnings: applied.warnings };
-
-      if (!deps.schema) deps.schema = {};
-      if (!deps.schema.video_summary_tasks) {
-        deps.schema.video_summary_tasks = { extensions: [] };
-      }
-      const existing = new Map(
-        deps.schema.video_summary_tasks.extensions.map((e) => [e.name, e]),
-      );
-      for (const ext of params.schema_extensions) {
-        existing.set(ext.name, ext);
-      }
-      deps.schema.video_summary_tasks.extensions = Array.from(existing.values());
     } catch (err: any) {
       result.errors.push(`schema apply failed: ${err.message}`);
       return result;
     }
   }
 
-  if (params.prompt_text) {
+  // prompt_text resolution — convention over configuration. When the caller
+  // doesn't pass prompt_text explicitly, auto-read the conventional prompt file
+  // use-cases/<use_case>/prompt.md so agents only need to drop the file (via the
+  // video-summary-prompt-studio skill) rather than re-cat it into the call.
+  const baseDir = deps.baseDir ?? process.cwd();
+  let promptText = params.prompt_text;
+  let promptSource = "param";
+  if (!promptText) {
+    const conv = join(baseDir, "use-cases", params.use_case, "prompt.md");
+    if (existsSync(conv)) {
+      promptText = readFileSync(conv, "utf-8");
+      promptSource = conv;
+    }
+  }
+
+  if (promptText) {
     try {
       const vlmStep = await registerVlmTask(
         deps.summaryServiceUrl,
         taskName,
-        params.prompt_text,
+        promptText,
         params.description ?? `Dynamically registered use_case ${params.use_case}`,
       );
       result.steps.vlm_task = vlmStep;
+      if (promptSource !== "param") {
+        result.warnings.push(`prompt_text auto-read from ${promptSource}`);
+      }
     } catch (err: any) {
       result.errors.push(`VLM task registration failed: ${err.message}`);
       return result;
     }
   } else {
-    result.steps.vlm_task = "skipped";
-    result.warnings.push(
-      "prompt_text omitted — VLM task must be registered out-of-band before this use_case can produce alerts",
+    // No prompt anywhere → the VLM task can't be registered, so the use case
+    // would be unusable (task-poller would hit HTTP 400). Fail loudly instead of
+    // persisting a half-baked entry.
+    result.errors.push(
+      `prompt_text not provided and no use-cases/${params.use_case}/prompt.md found — ` +
+      `generate the prompt first (video-summary-prompt-studio skill) or pass prompt_text.`,
     );
+    return result;
   }
 
+  // evaluate_rules_path resolution — same convention: auto-pick
+  // use-cases/<use_case>/evaluate_rules.py when present and not passed explicitly.
+  let evaluateRulesPath = params.evaluate_rules_path;
+  if (!evaluateRulesPath) {
+    const conv = join(baseDir, "use-cases", params.use_case, "evaluate_rules.py");
+    if (existsSync(conv)) evaluateRulesPath = conv;
+  }
+  if (evaluateRulesPath) {
+    const error = await validateEvaluateRulesOverride(
+      params.use_case,
+      evaluateRulesPath,
+      params.schema_extensions ?? [],
+    );
+    if (error) {
+      result.errors.push(error);
+      return result;
+    }
+  }
+
+  // Fill defaults for optional config so a minimal (name + description) register
+  // still persists a complete entry, consistent with the other built-in UCs.
   const entry: any = {
     video_summary_task: taskName,
   };
-  if (params.description !== undefined) entry.description = params.description;
-  if (params.evaluate_rules_path !== undefined) entry.evaluate_rules_path = params.evaluate_rules_path;
-  if (params.on_task_completed_path !== undefined) entry.on_task_completed_path = params.on_task_completed_path;
-  if (params.parse_summary_path !== undefined) entry.parse_summary_path = params.parse_summary_path;
-  if (params.rules !== undefined) entry.rules = params.rules;
-  if (params.reports !== undefined) entry.reports = params.reports;
-  if (params.summarize !== undefined) entry.summarize = params.summarize;
+  entry.description = params.description ?? `${params.use_case} use case`;
+  if (evaluateRulesPath !== undefined) entry.evaluate_rules_path = evaluateRulesPath;
+  entry.reports = params.reports ?? { data_source: "alerts", default_type: "daily", filter: {} };
+  entry.summarize = params.summarize ?? {
+    method: "SIMPLE",
+    processor_kwargs: { levels: 1, level_sizes: [-1], process_fps: 2 },
+  };
+  // Schema is owned by THIS use case: carry the declared extension columns on the
+  // entry (persisted with it). No global shared schema — each use case's pipeline
+  // parses only the fields it declares here.
+  if (params.schema_extensions && params.schema_extensions.length > 0) {
+    entry.schema = {
+      video_summary_tasks: { extensions: params.schema_extensions },
+      custom_tables: [],
+    };
+  }
 
   deps.useCaseDict[params.use_case] = entry;
   result.steps.use_case_dict = alreadyExists ? "updated" : "added";
@@ -214,7 +230,6 @@ export async function useCaseRegister(
       {
         useCaseDict: deps.useCaseDict,
         summaryServiceUrl: deps.summaryServiceUrl,
-        schema: deps.schema,
       },
     );
     if (!result.steps.validate.valid) {
@@ -228,6 +243,54 @@ export async function useCaseRegister(
 
   result.ok = result.errors.length === 0;
   return result;
+}
+
+async function validateEvaluateRulesOverride(
+  useCase: string,
+  overridePath: string,
+  schemaExtensions: SchemaExtension[],
+): Promise<string | null> {
+  const smokeFields = buildEvaluateRulesSmokeFields(schemaExtensions);
+
+  try {
+    const { stdout } = await execFileAsync("python3", [
+      "-S",
+      overridePath,
+      JSON.stringify(smokeFields),
+    ], { timeout: 10_000 });
+    const text = stdout.trim();
+    const parsed = text ? JSON.parse(text) : null;
+    if (parsed === null) return null;
+    if (!parsed || typeof parsed !== "object") {
+      return `evaluate_rules_path "${overridePath}" must print JSON object or null`;
+    }
+    if (typeof parsed.alertType !== "string" || typeof parsed.severity !== "string") {
+      return `evaluate_rules_path "${overridePath}" must return {alertType, severity, description?} or null`;
+    }
+    return null;
+  } catch (err: any) {
+    return `evaluate_rules_path "${overridePath}" failed smoke test: ${err.message}`;
+  }
+}
+
+function buildEvaluateRulesSmokeFields(schemaExtensions: SchemaExtension[]): Record<string, string | number> {
+  if (schemaExtensions.length === 0) {
+    return {
+      severity: "info",
+      event: "no_incident",
+      desc: "validation smoke",
+    };
+  }
+
+  const fields: Record<string, string | number> = {};
+  for (const ext of schemaExtensions) {
+    if (ext.name === "severity") fields[ext.name] = "info";
+    else if (ext.name === "event") fields[ext.name] = "no_incident";
+    else if (ext.name === "desc" || ext.name === "description") fields[ext.name] = "validation smoke";
+    else if (ext.type === "integer" || ext.type === "real") fields[ext.name] = 0;
+    else fields[ext.name] = "false";
+  }
+  return fields;
 }
 
 async function unregister(
@@ -280,52 +343,6 @@ async function unregister(
   }
 
   result.ok = true;
-  return result;
-}
-
-async function generatePromptAction(
-  params: UseCaseRegisterParams,
-  deps: UseCaseRegisterDeps,
-  result: UseCaseRegisterResult,
-): Promise<UseCaseRegisterResult> {
-  if (!deps.vlmUrl) {
-    result.errors.push(
-      "generate_prompt requires vlm_service to be configured (deps.vlmUrl missing)",
-    );
-    return result;
-  }
-  if (!params.description) {
-    result.errors.push("description is required for action=generate_prompt");
-    return result;
-  }
-  if (!Array.isArray(params.event_types) || params.event_types.length === 0) {
-    result.errors.push("event_types must be a non-empty array for action=generate_prompt");
-    return result;
-  }
-
-  const autogenResult = await generatePrompt(
-    {
-      use_case: params.use_case,
-      description: params.description,
-      event_types: params.event_types,
-      schema_extensions: params.schema_extensions?.map((s) => ({
-        name: s.name,
-        type: s.type,
-        required: s.required,
-      })),
-      language: params.language,
-    },
-    { vlmUrl: deps.vlmUrl, model: deps.vlmModel },
-  );
-
-  result.warnings.push(...autogenResult.warnings);
-  result.errors.push(...autogenResult.errors);
-  if (autogenResult.ok) {
-    result.generated_prompt = autogenResult.generated_prompt;
-    result.lint = autogenResult.lint;
-    result.next_steps = autogenResult.next_steps;
-    result.ok = true;
-  }
   return result;
 }
 
@@ -395,7 +412,7 @@ async function registerVlmTask(
     const patchResp = await fetch(`${baseUrl}/v1/tasks/${taskName}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ description, content }),
+      body: JSON.stringify({ mode: "full", description, content }),
       signal: AbortSignal.timeout(10000),
     });
     if (!patchResp.ok) {

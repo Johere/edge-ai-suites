@@ -77,7 +77,7 @@ export function registerResources(
   server.registerResource(
     "monitor-alerts-since",
     new ResourceTemplate("smartbuilding://monitor/{id}/alerts{?since}", { list: undefined }),
-    { description: "Alerts for a monitor with id strictly greater than the ?since= cursor." },
+    { description: "Delivered (notified) alerts for a monitor with id strictly greater than the ?since= cursor. Cooled-down audit rows are excluded; use smartbuilding_alert_query for the full audit trail." },
     async (uri, variables) => {
       const id = variables.id as string;
       const sinceRaw = variables.since as string | undefined;
@@ -85,7 +85,7 @@ export function registerResources(
       if (!Number.isInteger(sinceId) || sinceId < 0) {
         throw new Error(`Invalid ?since= value: "${sinceRaw}" (must be a non-negative integer)`);
       }
-      const alerts = db.queryAlerts({ monitorId: id, sinceId, limit: 200 });
+      const alerts = db.queryAlerts({ monitorId: id, sinceId, limit: 200, notifiedOnly: true });
       const latestId = alerts.length > 0
         ? Math.max(...alerts.map((a) => a.id))
         : sinceId; // no new alerts — cursor stays put
@@ -104,12 +104,12 @@ export function registerResources(
     new ResourceTemplate("smartbuilding://monitor/{id}/alerts", { list: undefined }),
     {
       description:
-        "Recent alerts for a monitor (latest 20). Response includes `latestId` for cursor-based clients; use `smartbuilding://monitor/{id}/alerts?since={id}` for incremental reads.",
+        "Recent delivered (notified) alerts for a monitor (latest 20). Cooled-down audit rows are excluded — use `smartbuilding_alert_query` for the full audit trail. Response includes `latestId` for cursor-based clients; use `smartbuilding://monitor/{id}/alerts?since={id}` for incremental reads.",
     },
     async (uri, variables) => {
       const id = variables.id as string;
-      const alerts = db.queryAlerts({ monitorId: id, limit: 20 });
-      const latestId = db.getLatestAlertId(id);
+      const alerts = db.queryAlerts({ monitorId: id, limit: 20, notifiedOnly: true });
+      const latestId = db.getLatestAlertId(id, true);
       return {
         contents: [{
           uri: uri.href,

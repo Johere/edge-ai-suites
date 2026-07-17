@@ -1,24 +1,32 @@
 import sys, json
 
+SEVERITY_ORDER = {"info": 0, "warn": 1, "critical": 2}
+
+
+def evaluate_rules(parsed: dict) -> dict | None:
+    event = parsed.get("event", "")
+    severity = parsed.get("severity", "info").lower()
+    desc = parsed.get("desc") or parsed.get("description", "")
+    zone = parsed.get("pet_zone", "unknown")
+
+    excluded_events = {"no_incident", "pet_normal"}
+    threshold_level = SEVERITY_ORDER["warn"]
+
+    if event in excluded_events:
+        return None
+    if SEVERITY_ORDER.get(severity, 0) < threshold_level:
+        return None
+
+    return {
+        "alertType": event or "pet_safety",
+        "severity": severity,
+        "description": f"{desc} (zone={zone})",
+    }
+
+
 def main():
-    ctx = json.loads(sys.argv[1])
-    fields = (ctx.get("payload", {}).get("fields") or {})
-    event = fields.get("event", "")
-    severity = fields.get("severity", "info")
-    desc = fields.get("desc", "")
-    zone = fields.get("pet_zone", "unknown")
-
-    rules = (ctx.get("payload", {}).get("rules") or {})
-    threshold = rules.get("severityThreshold", "warn")
-    order = {"info": 0, "warn": 1, "critical": 2}
-
-    if event == "no_incident":
-        print(json.dumps({"should_alert": False})); return
-    if order.get(severity, 0) < order.get(threshold, 1):
-        print(json.dumps({"should_alert": False})); return
-
-    msg = f"[pet_safety] {event}: {severity} - {desc} (zone={zone})"
-    print(json.dumps({"should_alert": True, "alert_message": msg}))
+    parsed = json.loads(sys.argv[1])
+    print(json.dumps(evaluate_rules(parsed)))
 
 if __name__ == "__main__":
     main()

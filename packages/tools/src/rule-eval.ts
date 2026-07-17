@@ -1,27 +1,25 @@
-import type { SmartBuildingDB } from "@smartbuilding-video/db";
+import type { SmartBuildingDB, SchemaDefinition } from "@smartbuilding-video/db";
 import type { RuleContext, RuleResult } from "./rule-engine/index.js";
 import { evaluateWithOverride } from "./rule-engine/index.js";
 
 /**
- * Configuration slice needed by `ruleEval`. The tool must be able to look up
- * `evaluate_rules_path` and `rules` for the monitor's use case — the same
- * data path used by TaskPoller.
+ * Configuration slice needed by `ruleEval`. The tool looks up the monitor's use
+ * case to find both its `evaluate_rules_path` and its own `schema` (extension
+ * columns) — the same per-use-case data path used by TaskPoller.
  */
 export interface RuleEvalDeps {
   useCaseDict: Record<
     string,
     {
       evaluate_rules_path?: string;
-      rules?: Record<string, unknown>;
+      /**
+       * This use case's own schema. Its `video_summary_tasks.extensions` names
+       * are the columns rule_eval reads back into `RuleContext.payload.fields`
+       * (the built-in `rowToTask` mapper drops dynamic columns).
+       */
+      schema?: SchemaDefinition;
     }
   >;
-  /**
-   * Schema extension columns (`event`, `severity`, `desc`, ...) declared for
-   * `video_summary_tasks`. These are the columns rule_eval reads back into
-   * `RuleContext.payload.fields` — the built-in `rowToTask` mapper drops
-   * dynamic columns, so we look them up directly against config.
-   */
-  schemaExtensions?: Array<{ name: string; type?: string; required?: boolean }>;
 }
 
 export interface RuleEvalParams {
@@ -32,8 +30,8 @@ export interface RuleEvalParams {
    */
   task_id?: number;
   /**
-   * If true and the evaluator returns `shouldAlert`, insert a new alert row
-   * (subject to cooldown when configured). Default `false` — dry-run.
+    * If true and the evaluator returns `shouldAlert`, insert a new alert row.
+    * Default `false` — dry-run (no row).
    */
   create_alert?: boolean;
 }
@@ -45,15 +43,13 @@ export interface RuleEvalResult {
   rule_result: RuleResult;
   alert_created?: boolean;
   alert_id?: number;
-  suppressed_by_cooldown?: boolean;
 }
 
 /**
  * Manual rule-engine re-evaluation for an already-completed task.
  *
  * Rebuilds the same `RuleContext` `TaskPoller` would have used (fields parsed
- * from the stored `summary_text` plus `payload.rules` from the use-case
- * config) and runs `evaluateWithOverride`. Useful for:
+ * from the stored `summary_text`) and runs `evaluateWithOverride`. Useful for:
  *
  *   - Debugging why a task did or did not produce an alert.
  *   - Re-running the evaluator after editing an override script.
@@ -97,7 +93,7 @@ export async function ruleEval(
   // hard-coded core columns only; extension columns (event/severity/desc/...)
   // live in raw SQLite so we query them directly.
   const fields: Record<string, string> = {};
-  const extensionNames = (deps.schemaExtensions ?? []).map((e) => e.name);
+  const extensionNames = (useCaseCfg?.schema?.video_summary_tasks?.extensions ?? []).map((e) => e.name);
   if (extensionNames.length > 0) {
     const row = (db as any).db
       .prepare(`SELECT ${extensionNames.map((n) => `"${n}"`).join(", ")} FROM video_summary_tasks WHERE id = ?`)
@@ -117,7 +113,6 @@ export async function ruleEval(
     summaryText: task.summaryText ?? "",
     payload: {
       fields,
-      rules: useCaseCfg?.rules ?? {},
     },
   };
 
@@ -135,23 +130,13 @@ export async function ruleEval(
     return out;
   }
 
-  // Cooldown parity with task-poller.
-  const cooldownSec = Number((useCaseCfg?.rules as any)?.cooldownSeconds ?? 0);
-  if (cooldownSec > 0) {
-    const recent = db.latestAlertWithin(params.monitor_id, useCase, cooldownSec);
-    if (recent) {
-      out.suppressed_by_cooldown = true;
-      out.alert_created = false;
-      return out;
-    }
-  }
-
   const alert = db.createAlert({
     monitorId: params.monitor_id,
     taskId: task.id,
     eventId: task.eventId,
     useCase,
     description: ruleResult.alertMessage,
+    notified: true,
   });
   out.alert_created = true;
   out.alert_id = alert.id;

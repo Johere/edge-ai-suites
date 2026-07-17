@@ -9,6 +9,9 @@ function rowToAlert(row: any): Alert {
     eventId: row.event_id ?? undefined,
     useCase: row.use_case ?? "",
     description: row.description ?? undefined,
+    // Missing column (extremely old row / custom query) defaults to true so
+    // legacy alerts are treated as "was notified", matching pre-audit semantics.
+    notified: row.notified === undefined || row.notified === null ? true : Boolean(row.notified),
     createdAt: row.created_at,
     ackAt: row.ack_at ?? undefined,
     ackBy: row.ack_by ?? undefined,
@@ -136,6 +139,7 @@ CREATE TABLE IF NOT EXISTS alerts (
   event_id INTEGER REFERENCES events(id),
   use_case TEXT NOT NULL DEFAULT '',
   description TEXT,
+  notified INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   ack_at TEXT,
   ack_by TEXT,
@@ -189,6 +193,21 @@ export class SmartBuildingDB {
 
   initialize(): void {
     this.db.exec(MIGRATIONS);
+    // Backward-compatible core-column migration. `CREATE TABLE IF NOT EXISTS`
+    // never adds columns to a pre-existing table, so any core column added
+    // after a DB was first created must be backfilled here. `notified` marks
+    // whether an alert's user notification was pushed (false = cooled down;
+    // the row is still kept for full audit). DEFAULT 1 → legacy rows count as
+    // "notified", matching the old behaviour where only pushed alerts existed.
+    this.ensureColumn("alerts", "notified", "INTEGER NOT NULL DEFAULT 1");
+  }
+
+  /** Idempotently add a column if it is missing (mirrors SchemaManager.addColumnIfMissing). */
+  private ensureColumn(table: string, column: string, ddl: string): void {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as any[];
+    if (!cols.some((c) => c.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+    }
   }
 
   close(): void {
@@ -281,16 +300,19 @@ export class SmartBuildingDB {
 
   // --- Alerts ---
 
-  createAlert(alert: Omit<Alert, "id" | "createdAt" | "ackAt" | "ackBy">): Alert {
+  createAlert(alert: Omit<Alert, "id" | "createdAt" | "ackAt" | "ackBy" | "notified"> & { notified?: boolean }): Alert {
     const result = this.db.prepare(`
-      INSERT INTO alerts (monitor_id, task_id, event_id, use_case, description)
-      VALUES (@monitorId, @taskId, @eventId, @useCase, @description)
+      INSERT INTO alerts (monitor_id, task_id, event_id, use_case, description, notified)
+      VALUES (@monitorId, @taskId, @eventId, @useCase, @description, @notified)
     `).run({
       monitorId: alert.monitorId,
       taskId: alert.taskId ?? null,
       eventId: alert.eventId ?? null,
       useCase: alert.useCase,
       description: alert.description ?? null,
+      // Default true keeps existing callers that don't pass notified behaving
+      // as before (a written alert was always a delivered one).
+      notified: (alert.notified ?? true) ? 1 : 0,
     });
     return this.getAlert(result.lastInsertRowid as number)!;
   }
@@ -302,11 +324,12 @@ export class SmartBuildingDB {
   }
 
   /**
-   * Return the most recent alert for a monitor + use case within the last
-   * `cooldownSeconds` (SQLite-side comparison against `datetime('now',
+   * Return the most recent **notified** alert for a monitor + use case within
+   * the last `cooldownSeconds` (SQLite-side comparison against `datetime('now',
    * 'localtime')` to match the column's default expression). Used by the
-   * rule-engine cooldown check — if this returns a row, the caller should
-   * suppress the new alert as still cooling down.
+   * cooldown check — if this returns a row, the caller should suppress the new
+   * alert's *notification* (the row is still written for audit). Only
+   * `notified = 1` rows anchor the window, so cooled-down rows never extend it.
    */
   latestAlertWithin(
     monitorId: string,
@@ -316,6 +339,7 @@ export class SmartBuildingDB {
     const row = this.db.prepare(`
       SELECT * FROM alerts
       WHERE monitor_id = ? AND use_case = ?
+        AND notified = 1
         AND created_at >= datetime('now', 'localtime', ?)
       ORDER BY created_at DESC
       LIMIT 1
@@ -324,7 +348,7 @@ export class SmartBuildingDB {
     return rowToAlert(row);
   }
 
-  queryAlerts(options: { monitorId?: string; unacked?: boolean; limit?: number; sinceId?: number }): Alert[] {
+  queryAlerts(options: { monitorId?: string; unacked?: boolean; limit?: number; sinceId?: number; notifiedOnly?: boolean }): Alert[] {
     let sql = "SELECT * FROM alerts WHERE 1=1";
     const params: any[] = [];
 
@@ -334,6 +358,11 @@ export class SmartBuildingDB {
     }
     if (options.unacked) {
       sql += " AND ack_at IS NULL";
+    }
+    if (options.notifiedOnly) {
+      // Subscription/notification path: only surface alerts that were actually
+      // pushed to users, so cooled-down audit rows don't leak through the cursor.
+      sql += " AND notified = 1";
     }
     if (options.sinceId !== undefined) {
       // Cursor read for MCP subscribe flow — return alerts strictly newer than the caller's cursor.
@@ -352,14 +381,26 @@ export class SmartBuildingDB {
     return (this.db.prepare(sql).all(...params) as any[]).map(rowToAlert);
   }
 
-  /** Highest alert.id for a monitor (or globally if monitorId omitted). Returns 0 when the table has no rows. */
-  getLatestAlertId(monitorId?: string): number {
-    const sql = monitorId
-      ? "SELECT COALESCE(MAX(id), 0) AS max_id FROM alerts WHERE monitor_id = ?"
-      : "SELECT COALESCE(MAX(id), 0) AS max_id FROM alerts";
-    const row = monitorId
-      ? (this.db.prepare(sql).get(monitorId) as { max_id: number })
-      : (this.db.prepare(sql).get() as { max_id: number });
+  /**
+   * Highest alert.id for a monitor (or globally if monitorId omitted). Returns
+   * 0 when the table has no rows. When `notifiedOnly` is set, only notified
+   * alerts count — keeps the subscription cursor aligned with the notified-only
+   * stream so clients don't advance past cooled-down (unseen) audit rows.
+   */
+  getLatestAlertId(monitorId?: string, notifiedOnly = false): number {
+    const where: string[] = [];
+    const params: any[] = [];
+    if (monitorId) {
+      where.push("monitor_id = ?");
+      params.push(monitorId);
+    }
+    if (notifiedOnly) {
+      where.push("notified = 1");
+    }
+    const sql = `SELECT COALESCE(MAX(id), 0) AS max_id FROM alerts${
+      where.length ? ` WHERE ${where.join(" AND ")}` : ""
+    }`;
+    const row = this.db.prepare(sql).get(...params) as { max_id: number };
     return row.max_id;
   }
 
@@ -391,7 +432,7 @@ export class SmartBuildingDB {
     const query = `
       SELECT
         a.id as alert_id, a.monitor_id, a.task_id, a.event_id,
-        a.use_case, a.description,
+        a.use_case, a.description, a.notified,
         a.created_at, a.ack_at, a.ack_by,
         t.id as t_id, t.summary_clip_input as t_summary_clip_input,
         t.summary_text as t_summary_text, t.status as t_status,
@@ -409,7 +450,7 @@ export class SmartBuildingDB {
       ...rowToAlert({
         id: row.alert_id, monitor_id: row.monitor_id, task_id: row.task_id,
         event_id: row.event_id, use_case: row.use_case,
-        description: row.description,
+        description: row.description, notified: row.notified,
         created_at: row.created_at, ack_at: row.ack_at, ack_by: row.ack_by,
       }),
       taskDetails: row.t_id ? {

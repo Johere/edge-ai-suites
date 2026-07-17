@@ -9,11 +9,13 @@ import pytest
 from shared.config import (
     AppConfig,
     MotionConfig,
+    PrefilterConfig,
     SegmentConfig,
     WebhookConfig,
     SourceConfig,
     expand_path,
     load_config,
+    merge_config,
 )
 
 from tests.conftest import FIXTURES_DIR
@@ -49,7 +51,7 @@ class TestLoadConfig:
         config = load_config("/nonexistent/path/config.yaml")
         assert config.server.port == 8999
         assert config.server.host == "0.0.0.0"
-        assert config.webhook.url == "http://localhost:18800/events"
+        assert config.webhook.url == "http://localhost:3101/events"
 
     def test_load_from_env_var(self, tmp_path):
         cfg_file = tmp_path / "env_config.yaml"
@@ -59,9 +61,46 @@ class TestLoadConfig:
             assert config.server.port == 7777
 
     def test_data_dir_expanded(self):
-        config = load_config(str(FIXTURES_DIR / "test_config.yaml"))
+        # Isolate from shell-exported SMARTBUILDING_DATA_DIR to verify YAML expansion.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SMARTBUILDING_DATA_DIR", None)
+            config = load_config(str(FIXTURES_DIR / "test_config.yaml"))
         assert "~" not in config.data_dir
         assert config.data_dir == "/tmp/videostream-test-data"
+
+    def test_prefilter_model_path_env_var_expanded(self, tmp_path):
+        cfg_file = tmp_path / "mp_env.yaml"
+        cfg_file.write_text(
+            "defaults:\n"
+            "  prefilter:\n"
+            "    enabled: true\n"
+            '    model_path: "${HOME}/models/yolo11s.xml"\n'
+        )
+        config = load_config(str(cfg_file))
+        assert "$" not in config.defaults.prefilter.model_path
+        assert config.defaults.prefilter.model_path == os.path.expanduser(
+            "~/models/yolo11s.xml"
+        )
+
+    def test_prefilter_model_path_tilde_expanded(self, tmp_path):
+        cfg_file = tmp_path / "mp_tilde.yaml"
+        cfg_file.write_text(
+            "defaults:\n"
+            "  prefilter:\n"
+            "    model_path: ~/models/yolo11s.xml\n"
+        )
+        config = load_config(str(cfg_file))
+        assert "~" not in config.defaults.prefilter.model_path
+        assert config.defaults.prefilter.model_path == os.path.expanduser(
+            "~/models/yolo11s.xml"
+        )
+
+    def test_prefilter_empty_model_path_stays_empty(self, tmp_path):
+        # Absent model_path (class default "") must not blow up the expansion step.
+        cfg_file = tmp_path / "mp_empty.yaml"
+        cfg_file.write_text("defaults:\n  prefilter:\n    enabled: false\n")
+        config = load_config(str(cfg_file))
+        assert config.defaults.prefilter.model_path == ""
 
 
 class TestConfigModels:
@@ -90,3 +129,25 @@ class TestConfigModels:
         assert src.rtsp_url == src.source_url
         assert src.motion is None
         assert src.data_dir is None
+
+
+class TestMergeConfig:
+    def test_merge_config_none_uses_defaults(self):
+        defaults = MotionConfig(diff_threshold=15, area_ratio=0.01, stable_frames=45)
+        merged = merge_config(defaults, None)
+        assert merged is defaults
+
+    def test_merge_config_preserves_unset_fields(self):
+        defaults = PrefilterConfig(
+            enabled=True,
+            model_path="/models/yolo11s.xml",
+            target_classes=["person"],
+            min_confidence=0.4,
+            device="NPU",
+        )
+        override = PrefilterConfig(enabled=False)
+        merged = merge_config(defaults, override)
+        assert merged.enabled is False
+        assert merged.model_path == "/models/yolo11s.xml"
+        assert merged.target_classes == ["person"]
+        assert merged.device == "NPU"

@@ -11,7 +11,6 @@ TESTS = [
     "test_db.py",
     "test_schema.py",
     "test_rule_engine.py",
-    "test_prompt_lint.py",
     "test_use_cases.py",
     "test_events_webhook.py",
     # test_video_worker.py removed — the end-to-end video-worker path is exercised

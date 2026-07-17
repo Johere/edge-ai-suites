@@ -102,6 +102,32 @@ class TestKeepaliveManager:
         _register(manager, "cam_on", keepalive_enabled=True)
         assert manager._bundles["cam_on"].last_keepalive_at is not None
 
+    def test_partial_keepalive_inherits_default_timeout(self, mock_pipeline_class):
+        defaults = DefaultsConfig(
+            keepalive=KeepaliveConfig(
+                enabled=True,
+                timeout_seconds=15.0,
+                check_interval_seconds=3.0,
+            )
+        )
+        with patch("source_worker.WebhookSink"):
+            manager = SourceManager(AppConfig(defaults=defaults))
+        manager._watchdog_running = False
+        try:
+            src = SourceConfig(
+                source_id="cam_partial",
+                source_url="rtsp://x/cam_partial",
+                keepalive=KeepaliveConfig(enabled=True),
+            )
+            manager.register_source(src)
+            cfg = manager._bundles["cam_partial"].keepalive
+            assert cfg is not None
+            assert cfg.enabled is True
+            assert cfg.timeout_seconds == 15.0
+            assert cfg.check_interval_seconds == 3.0
+        finally:
+            manager._bundles.clear()
+
     def test_describe_bundle_exposes_keepalive(self, manager):
         _register(manager, "cam_describe", keepalive_enabled=True)
         status = manager.get_source_status("cam_describe")

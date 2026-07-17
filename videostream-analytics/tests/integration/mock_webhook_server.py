@@ -54,6 +54,12 @@ async def get_recording_events():
     return {"events": rec, "count": len(rec)}
 
 
+@app.get("/recorded_events/static")
+async def get_static_events():
+    static = [e for e in _recorded_events if _ev_type(e) == "static"]
+    return {"events": static, "count": len(static)}
+
+
 @app.get("/recorded_events/status")
 async def get_status_events():
     status = [e for e in _recorded_events if _ev_type(e) == "status"]

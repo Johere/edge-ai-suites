@@ -16,6 +16,7 @@ from shared.config import (
     SourceConfig,
     MotionConfig,
     SegmentConfig,
+    StaticConfig,
     PrefilterConfig,
     RecordingConfig,
     RoiConfig,
@@ -42,6 +43,7 @@ class PipelineConfig(BaseModel):
 
     motion: MotionConfig | None = None
     segment: SegmentConfig | None = None
+    static: StaticConfig | None = None
     prefilter: PrefilterConfig | None = None
     roi: RoiConfig | None = None
     recording: RecordingConfig | None = None
@@ -167,6 +169,7 @@ def create_app(config: AppConfig) -> FastAPI:
             data_dir=req.data_dir,
             motion=req.pipeline.motion,
             segment=req.pipeline.segment,
+            static=req.pipeline.static,
             prefilter=req.pipeline.prefilter,
             roi=req.pipeline.roi,
             recording=req.pipeline.recording,

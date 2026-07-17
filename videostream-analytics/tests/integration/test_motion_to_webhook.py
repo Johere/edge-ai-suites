@@ -86,3 +86,30 @@ class TestMotionToWebhook:
             http_client, webhook_url, event_type="motion", min_count=2, timeout=240
         )
         assert len(events) >= 2, f"Expected >=2 motion events, got {len(events)}"
+
+    def test_static_event_received(self, http_client, webhook_url):
+        """A quiet period after motion should close out as a `type=static` event.
+
+        VSA emits static on the strict Motion → static → Motion loop (and on
+        shutdown drain), so a `static` must appear once the feed has a quiet
+        span ≥ pipeline.static.min_duration between motions.
+        """
+        events = wait_for_events(
+            http_client, webhook_url, event_type="static", min_count=1, timeout=240
+        )
+        assert len(events) >= 1, "No static events received within 240s"
+
+    def test_static_event_payload_complete(self, http_client, webhook_url):
+        """Static envelope + payload should carry the API §4 required fields."""
+        events = wait_for_events(
+            http_client, webhook_url, event_type="static", min_count=1, timeout=240
+        )
+        assert len(events) >= 1
+        event = events[0]
+        assert event["sourceId"] == "test_motion"
+        assert event["type"] == "static"
+        assert "timestamp" in event
+        payload = event["payload"]
+        assert "start_time" in payload
+        assert "duration_seconds" in payload
+        assert payload["duration_seconds"] > 0

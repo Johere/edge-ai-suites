@@ -506,5 +506,5 @@ Content-Type: application/json
 - Overall design (webhook's place in the architecture): [docs/smartbuilding-video-design-2026.2.md](../smartbuilding-video-design-2026.2.md)
 - Analytics-side REST API: [docs/apis/videostream_analytics_api.md](./videostream_analytics_api.md)
 - MCP server entry point: [packages/mcp-server/src/events-endpoint.ts](../../packages/mcp-server/src/events-endpoint.ts)
-- Reference implementation (production upstream) — motion emit: [videostream-analytics/stream_monitor/rtsp_monitor.py](../../videostream-analytics/stream_monitor/rtsp_monitor.py)
+- Reference implementation (production upstream) — motion + static emit: [videostream-analytics/stream_monitor/rtsp_monitor.py](../../videostream-analytics/stream_monitor/rtsp_monitor.py) (VSA now emits `static` on the Motion → static → Motion close-out model)
 - Reference implementation (production upstream) — recording emit: [videostream-analytics/stream_monitor/continuous_recorder.py](../../videostream-analytics/stream_monitor/continuous_recorder.py)

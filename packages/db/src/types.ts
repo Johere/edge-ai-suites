@@ -63,6 +63,11 @@ export interface Alert {
   eventId?: number;
   useCase: string;
   description?: string;
+  // Delivery status of the user-facing notification. true = broadcast to
+  // subscribers; false = cooled down (row still written for full audit, but
+  // no notification was pushed). Cooldown suppresses the notification only,
+  // never the DB row.
+  notified: boolean;
   createdAt: string;
   ackAt?: string;
   ackBy?: string;

@@ -47,7 +47,7 @@ def _make_pipeline(source: SourceConfig, defaults: DefaultsConfig | None = None)
 
 
 class TestPrefilterOverride:
-    """source.prefilter must override defaults.prefilter wholesale, not merge."""
+    """source.prefilter overrides explicit fields and inherits omitted ones."""
 
     def test_source_disables_overrides_enabled_default(self):
         defaults = DefaultsConfig(
@@ -65,12 +65,19 @@ class TestPrefilterOverride:
         )
         pipeline = _make_pipeline(source, defaults)
         assert pipeline._prefilter_cfg.enabled is False
+        assert pipeline._prefilter_cfg.model_path == "/models/yolo11s.xml"
+        assert pipeline._prefilter_cfg.detect_fps == 2.0
         assert pipeline._prefilter is None
 
     def test_source_overrides_target_classes(self):
-        """Different target_classes from defaults must take effect (non-merge)."""
+        """Explicit source fields override defaults while omitted ones inherit."""
         defaults = DefaultsConfig(
-            prefilter=PrefilterConfig(enabled=False, target_classes=["person"])
+            prefilter=PrefilterConfig(
+                enabled=False,
+                model_path="/models/yolo11s.xml",
+                target_classes=["person"],
+                device="NPU",
+            )
         )
         source = SourceConfig(
             source_id="cam_pet",
@@ -81,6 +88,30 @@ class TestPrefilterOverride:
         )
         pipeline = _make_pipeline(source, defaults)
         assert pipeline._prefilter_cfg.target_classes == ["cat", "dog"]
+        assert pipeline._prefilter_cfg.model_path == "/models/yolo11s.xml"
+        assert pipeline._prefilter_cfg.device == "NPU"
+
+    def test_partial_source_prefilter_inherits_missing_fields(self):
+        defaults = DefaultsConfig(
+            prefilter=PrefilterConfig(
+                enabled=True,
+                model_path="/models/yolo11s.xml",
+                target_classes=["person"],
+                min_confidence=0.4,
+                detect_fps=2.0,
+            )
+        )
+        source = SourceConfig(
+            source_id="cam_child",
+            source_url="rtsp://x/y",
+            prefilter=PrefilterConfig(min_confidence=0.75),
+        )
+        pipeline = _make_pipeline(source, defaults)
+        assert pipeline._prefilter_cfg.enabled is True
+        assert pipeline._prefilter_cfg.model_path == "/models/yolo11s.xml"
+        assert pipeline._prefilter_cfg.target_classes == ["person"]
+        assert pipeline._prefilter_cfg.min_confidence == 0.75
+        assert pipeline._prefilter_cfg.detect_fps == 2.0
 
     def test_absent_source_prefilter_inherits_defaults(self):
         defaults = DefaultsConfig(
@@ -226,3 +257,26 @@ class TestPrefilterFromHTTPRegister:
                 defaults_prefilter=defaults,
             )
             assert cfg is defaults, f"source {sid} unexpectedly changed prefilter resolution"
+
+    def test_partial_prefilter_payload_inherits_model_path(self):
+        defaults = PrefilterConfig(
+            enabled=True,
+            model_path="/models/yolo.xml",
+            target_classes=["person"],
+            min_confidence=0.4,
+        )
+        cfg = self._resolve(
+            payload={
+                "source_id": "cam_child",
+                "source_url": "rtsp://x/y",
+                "pipeline": {
+                    "prefilter": {
+                        "min_confidence": 0.8,
+                    }
+                },
+            },
+            defaults_prefilter=defaults,
+        )
+        assert cfg.enabled is True
+        assert cfg.model_path == "/models/yolo.xml"
+        assert cfg.min_confidence == 0.8

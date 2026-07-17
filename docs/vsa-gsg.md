@@ -189,15 +189,16 @@ server:
   port: 8999
 
 webhook:
-  url: "http://localhost:18800/events"
+  url: "http://localhost:3101/events"
   timeout: 10
   retry_attempts: 3
   retry_delay: 2
 
-# `data_dir` 是所有 per-source 输出的根目录。
+# `data_dir` 是所有 per-source 输出的根目录，默认对齐 MCP 数据根下的 segments 子目录
+# （`${SMARTBUILDING_DATA_DIR:-~/.mcp-smartbuilding}/segments`），使 host 独立模式与 MCP 模式落盘布局一致。
 # 每个注册的 source 会写到 `<data_dir>/<source_id>/`，除非注册体里显式传入
 # 绝对路径的 `data_dir`（MCP 默认就是传绝对路径）。
-data_dir: "~/.smartbuilding/data"
+data_dir: "~/.mcp-smartbuilding/segments"
 
 defaults:
   motion:
@@ -215,7 +216,7 @@ defaults:
     retention_days: 5
   prefilter:
     enabled: true
-    model_path: "/home/<your_user>/models/yolo11s.xml"   # 容器/host 同路径（恒等挂载，见 §1.1）
+    model_path: "${HOME}/models/yolo11s.xml"   # 支持 ${HOME}/~ 展开；容器/host 恒等挂载见 §1.1
     target_classes: ["person"]
     min_confidence: 0.4
     min_frames_hit: 1
@@ -231,7 +232,12 @@ logging:
   level: "INFO"
 ```
 
-`defaults` 是全局默认值，每个源在注册时可通过同名字段覆盖。
+`defaults` 是全局默认值，每个源在注册时**按字段覆盖**：注册体（或 monitor yaml 的 `pipeline_config`）里
+只写「要改的」字段即可，未写的字段自动回退到这里的 `defaults`（不是整块替换）。例如 monitor 侧只给
+`prefilter.target_classes`、不给 `model_path`，则 `model_path` 沿用本文件的默认值。
+
+路径占位符：`data_dir` 与 `prefilter.model_path` 支持 `${HOME}` / `~` 展开（VSA 在 `load_config` 时解析），
+可直接写 `${HOME}/models/yolo11s.xml`，无需硬编码绝对路径。
 
 ## 4. CLI 三种模式
 
@@ -367,7 +373,7 @@ source .venv/bin/activate
 python -m pytest tests/unit/ -v --timeout=60
 ```
 
-期望：**185 个用例全 PASS**（含 `test_snapshot.py` 6 个 latest.jpg 回归 / `test_keepalive.py` 14 个 Phase 8 / `test_trajectory.py` 10 个 + `test_roi_processor.py` 8 个 Phase 9）。
+期望：**195 个用例全 PASS**（含 `test_snapshot.py` 6 个 latest.jpg 回归 / `test_keepalive.py` 14 个 Phase 8 / `test_trajectory.py` 10 个 + `test_roi_processor.py` 8 个 Phase 9）。准确数字以 `pytest tests/unit/ --collect-only -q` 输出为准。
 
 ## 6.5 集成测试
 
@@ -460,12 +466,14 @@ docker compose -f docker/docker-compose.yaml up -d --force-recreate
 **T4 — 推流（host）**
 
 ```bash
-ffmpeg -re -stream_loop -1 -ss 40 \
+ffmpeg -re -stream_loop -1 \
   -i "${PROJECT_ROOT}/demo-videos/cam_child/child_safety_demo.mp4" \
   -c copy -f rtsp rtsp://localhost:8554/live/child
 ```
 
 `ffprobe rtsp://localhost:8554/live/child` 应能看到 H.264 流。
+
+> 若素材片头是一段静止画面，motion 触发会偏慢。可加 `-ss <秒>`（例如 `-ss 40`）从中段起播跳过静止段，让 motion 更快触发；用 `-stream_loop -1` 时该偏移只作用于首圈，后续循环从头播放。
 
 ### V1. `GET /health`
 
@@ -662,7 +670,11 @@ docker exec vsa-test timeout 60 videostream-analytics stream \
 
 ### V10. 接真 MCP server 端到端（替换 V1–V9 的 mock webhook）
 
-V1–V9 的 mock webhook 只能验证 VSA **单边**输出契约；V10 把 mock 换成真 MCP server，验证 webhook → MCP `/events` → SQLite 三张表全链路。**保留** T1 (MediaMTX) 和 T4 (ffmpeg 推流) 不变，把 T2 mock 替换为 MCP，并让 T3 VSA 的 webhook 指向 MCP `:3101`。
+V1–V9 的 mock webhook 只能验证 VSA **单边**输出契约；V10 把 mock 换成真 MCP server，验证 webhook → MCP `/events` → SQLite 三张表全链路，并顺带覆盖 MCP 启动时的 reconcile + 自动注册控制面。**保留** T1 (MediaMTX) 和 T4 (ffmpeg 推流) 不变，把 T2 mock 替换为真 MCP，让 VSA 的 webhook 指向 MCP `:3101`，并用 MCP 从 `monitor_cam_child.yaml` **自动注册** `cam_child`（贴近生产，不再手动 curl）。
+
+> **启动顺序（关键，与 V1–V9 不同）：先起 VSA，再起 MCP。** MCP server 启动时会主动调 VSA `:8999` —— 先 `GET /sources` 做 reconcile（清理 crash 遗留的 orphan source），再对 `monitor_cam_child.yaml` 里声明的每个 monitor 调 `POST /register_source`。若此刻 VSA 不可达，reconcile 被跳过、auto-register 失败并把 monitor 标记 `failed`（日志 `[auto-register] cam_child failed`），source 不会启动。生产环境靠 MCP 的 ProcessManager 先 `docker compose up` VSA 再注册（见 design §10.3）；手动联调没有 ProcessManager，所以必须人工保证 VSA 先起。
+>
+> 反向不成问题：新起的 VSA 此时还没有任何 source（source 由随后启动的 MCP 注册），motion 事件要 30–60s 后才产生，那时 MCP 早已就绪并在 `:3101` 收 webhook。
 
 **前置：构建 MCP server（仅首次）**
 
@@ -675,39 +687,22 @@ done
 # 4 个 workspace 都无错误输出
 ```
 
-**步骤 1：启动 MCP server（替换 T2 mock webhook）**
+**前置：NPU YOLO 模型** —— `monitor_cam_child.yaml` 的 `pipeline_config` 开启了 prefilter（NPU）+ ROI crop，需按 §1.1 准备 `~/models/yolo11s.{xml,bin}`。若手头没有 NPU，可临时把该文件里 `prefilter.enabled` 改成 `false`（`roi` 也随之失效），V10 其余链路照跑，只是 `prefilter_passed` 会是 NULL。
+
+**步骤 1：启动 VSA，webhook 指向 MCP `:3101`（先于 MCP）**
+
+数据根统一用 MCP 的默认根 `${HOME}/.mcp-smartbuilding`（如需隔离测试可改成 /tmp/...）：
 
 ```bash
-# MCP 数据目录（默认是 ${HOME}/.mcp-smartbuilding；如需隔离测试可改成 /tmp/...）
 export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
 mkdir -p "$SMARTBUILDING_DATA_DIR"
 
-cd "$PROJECT_ROOT"
-node packages/mcp-server/dist/index.js --http \
-  --config config.yaml.example \
-  --monitors monitor_cam_child.yaml
-
-# 启动日志含：
-#   [mcp-server] Streamable HTTP on http://localhost:3100/mcp
-#   [events-endpoint] Listening on port 3101
-```
-
-MCP 监听两个端口：
-- `:3100/mcp` — MCP protocol (Streamable HTTP)，给 Agent 客户端用
-- `:3101/events` — webhook 接收端点，VSA 推事件来这里
-
-**步骤 2：重启 VSA，webhook 指向 MCP**
-
-杀掉 T3 旧 VSA，重启时 `WEBHOOK_URL` 改成 MCP 的 events 端口：
-
-```bash
 # A) VSA 在 host 进程里跑
 cd "$PROJECT_ROOT/videostream-analytics"
 WEBHOOK_URL=http://localhost:3101/events \
   .venv/bin/videostream-analytics serve --config config/config.yaml
 
 # B) VSA 在 Docker 跑（推荐 host network，容器内 localhost 就是宿主机）
-export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
 docker run -d --rm --name vsa-test --network host \
   -e WEBHOOK_URL="http://localhost:3101/events" \
   -e SMARTBUILDING_DATA_DIR \
@@ -722,7 +717,7 @@ SMARTBUILDING_DATA_DIR="$HOME/.mcp-smartbuilding" \
 docker compose -f docker/docker-compose.yaml up -d --force-recreate
 
 # D) 若不能用 --network host（bridge 网络），改用 host.docker.internal
-# Linux 需要显式映射 host-gateway
+# Linux 需要显式映射 host-gateway（MCP 自动注册时会用 monitor 里的 webhook_url 覆盖此处）
 docker run -d --rm --name vsa-test \
   --add-host=host.docker.internal:host-gateway \
   -p 8999:8999 \
@@ -733,40 +728,40 @@ docker run -d --rm --name vsa-test \
   videostream-analytics:latest
 ```
 
-**步骤 3：用 MCP 风格 body 注册 source（`data_dir` 指向 MCP 的 segments dir）**
-
-若 `cam_demo` 已存在，先清理旧 source（避免返回 `already_running`，并确保新的 `data_dir/webhook_url` 生效）：
+起来后先确认 VSA 活着（MCP 的 reconcile + auto-register 依赖它）：
 
 ```bash
-curl -s -X DELETE http://localhost:8999/sources/cam_demo | python3 -m json.tool || true
+curl -sf http://localhost:8999/health | python3 -m json.tool
 ```
 
+**步骤 2：启动 MCP server（VSA 已就绪后）**
+
 ```bash
-curl -s -X POST http://localhost:8999/register_source \
-  -H "Content-Type: application/json" \
-  --data-binary @- <<JSON | python3 -m json.tool
-{
-  "source_id":   "cam_demo",
-  "source_url":  "rtsp://localhost:8554/live/child",
-  "webhook_url": "http://localhost:3101/events",
-  "data_dir":    "${SMARTBUILDING_DATA_DIR}/segments/cam_demo",
-  "pipeline": {
-    "motion":    {"diff_threshold": 15, "area_ratio": 0.005, "stable_frames": 45},
-    "segment":   {"max_duration": 10, "min_duration": 1.0},
-    "prefilter": {"enabled": false},
-    "recording": {"enabled": true, "interval_seconds": 30, "retention_days": 1},
-    "health":    {"max_failures": 30, "recovery_strategy": "retry"}
-  }
-}
-JSON
+export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
+mkdir -p "$SMARTBUILDING_DATA_DIR"
+
+cd "$PROJECT_ROOT"
+node packages/mcp-server/dist/index.js --http \
+  --config config.yaml.example \
+  --monitors monitor_cam_child.yaml
+
+# 启动日志含：
+#   [mcp-server] Streamable HTTP on http://localhost:3100/mcp
+#   [events-endpoint] Listening on port 3101
+#   [reconcile] complete: 0 marked offline, 0 orphans deleted
+#   [auto-register] cam_child ok
 ```
 
-`data_dir` 必须落到 `${SMARTBUILDING_DATA_DIR}/segments/<source_id>/` —— 这是 MCP 的存储清理器假定的布局。MCP 端 `monitor-ctl.ts` 注入这个字段时也用同样的拼接。
+MCP 监听两个端口：
+- `:3100/mcp` — MCP protocol (Streamable HTTP)，给 Agent 客户端用
+- `:3101/events` — webhook 接收端点，VSA 推事件来这里
 
-**步骤 4：等事件累积，查 MCP DB 三张表**
+MCP 启动时会：① reconcile —— GET VSA `/sources` 清理 orphan；② 对 `monitor_cam_child.yaml` 里的 `cam_child` 调 `POST /register_source`，其中 `webhook_url` 自动填 `http://localhost:3101/events`、`data_dir` 自动填 `${SMARTBUILDING_DATA_DIR}/segments/cam_child`（`<数据根>/segments/<monitor_id>` 是 MCP 存储清理器假定的布局）。**无需再手动 curl 注册**。若 `cam_child` 已在 VSA 里跑，auto-register 幂等返回 `already_running`；要强制重注册先 `curl -X DELETE http://localhost:8999/sources/cam_child`。
+
+**步骤 3：等事件累积，查 MCP DB 三张表**
 
 ```bash
-sleep 90   # 让 ~3 个 motion 事件 + ~2 个 recording 落 DB
+sleep 90   # 让 ~3 个 motion 事件 + ~1 个 recording（cam_child 是 60s 间隔）落 DB
 
 cd "$PROJECT_ROOT/videostream-analytics"
 .venv/bin/python <<'EOF'
@@ -781,11 +776,11 @@ for tbl in ("events", "video_summary_tasks", "recordings"):
     cnt = con.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
     print(f"  {tbl}: {cnt}")
 
-print("\n===== Latest 3 motion events =====")
+print("\n===== Latest 3 motion events (cam_child) =====")
 for r in con.execute("""
     SELECT id, monitor_id, motion_type, event_file_path,
            prefilter_passed, duration_seconds
-    FROM events ORDER BY id DESC LIMIT 3
+    FROM events WHERE monitor_id='cam_child' ORDER BY id DESC LIMIT 3
 """):
     d = dict(r)
     d['file_exists'] = os.path.exists(d['event_file_path']) if d['event_file_path'] else False
@@ -808,7 +803,7 @@ for r in con.execute("""
     print(f"  {d}")
 
 print("\n===== latest.jpg =====")
-snap = f"{data_root}/segments/cam_demo/latest.jpg"
+snap = f"{data_root}/segments/cam_child/latest.jpg"
 if os.path.exists(snap):
     import time
     age = int(time.time() - os.path.getmtime(snap))
@@ -819,11 +814,11 @@ EOF
 ```
 
 **通过标准**：
-- `events`: ≥ 3 行（`motion_type=motion`、`event_file_path` 文件 `file_exists=True`）
+- `events`: ≥ 3 行（`monitor_id=cam_child`、`motion_type=motion`、`event_file_path` 文件 `file_exists=True`；prefilter 开启时 `prefilter_passed=1`）
 - `video_summary_tasks`: ≥ 3 行（`summary_clip_input` 填充、`status="pending"` —— 如果 VLM `:8192` 没启动会一直 pending，这是预期）
-- `recordings`: ≥ 2 行（90s / 30s 间隔，每条 `duration_seconds=30.0`、`file_exists=True`）
+- `recordings`: ≥ 1 行（cam_child 60s 间隔，每条 `duration_seconds≈60`、`file_exists=True`；想要更多行把 sleep 拉长到 120s+）
 - `latest.jpg`: 存在，mtime ≤ 2s
-- MCP 启动日志含 `[reconcile] ... orphans deleted` — 控制面双向连通的额外证据
+- MCP 启动日志含 `[reconcile] complete: ...` 与 `[auto-register] cam_child ok` — 控制面双向连通的证据
 
 **MCP server 日志预期项**：
 
@@ -833,11 +828,12 @@ tail -20 /tmp/.../mcp.log   # 看你 redirect 到的文件
 
 应该看到：
 - ✅ `[events-endpoint] Listening on port 3101`
-- ✅ `[reconcile] ...`（启动时主动调 VSA 清理 orphan）
-- ⚠️ `[events-endpoint] unknown event type "status" from cam_demo` — **预期**，VSA 仍发 status envelope，MCP 当前忽略未知 type
-- ❌ **不应该有** `missing required fields ...` — 如果有说明 envelope 字段对不齐
+- ✅ `[reconcile] complete: ...`（启动时主动调 VSA 清理 orphan；VSA 先起、无遗留 → 计数为 0）
+- ✅ `[auto-register] cam_child ok`
+- ⚠️ `[events-endpoint] unknown event type "status" from cam_child` — **预期**，VSA 仍发 status envelope，MCP 当前忽略未知 type
+- ❌ **不应该有** `[auto-register] cam_child failed`（有则说明 MCP 启动时 VSA 没先起来）或 `missing required fields ...`（有则说明 envelope 字段对不齐）
 
-**`prefilter_passed=None` 是预期**：注册时 `prefilter.enabled=false`，VSA 不跑 YOLO，所以不附带 `prefilter_*` 字段，MCP 写 NULL。要看 prefilter 落 DB，需要在 register body 开启 prefilter 并提供 YOLO 模型路径。
+**`prefilter_passed` 取值**：`monitor_cam_child.yaml` 开启了 prefilter，命中目标类别（person/knife/…）的 clip `prefilter_passed=1`；若临时把 `prefilter.enabled` 关掉，VSA 不跑 YOLO、不附带 `prefilter_*` 字段，MCP 写 NULL。
 
 ### V11. Keepalive 行为验证（Phase 8）
 
@@ -953,7 +949,7 @@ JSON
 | `roi.auto_split_area=0.35` | 当 union 面积超过 35% 帧面积时，提前切 segment，避免长 clip 上 crop 失效 |
 | `recording.enabled=false` | 关闭固定时长录像分支，仅验证 motion 路径 |
 
-期望响应：`{"status": "started", "source_id": "cam_child_roi", "source_url": "...", "data_dir": "${SMARTBUILDING_DATA_DIR}/cam_child_roi"}`。
+期望响应：`{"status": "started", "source_id": "cam_child_roi", "source_url": "...", "data_dir": "${SMARTBUILDING_DATA_DIR}/segments/cam_child_roi"}`。
 
 #### Step 3 — 等待 motion 事件累积
 
@@ -1046,7 +1042,7 @@ grep "Segment early-split by trajectory union" "${SMARTBUILDING_DATA_DIR}/vsa.lo
 
 #### 对接真 MCP server（替代 T2 mock）
 
-参考 V10。T2 替换为真 MCP server，T3 的 `WEBHOOK_URL` 改为 `http://localhost:3101/events`，事件累积后查询 MCP DB。
+参考 V10（同样**先起 VSA 再起 MCP**）。T2 替换为真 MCP server，VSA 的 `WEBHOOK_URL` 改为 `http://localhost:3101/events`，事件累积后查询 MCP DB。
 
 MCP 现在用**全局单一** DB（`${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}/smartbuilding.db`），所有 monitor 共用一张 `events` 表并以 `monitor_id` 列区分 —— 不再是旧版每 monitor 一个 `~/.smartbuilding-video/data/<id>/pipeline.db`。查询时按 `monitor_id` 过滤：
 
@@ -1103,13 +1099,13 @@ curl -sf http://localhost:8999/health | python3 -m json.tool
 docker exec vsa-test videostream-analytics --help
 docker exec vsa-test videostream-analytics health --port 8999
 
-# 跑完整的集成测试套件（24 cases — 含 recording / status 路径 / 旧平铺 422 等 Phase 7 新增用例）
+# 跑完整的集成测试套件（27 cases — 含 recording / status 路径 / 旧平铺 422 等 Phase 7 新增用例）
 cd videostream-analytics
 bash scripts/test-videostream-analytics.sh --integration-only
 
 # 推荐：用 `--local` 跳过 Docker（避免 build 镜像；本地 venv 直接跑）
 bash scripts/test-videostream-analytics.sh --integration-only --local
-# 期望末尾输出 "24 passed in ~180s"
+# 期望末尾输出 "24 passed in ~180s"（--local 跳过了 3 个 Docker 容器用例；含 Docker 全量为 27）
 
 # 停止
 docker rm -f vsa-test

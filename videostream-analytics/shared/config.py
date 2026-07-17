@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypeVar
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
+
+
+ConfigModelT = TypeVar("ConfigModelT", bound=BaseModel)
 
 
 class MotionConfig(BaseModel):
@@ -28,6 +31,19 @@ class SegmentConfig(BaseModel):
 
     max_duration: float = 10.0
     min_duration: float = 1.0
+
+
+class StaticConfig(BaseModel):
+    """Static ("quiet period") close-out emission config.
+
+    A `static` event is emitted when motion ends and a new motion begins,
+    closing out the intervening quiet span (see rtsp_monitor close-out model).
+    `min_duration` suppresses very short gaps to avoid flooding the events
+    table with sub-second static rows.
+    """
+
+    enabled: bool = True
+    min_duration: float = 3.0
 
 
 class RecordingConfig(BaseModel):
@@ -97,7 +113,7 @@ class KeepaliveConfig(BaseModel):
 
 
 class WebhookConfig(BaseModel):
-    url: str = "http://localhost:18800/events"
+    url: str = "http://localhost:3101/events"
     timeout: int = 10
     retry_attempts: int = 3
     retry_delay: float = 2.0
@@ -111,6 +127,7 @@ class ServerConfig(BaseModel):
 class DefaultsConfig(BaseModel):
     motion: MotionConfig = Field(default_factory=MotionConfig)
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
+    static: StaticConfig = Field(default_factory=StaticConfig)
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
     prefilter: PrefilterConfig = Field(default_factory=PrefilterConfig)
     roi: RoiConfig = Field(default_factory=RoiConfig)
@@ -131,6 +148,7 @@ class SourceConfig(BaseModel):
     data_dir: Optional[str] = None
     motion: Optional[MotionConfig] = None
     segment: Optional[SegmentConfig] = None
+    static: Optional[StaticConfig] = None
     recording: Optional[RecordingConfig] = None
     prefilter: Optional[PrefilterConfig] = None
     roi: Optional[RoiConfig] = None
@@ -157,6 +175,18 @@ def expand_path(p: str) -> str:
     return p
 
 
+def merge_config(defaults: ConfigModelT, override: ConfigModelT | None) -> ConfigModelT:
+    """Merge explicitly-set override fields onto defaults."""
+    if override is None:
+        return defaults
+
+    update = override.model_dump(exclude_unset=True)
+    if not update:
+        return defaults
+
+    return defaults.model_copy(update=update)
+
+
 def load_config(config_path: str | None = None) -> AppConfig:
     path = config_path or os.environ.get(
         "VIDEOSTREAM_CONFIG", str(Path("config/config.yaml"))
@@ -169,6 +199,15 @@ def load_config(config_path: str | None = None) -> AppConfig:
         config = AppConfig()
 
     config.data_dir = expand_path(config.data_dir)
+
+    # `prefilter.model_path` may use ${HOME}/~ placeholders in config.yaml, mirroring
+    # the node side which already expands ${HOME} in monitor-yaml paths. VSA reads its
+    # own config.yaml, so expand here (same treatment as data_dir above). Per-source
+    # configs that omit model_path inherit this expanded default via merge_config.
+    if config.defaults.prefilter.model_path:
+        config.defaults.prefilter.model_path = expand_path(
+            config.defaults.prefilter.model_path
+        )
 
     # Environment variable overrides
     if webhook_url := os.environ.get("WEBHOOK_URL"):

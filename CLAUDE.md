@@ -73,14 +73,19 @@ mcp:
 events_webhook:
   port: 3101                          # Webhook port for external events
 
-schema:                               # DB schema customization (optional)
-  video_summary_tasks:
-    extensions:
-      - { name: "event", type: "text", required: true }
-      - { name: "severity", type: "text", required: true }
+use_case_dict:
+  child_safety:
+    video_summary_task: child_safety_monitor
+    schema:                             # DB schema owned by THIS use case
+      video_summary_tasks:
+        extensions:
+          - { name: "event", type: "text", required: true }
+          - { name: "severity", type: "text", required: false }
+          - { name: "desc", type: "text", required: true }
+      custom_tables: []
 ```
 
-The `schema` section is optional — use it to add custom columns to core tables (`video_summary_tasks`, `alerts`) or define entirely new tables via `custom_tables`. The SchemaManager validates types and ensures idempotency.
+Schema is declared **per use case** under `use_case_dict.<uc>.schema` — there is no global shared `schema:` block. Each use case declares only the extension columns its own pipeline parses on the shared `video_summary_tasks` table (+ optional `custom_tables`). At startup the SchemaManager iterates every use case and applies `ALTER TABLE ADD COLUMN` (idempotent; columns declared by multiple use cases are added once). `alerts` stays use-case-agnostic.
 
 ## Architecture
 
@@ -129,7 +134,7 @@ Core tables (created by `SmartBuildingDB.initialize()`):
 - `video_summary_tasks` — VLM processing queue (`id`, `source_id`, `clip_path`, `status`, `summary_text`, `latency_seconds`, tokens, timestamps)
 - `monitor_state` — per-monitor key-value state (JSON blob)
 
-Schema customization: add columns to existing tables or define new tables via `config.yaml` → `schema:` section. The SchemaManager applies `ALTER TABLE ADD COLUMN` (idempotent) at server startup.
+Schema customization: each use case declares its own columns/tables via `config.yaml` → `use_case_dict.<uc>.schema` (no global schema). The SchemaManager iterates every use case and applies `ALTER TABLE ADD COLUMN` (idempotent) at server startup.
 
 ### MCP tools
 

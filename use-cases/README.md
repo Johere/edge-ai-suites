@@ -15,14 +15,12 @@ enough.
 use-cases/
 ├── README.md                     # this file
 ├── child_safety/
-│   ├── evaluate_rules.py         # optional Python rule override (see §1)
 │   └── prompt.md                 # VLM task prompt (see §2)
 ├── elder_wakeup/
 │   ├── evaluate_rules.py
 │   └── prompt.md
 └── fridge/
     ├── config.md                 # per-use-case notes
-    ├── evaluate_rules.py         # no-alert stub
     ├── prompt.md                 # Chinese task prompt
     └── prompt_en.md              # English variant
 ```
@@ -53,9 +51,6 @@ Invoked by `packages/rule-engine/src/index.ts` (`evaluateWithOverride`) via
       "event":       "child_fall",
       "desc":        "child fell from sofa",
       "description": "child fell from sofa"    // legacy alias
-    },
-    "rules": {                                 // from config.yaml use_case_dict.<name>.rules
-      "severityThreshold": "warn"
     }
   }
 }
@@ -139,8 +134,94 @@ field names, unchanged by this format switch.
 
 ## Scope in Phase 10
 
-`parse_summary.py` and `on_task_completed.py` overrides listed in the design
-document are wired via optional `use_case_dict.<uc>.parse_summary_path` /
-`on_task_completed_path` config keys — the built-in summary parser and a
-fire-and-forget subprocess callback respectively. See
+The design document's `parse_summary.py` and `on_task_completed.py` per-use-case
+Python overrides are **not** implemented. Summary parsing is handled solely by
+the built-in schema-aware `parseSummaryFields`, and post-alert side effects
+belong on the MCP subscription side (a subscriber reacts to
+`notifications/resources/updated`) rather than in a subprocess forked from the
+video-worker. The only per-use-case Python override that remains is
+`evaluate_rules.py` (wired via `use_case_dict.<uc>.evaluate_rules_path`). See
 [docs/use-case-adapter.md](../docs/use-case-adapter.md) for the full recipe.
+
+## Extended use cases (non-default — reference only, not shipped in the example configs)
+
+`high_altitude_safety` and `parking_safety` are **not** part of the default demo
+set (fridge / child_safety / elder_wakeup), so they are intentionally kept out of
+`config.yaml.example`, `monitors.yaml.example`, and `demo-videos/streams.yaml`.
+Their definitions are preserved here — copy the blocks you need into your own
+`config.yaml` / `monitors.yaml` / `streams.yaml` to enable them. The built-in
+`defaultRuleEvaluator` only handles `severity=warn|critical`; generate an
+`evaluate_rules.py` override when you need event, direction, or zone gates.
+
+**`config.yaml` → `schema.video_summary_tasks.extensions`** (add only when enabling these UCs — they are use-case-specific fields):
+
+```yaml
+- { name: "motion_direction", type: "text", required: false } # high_altitude_safety: downward | upward | horizontal | none
+- { name: "parking_zone", type: "text", required: false }     # parking_safety: fire_lane | entrance | handicapped | double_yellow_line | normal | unknown
+```
+
+**`config.yaml` → `use_case_dict`**:
+
+```yaml
+high_altitude_safety:
+  description: "High-altitude object throwing detection"
+  video_summary_task: high_altitude_monitor
+  # Add evaluate_rules_path when you need to gate on event=high_altitude_throw
+  # and motion_direction=downward instead of using the default severity rule.
+  reports:
+    data_source: alerts
+    default_type: daily
+    filter: {}
+
+parking_safety:
+  description: "Community parking violation detection (fire lane / entrance / handicapped)"
+  video_summary_task: parking_safety_monitor
+  # Add evaluate_rules_path when you need to suppress non-violation events,
+  # exclude normal zones, or append parking_zone details to the alert message.
+  reports:
+    data_source: alerts
+    default_type: daily
+    filter: {}
+```
+
+**`monitors.yaml` → `monitors`**:
+
+```yaml
+cam_high_altitude:
+  enabled: true
+  name: "High Altitude Safety Camera"
+  source_url: rtsp://localhost:8554/live/high_altitude
+  use_case: high_altitude_safety
+  pipeline_config:
+    motion: { enabled: true, diff_threshold: 25 }
+    prefilter: { enabled: false }
+    recording: { enabled: false, interval_seconds: 60, retention_days: 1 }
+    segment: { max_duration: 10 }
+
+cam_parking:
+  enabled: true
+  name: "Parking Safety Camera"
+  source_url: rtsp://localhost:8554/live/parking
+  use_case: parking_safety
+  pipeline_config:
+    motion: { enabled: true, diff_threshold: 25 }
+    prefilter: { enabled: false }
+    recording: { enabled: false, interval_seconds: 60, retention_days: 1 }
+    segment: { max_duration: 10 }
+```
+
+**`demo-videos/streams.yaml` → `streams`** (bring your own clips — `*.mp4` is gitignored, so `cam_ha_test/building-throwing-2.mp4` / `cam_parking/false-parking.mp4` are not shipped in the repo):
+
+```yaml
+cam_high_altitude:
+  enabled: true
+  file: cam_ha_test/building-throwing-2.mp4
+  rtsp_url: rtsp://localhost:8554/live/high_altitude
+  loop: true
+
+cam_parking:
+  enabled: true
+  file: cam_parking/false-parking.mp4
+  rtsp_url: rtsp://localhost:8554/live/parking
+  loop: true
+```

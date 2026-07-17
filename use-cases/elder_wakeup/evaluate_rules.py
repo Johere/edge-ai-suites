@@ -1,23 +1,20 @@
 """elder_wakeup evaluate_rules override.
 
-Ported from agent-ai.smarthome/smartbuilding-video-mcp/use-cases/elder_wakeup/
-evaluate_rules.py. The core `evaluate()` function is copied verbatim; a thin
-protocol adapter converts between the smart-community `RuleContext` (argv[1]
-JSON) and the {parsed, rules} shape the ported logic already understands, and
-between the ported {fired, alert_type, ...} output and the smart-community
-`{should_alert, alert_message}` contract documented in `use-cases/README.md`.
+Receives parsed VLM fields on argv[1]. Prints an AlertOutcome JSON object or null.
 
 Fires a `late_wakeup` alert when:
   1. VLM-reported event is `get_up`, and
   2. current local time is later than `expectedWakeupLocal + graceMinutes`.
-
-`rules` block (from `config.yaml` → `use_case_dict.elder_wakeup.rules`) must
-supply `expectedWakeupLocal` (HH:MM) and `graceMinutes` (int).
 """
 
 import json
+import os
 import sys
 from datetime import datetime
+
+
+DEFAULT_EXPECTED_WAKEUP_LOCAL = "07:00"
+DEFAULT_GRACE_MINUTES = 30
 
 
 def hhmm_to_minutes(s: str) -> int | None:
@@ -42,24 +39,31 @@ def current_minutes() -> int:
     return now.hour * 60 + now.minute
 
 
-def evaluate(parsed: dict, rules: dict) -> dict:
+def evaluate_rules(parsed: dict) -> dict | None:
     event = parsed.get("event", "")
 
     if event != "get_up":
-        return {"fired": False}
+        return None
 
-    expected_str = rules.get("expectedWakeupLocal", "")
+    expected_str = os.environ.get(
+        "ELDER_WAKEUP_EXPECTED_WAKEUP_LOCAL",
+        DEFAULT_EXPECTED_WAKEUP_LOCAL,
+    )
     expected = hhmm_to_minutes(expected_str)
     if expected is None:
-        return {"fired": False}
+        return None
 
-    grace = int(rules.get("graceMinutes", 0))
+    grace = int(os.environ.get(
+        "ELDER_WAKEUP_GRACE_MINUTES",
+        str(DEFAULT_GRACE_MINUTES),
+    ))
+
     observed = current_minutes()
 
     if observed <= expected + grace:
-        return {"fired": False}
+        return None
 
-    wakeup_time = parsed.get("fields", {}).get("wakeup_time")
+    wakeup_time = parsed.get("wakeup_time")
     extra = {}
     if wakeup_time:
         try:
@@ -68,45 +72,16 @@ def evaluate(parsed: dict, rules: dict) -> dict:
             pass
 
     return {
-        "fired": True,
-        "alert_type": "late_wakeup",
+        "alertType": "late_wakeup",
         "severity": "warn",
-        "description": parsed.get("description", ""),
+        "description": parsed.get("desc") or parsed.get("description", ""),
         **extra,
     }
 
 
-def _context_to_parsed(ctx: dict) -> dict:
-    """Translate smart-community RuleContext into the {parsed} shape."""
-    fields = (ctx.get("payload") or {}).get("fields") or {}
-    return {
-        "severity": fields.get("severity", "info"),
-        "event": fields.get("event", ""),
-        "description": fields.get("desc") or fields.get("description", ""),
-        "fields": fields,
-    }
-
-
-def _format_alert_message(use_case: str, result: dict) -> str:
-    parts = [f"[{use_case}] {result['alert_type']}: {result['severity']} — {result['description']}"]
-    if "wakeupTime" in result:
-        parts.append(f"(wakeup_time={result['wakeupTime']})")
-    return " ".join(parts)
-
-
 def main() -> None:
-    ctx = json.loads(sys.argv[1])
-    parsed = _context_to_parsed(ctx)
-    rules = (ctx.get("payload") or {}).get("rules") or {}
-    result = evaluate(parsed, rules)
-
-    if result["fired"]:
-        print(json.dumps({
-            "should_alert": True,
-            "alert_message": _format_alert_message(ctx.get("useCase", ""), result),
-        }))
-    else:
-        print(json.dumps({"should_alert": False}))
+    parsed = json.loads(sys.argv[1])
+    print(json.dumps(evaluate_rules(parsed)))
 
 
 if __name__ == "__main__":

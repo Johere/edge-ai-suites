@@ -1,8 +1,8 @@
-Dynamic task registration content for fridge_monitor_en (English).
+Dynamic task registration content for fridge_monitor (English).
 
 Pre-staged for future use; not yet on the registration path. When the
 multilevel-video-understanding service drops its built-in
-``refrigerator_monitor_en`` + ``daily_report_en`` tasks, this single merged
+``fridge_monitor`` + ``daily_report_en`` tasks, this single merged
 file takes over both jobs under one task name.
 
 Two execution modes share this single task name:
