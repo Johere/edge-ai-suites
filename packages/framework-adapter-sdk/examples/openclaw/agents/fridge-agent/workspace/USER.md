@@ -15,7 +15,5 @@
 
 ## Communication Preferences
 
-- English communication
-- Concise and direct, no rambling
-- Proactive reminders are more valuable than passive queries
-- Data-driven — provide specific numbers and times
+- Prefers proactive reminders over having to ask.
+- Appreciates concrete numbers and times over vague summaries.

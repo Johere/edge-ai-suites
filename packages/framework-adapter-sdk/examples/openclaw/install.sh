@@ -26,7 +26,8 @@
 #   SKIP_WAKEUP=1   skip the agent wakeup   (step 8)
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
+HERE="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 SDK_DIR="$(cd "$HERE/../.." && pwd)"                 # packages/framework-adapter-sdk
 REPO_ROOT="$(cd "$SDK_DIR/../.." && pwd)"            # repo root
 OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
@@ -147,6 +148,26 @@ fi
 echo "==> Symlinking plugin into $OPENCLAW_HOME/extensions/$PLUGIN_ID"
 mkdir -p "$OPENCLAW_HOME/extensions"
 ln -sfn "$HERE" "$OPENCLAW_HOME/extensions/$PLUGIN_ID"
+
+SOURCE_SKILLS_DIR="$REPO_ROOT/skills"
+PLUGIN_SKILLS_SOURCE_DIR="$HERE/skills"
+
+echo "==> Staging plugin skills from $SOURCE_SKILLS_DIR into $PLUGIN_SKILLS_SOURCE_DIR"
+
+if [[ ! -d "$SOURCE_SKILLS_DIR" ]]; then
+  echo "WARNING: source skills directory does not exist: $SOURCE_SKILLS_DIR" >&2
+else
+  mkdir -p "$PLUGIN_SKILLS_SOURCE_DIR"
+  shopt -s nullglob
+  for skill_dir in "$SOURCE_SKILLS_DIR"/*/; do
+    skill_dir="${skill_dir%/}"
+    skill_id="$(basename "$skill_dir")"
+    echo "    - $skill_id"
+    rm -rf "$PLUGIN_SKILLS_SOURCE_DIR/$skill_id"
+    cp -a "$skill_dir" "$PLUGIN_SKILLS_SOURCE_DIR/$skill_id"
+  done
+  shopt -u nullglob
+fi
 
 echo "==> Seeding agent personas into $OPENCLAW_HOME/agents (cp -n, non-destructive)"
 for agent_dir in "$HERE"/agents/*/; do

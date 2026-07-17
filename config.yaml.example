@@ -53,12 +53,13 @@ video_summary_max_concurrent: 2
 
 # Per-monitor log rotation (write target: logs/monitors/<monitor_id>/<YYYY-MM-DD>.log)
 logging:
-  retention_days: 14 # delete .log files older than this
+  retention_days: 14 # keep this many calendar days of .log files (today + 13 previous); older deleted
   max_file_mb: 50 # stop appending to a single day's file past this size
 
 # Segment data retention. videostream-analytics writes recordings/motion_events/queries
 # under $SMARTBUILDING_DATA_DIR/segments/<monitor_id>/<subdir>/<YYYY-MM-DD>/;
-# MCP server purges day-dirs older than this.
+# MCP server keeps this many calendar days (today + N-1 previous) and purges older day-dirs.
+# Cleanup runs at server startup and hourly thereafter.
 storage:
   retention_days: 2
   cleanup_subdirs: [ motion_events, recordings, queries ]
@@ -147,7 +148,7 @@ use_case_dict:
         process_fps: 2
     reports:
       data_source: video_summary_tasks
-      default_type: daily
+      default_type: weekly
       filter:
         event: wakeup # filter on video_summary_tasks.event extension column
 
