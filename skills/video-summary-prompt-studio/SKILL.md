@@ -96,6 +96,18 @@ Optional input:
 - If the use case needs event filters, zone filters, custom alert text, or any
   behavior beyond warn/critical severity, generate an `evaluate_rules.py` and
   register it via `evaluate_rules_path`.
+- Treat LOCAL_PROMPT's final structured output contract as the source of truth:
+  every output field must be declared in `schema_extensions`, and every custom
+  `evaluate_rules.py` must read those same parsed fields. Never invent schema
+  fields that are not emitted by LOCAL_PROMPT.
+- Choose exactly one alert-rule path after the output contract is known:
+  - **Default severity rule path**: do not create `evaluate_rules.py`. This path
+    requires LOCAL_PROMPT and `schema_extensions` to include `severity`, `event`,
+    and `desc`; `defaultRuleEvaluator` alerts on `severity=warn|critical`.
+  - **Custom rule path**: create `evaluate_rules.py`. The script must consume the
+    schema fields emitted by LOCAL_PROMPT. If LOCAL_PROMPT emits
+    `severity/event/desc/pet_zone`, the script must read those fields; if it
+    emits boolean fields, the script must read those boolean fields.
 - Never create `rules`, `alert_conditions`, `severity_levels`, or
   `cooldown_seconds` fields in `use_case_dict` or MCP register params. There is
   no YAML rule DSL; custom decisions belong in `evaluate_rules.py`.
@@ -123,8 +135,12 @@ Safe event defaults:
 - `no_incident` when the actor is absent or nothing relevant is happening.
 
 Schema field defaults:
-- Always include required schema fields `event`, `severity`, and `desc` when
-  they are declared by config.
+- Derive `schema_extensions` from the exact field names listed in LOCAL_PROMPT's
+  output section.
+- For severity/event prompts, declare `severity`, `event`, and `desc`; add
+  optional context fields such as `pet_zone` only if LOCAL_PROMPT outputs them.
+- For boolean-style prompts, declare the boolean-style field names only when
+  LOCAL_PROMPT actually outputs them as `field_name: true/false` lines.
 - Add at most one optional location/context field when useful for alerts, such
   as `pet_zone`, `parking_zone`, `fall_zone`, or `motion_direction`.
 - Schema extension names are lowercase snake_case. Prompt output keys may be
@@ -133,12 +149,13 @@ Schema field defaults:
   schema name somewhere in LOCAL guidance so validation can find it.
 
 Example inference for `pet_safety -- 检测宠物逃跑、受困、攻击性行为`:
-- events: `pet_stuck` critical, `pet_escape` warn, `pet_aggression` warn or
-  critical depending on contact/injury risk, `pet_normal` info, `no_incident`
-  info
-- schema_extensions: `{ name: "pet_zone", type: "text", required: false }`
-- rule decision: generate `evaluate_rules.py` to exclude `pet_normal` /
-  `no_incident`, alert on warn/critical, and append `pet_zone` to the message
+- If LOCAL_PROMPT outputs `SEVERITY`, `EVENT`, `DESC`, and `PET_ZONE`,
+  schema_extensions must be `severity`, `event`, `desc`, and optional
+  `pet_zone`.
+- If a custom `evaluate_rules.py` is generated for that prompt, it should read
+  `event`, `severity`, `desc`, and `pet_zone`, exclude `pet_normal` /
+  `no_incident`, alert on warn/critical severity, and append `pet_zone` to the
+  message.
 
 ### Generate, Save, Register
 
@@ -152,24 +169,58 @@ Example inference for `pet_safety -- 检测宠物逃跑、受困、攻击性行�
    Smart Building use case. If the file already exists, do not overwrite unless
    the user explicitly requested replacement.
 5. If custom alert behavior is needed, save `use-cases/<use_case>/evaluate_rules.py`.
-  It must accept parsed fields on argv[1] and print an AlertOutcome object or `null`.
-  Minimal shape:
+  It must accept parsed fields on argv[1] and print an AlertOutcome object or
+  `null`. The script must be generated from the LOCAL_PROMPT output fields and
+  `schema_extensions`. For severity/event prompts with an optional zone field,
+  use this pattern:
 
   ```python
   import json, sys
 
+  SEVERITY_ORDER = {"info": 0, "warn": 1, "critical": 2}
+
   def main():
-     fields = json.loads(sys.argv[1])
-     should_alert = fields.get("severity") in {"warn", "critical"}
-     outcome = {
-       "alertType": fields.get("event", "alert"),
-       "severity": fields.get("severity", "warn"),
-       "description": fields.get("desc", ""),
-     } if should_alert else None
-     print(json.dumps(outcome))
+      fields = json.loads(sys.argv[1])
+      event = fields.get("event", "")
+      severity = fields.get("severity", "info").lower()
+      desc = fields.get("desc", "")
+      zone = fields.get("pet_zone", "unknown")
+      excluded = {"no_incident", "pet_normal"}
+      should_alert = event not in excluded and SEVERITY_ORDER.get(severity, 0) >= SEVERITY_ORDER["warn"]
+      outcome = {
+          "alertType": event or "alert",
+          "severity": severity,
+          "description": f"{desc} (zone={zone})",
+      } if should_alert else None
+      print(json.dumps(outcome))
 
   if __name__ == "__main__":
-     main()
+      main()
+  ```
+
+  For boolean-style prompts, use a boolean parser only when LOCAL_PROMPT and
+  schema_extensions actually declare those boolean fields:
+
+  ```python
+  import json, sys
+
+  def truthy(value) -> bool:
+      if isinstance(value, bool):
+          return value
+      return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+  def main():
+      fields = json.loads(sys.argv[1])
+      should_alert = truthy(fields.get("<risk_field>"))
+      outcome = {
+          "alertType": "<event_name>",
+          "severity": "warn",
+          "description": "<human-readable alert>",
+      } if should_alert else None
+      print(json.dumps(outcome))
+
+  if __name__ == "__main__":
+      main()
   ```
 
 6. Prefer registering through MCP:
@@ -177,7 +228,7 @@ Example inference for `pet_safety -- 检测宠物逃跑、受困、攻击性行�
    - `action: "register"`
    - `use_case: <use_case>`
    - `description: <user description>`
-   - `schema_extensions: <inferred/user fields>` (e.g. `pet_zone`)
+  - `schema_extensions: <LOCAL_PROMPT output fields>` (e.g. `severity`, `event`, `desc`, `pet_zone`)
    - `persist: true`
    - `overwrite: false` unless the user explicitly asks to update
 
@@ -190,6 +241,8 @@ Example inference for `pet_safety -- 检测宠物逃跑、受困、攻击性行�
      exists, register now **errors out** (no more silent half-registration).
    - `evaluate_rules_path` is auto-picked from `use-cases/<use_case>/evaluate_rules.py`
      when that file exists; otherwise the built-in `defaultRuleEvaluator` is used.
+     Therefore, if no `evaluate_rules.py` is generated, `schema_extensions` must
+     include `severity`, `event`, and `desc` so the default evaluator can fire.
    - `summarize` / `reports` / `video_summary_task` fall back to the defaults above.
    - Pass any of these explicitly only to override the convention.
 7. If MCP is unavailable and the user only asked for a video-summary task, use

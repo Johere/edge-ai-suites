@@ -182,6 +182,7 @@ export async function useCaseRegister(
     const error = await validateEvaluateRulesOverride(
       params.use_case,
       evaluateRulesPath,
+      params.schema_extensions ?? [],
     );
     if (error) {
       result.errors.push(error);
@@ -247,15 +248,13 @@ export async function useCaseRegister(
 async function validateEvaluateRulesOverride(
   useCase: string,
   overridePath: string,
+  schemaExtensions: SchemaExtension[],
 ): Promise<string | null> {
-  const smokeFields = {
-    severity: "info",
-    event: "no_incident",
-    desc: "validation smoke",
-  };
+  const smokeFields = buildEvaluateRulesSmokeFields(schemaExtensions);
 
   try {
     const { stdout } = await execFileAsync("python3", [
+      "-S",
       overridePath,
       JSON.stringify(smokeFields),
     ], { timeout: 10_000 });
@@ -272,6 +271,26 @@ async function validateEvaluateRulesOverride(
   } catch (err: any) {
     return `evaluate_rules_path "${overridePath}" failed smoke test: ${err.message}`;
   }
+}
+
+function buildEvaluateRulesSmokeFields(schemaExtensions: SchemaExtension[]): Record<string, string | number> {
+  if (schemaExtensions.length === 0) {
+    return {
+      severity: "info",
+      event: "no_incident",
+      desc: "validation smoke",
+    };
+  }
+
+  const fields: Record<string, string | number> = {};
+  for (const ext of schemaExtensions) {
+    if (ext.name === "severity") fields[ext.name] = "info";
+    else if (ext.name === "event") fields[ext.name] = "no_incident";
+    else if (ext.name === "desc" || ext.name === "description") fields[ext.name] = "validation smoke";
+    else if (ext.type === "integer" || ext.type === "real") fields[ext.name] = 0;
+    else fields[ext.name] = "false";
+  }
+  return fields;
 }
 
 async function unregister(
@@ -393,7 +412,7 @@ async function registerVlmTask(
     const patchResp = await fetch(`${baseUrl}/v1/tasks/${taskName}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ description, content }),
+      body: JSON.stringify({ mode: "full", description, content }),
       signal: AbortSignal.timeout(10000),
     });
     if (!patchResp.ok) {

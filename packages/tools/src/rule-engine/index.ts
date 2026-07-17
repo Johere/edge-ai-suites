@@ -121,6 +121,7 @@ export async function evaluateWithOverride(
 
   try {
     const { stdout } = await execFileAsync("python3", [
+      "-S",
       overridePath,
       JSON.stringify(context.payload?.fields ?? {}),
     ], { timeout: 10_000 });

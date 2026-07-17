@@ -810,7 +810,7 @@ invariant 自查 anchor/placeholder/banned token。产物存到 `use-cases/pet_s
 - **use_case**：`pet_safety`
 - **description**：监控家里的宠物是否处于危险状态（被卡住/困住/异常挣扎/尝试逃离/正常休息玩耍）
 - **event_types**：`pet_stuck`(critical) / `pet_escape`(warn) / `pet_normal`(info) / `no_incident`(info)
-- **schema_extensions**：`pet_zone`(text, 可选)
+- **schema_extensions**：`severity`(text, 可选) / `event`(text, 必填) / `desc`(text, 必填) / `pet_zone`(text, 可选)
 
 然后 review `use-cases/pet_safety/prompt.md`，人工 refine 业务边界（例如补充"宠物在门缝里挣扎"、"宠物爬向阳台栏杆"等具体例子）；但不需要从空白手写 prompt。
 
@@ -836,6 +836,9 @@ mcp_call smartbuilding_use_case_register "$(jq -n --arg pt "$PROMPT_TEXT" '{
   reports: { data_source: "alerts", default_type: "daily", filter: {} },
   prompt_text: $pt,
   schema_extensions: [
+    { name: "severity", type: "text", required: false },
+    { name: "event", type: "text", required: true },
+    { name: "desc", type: "text", required: true },
     { name: "pet_zone", type: "text", required: false }
   ],
   persist: true,
@@ -857,7 +860,15 @@ mcp_call smartbuilding_use_case_register "$(jq -n --arg pt "$PROMPT_TEXT" '{
   "use_case": "pet_safety",
   "ok": true,
   "steps": {
-    "schema": { "added": ["video_summary_tasks.pet_zone"], "warnings": [] },
+    "schema": {
+      "added": [
+        "video_summary_tasks.severity",
+        "video_summary_tasks.event",
+        "video_summary_tasks.desc",
+        "video_summary_tasks.pet_zone"
+      ],
+      "warnings": []
+    },
     "vlm_task": "registered",
     "use_case_dict": "added",
     "config_yaml": "written",

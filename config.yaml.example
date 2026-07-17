@@ -155,32 +155,3 @@ use_case_dict:
       default_type: weekly
       filter:
         event: wakeup # filter on video_summary_tasks.event extension column
-  pet_safety:
-    video_summary_task: pet_safety_monitor
-    description: Pet safety monitoring - detects pet escape, confinement, and
-      aggressive behavior
-    evaluate_rules_path: /home/jie/workspace/smarthome/smart-community/use-cases/pet_safety/evaluate_rules.py
-    reports:
-      data_source: alerts
-      default_type: daily
-      filter: {}
-    summarize:
-      method: SIMPLE
-      processor_kwargs:
-        levels: 1
-        level_sizes:
-          - -1
-        process_fps: 2
-    schema:
-      video_summary_tasks:
-        extensions:
-          - name: escape_detected
-            type: text
-            required: true
-          - name: confinement_detected
-            type: text
-            required: true
-          - name: aggressive_behavior
-            type: text
-            required: true
-      custom_tables: []
