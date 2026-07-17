@@ -17,7 +17,7 @@
 |---|---|---|---|
 | **Phase 0** | 清场（可选，重新起环境时用）| 无 | §3 上面的清理命令 |
 | **Phase 1** | 起底层服务（VLM / VSA / MCP / mediamtx）| Docker + NPU（可选）| §3 |
-| **Phase 2** | 基线 U1–U10（3 内置 UC：fridge / child_safety / elder_wakeup + cooldown）| 现有 4 条 loop 视频（已在 demo-videos/）| §5 |
+| **Phase 2** | 基线 U1–U8（3 内置 UC：fridge / child_safety / elder_wakeup）| 现有 4 条 loop 视频（已在 demo-videos/）| §5 |
 | **Phase 3** | 零重启动态注册新 use case（`pet_safety` 主例 + `high_altitude` / `parking` 扩展）+ 持久化 | VLM 服务 + `--config` 启动 MCP + 现有 pet_safety.mp4 / building-throwing-2.mp4 / false-parking.mp4 | §9 |
 
 **每个 use case 从"零"到"跑通"的核心 5 步**（§9 详解）：
@@ -126,10 +126,6 @@ groundtruth：[day1_elder_wakeup_groundtruth.srt](../demo-videos/cam_elder_bedro
 | **FR-inject-critical** | 手工 UPDATE DB 塞入 `severity=critical` | ✅ **会触发** `[fridge] <event>: critical — ...` | **关键**：fridge 未声明 override，一旦有合格 severity 就走 default 触发。要硬性不告警需新增 `evaluate_rules.py`，但默认 demo 不提供该脚本。 |
 
 groundtruth：[demo006-2_expanded_20min_v2_groundtruth.srt](../demo-videos/cam_fridge/demo006-2_expanded_20min_v2_groundtruth.srt)。
-
-### 2.4 Cooldown
-
-YAML `rules.cooldownSeconds` 已移除，`rule_eval` / task-poller 不再通过 use-case rules 做重复告警抑制。本指南不再覆盖 rules-based cooldown 用例。
 
 ---
 
@@ -362,7 +358,7 @@ curl -v -X POST http://localhost:8192/v1/summary \
 
 ---
 
-## 5. 功能验证（U1 – U10，基线）
+## 5. 功能验证（U1 – U8，基线）
 
 启动完 §3 之后，逐个 case 执行。
 
@@ -480,14 +476,11 @@ mcp_call smartbuilding_rule_eval "$(jq -n --argjson t "$TASK_ID" '{monitor_id:"c
 
 > 想让 fridge 即使遇到 critical 也恒不告警，需要新增 `evaluate_rules.py` no-alert override；默认 demo 不提供该脚本，而是保持 `prompt.md` 不产出 `SEVERITY` 行。测试完记得 `DELETE FROM video_summary_tasks WHERE id=<TASK_ID>` 清理这条假数据。
 
-### U8 / U9. Cooldown（已移除）
-
-YAML rules-based cooldown 已移除。连续两次 `create_alert:true` 的 `rule_eval` 会各自写入 alert；是否做用户通知层去重由 subscription / client 侧策略处理。
-
-### U10. rule_eval：dry-run vs create_alert=true
+### U8. rule_eval：dry-run vs create_alert=true
 
 **目的**：验证 rule_eval 两种模式的语义。dry-run 只返回 evaluator 判定不写 DB；
-create_alert=true 才落 alerts 表（同时走 cooldown 判定）。
+create_alert=true 才落 alerts 表。连续两次 `create_alert:true` 会各自写入一条
+alert（rule 层不做去重），用户通知层去重由 subscription / client 侧策略处理。
 
 ```bash
 export SMARTBUILDING_DATA_DIR="${SMARTBUILDING_DATA_DIR:-$HOME/.mcp-smartbuilding}"
@@ -497,7 +490,7 @@ TASK_ID=$(sqlite3 "$SMARTBUILDING_DATA_DIR/smartbuilding.db" \
   "SELECT id FROM video_summary_tasks WHERE monitor_id='cam_child' AND severity='critical' AND status='completed' ORDER BY id DESC LIMIT 1;")
 echo "TASK_ID=$TASK_ID"
 
-# 2) 记录 U10 前 cam_child alerts 总数
+# 2) 记录 create_alert 前 cam_child alerts 总数
 BEFORE=$(sqlite3 "$SMARTBUILDING_DATA_DIR/smartbuilding.db" \
   "SELECT COUNT(*) FROM alerts WHERE monitor_id='cam_child';")
 echo "alerts BEFORE = $BEFORE"
@@ -511,11 +504,11 @@ MID=$(sqlite3 "$SMARTBUILDING_DATA_DIR/smartbuilding.db" \
   "SELECT COUNT(*) FROM alerts WHERE monitor_id='cam_child';")
 echo "alerts AFTER dry-run = $MID  (期望 = BEFORE = $BEFORE)"
 
-# 5) create_alert=true —— 真写 alert（走 cooldown）
+# 5) create_alert=true —— 真写 alert
 mcp_call smartbuilding_rule_eval "$(jq -n --argjson t "$TASK_ID" '{monitor_id:"cam_child",task_id:$t,create_alert:true}')" \
-  | jq '.result.content[0].text | fromjson | {rule_result, alert_created, alert_id, suppressed_by_cooldown}'
+  | jq '.result.content[0].text | fromjson | {rule_result, alert_created, alert_id}'
 
-# 6) 最终校验：alerts +1（假设距上次同 UC alert 已过 cooldown；不然是 +0 且 suppressed_by_cooldown=true）
+# 6) 最终校验：alerts +1
 AFTER=$(sqlite3 "$SMARTBUILDING_DATA_DIR/smartbuilding.db" \
   "SELECT COUNT(*) FROM alerts WHERE monitor_id='cam_child';")
 echo "alerts AFTER create_alert=true = $AFTER  (期望 = BEFORE + 1 = $((BEFORE+1)))"
@@ -523,7 +516,7 @@ echo "alerts AFTER create_alert=true = $AFTER  (期望 = BEFORE + 1 = $((BEFORE+
 
 **期望**：
 - Dry-run 返回 `rule_result.shouldAlert=true, alert_created=null` → alerts 总数**不变**
-- create_alert=true 返回 `alert_created=true, alert_id=<新 id>` → alerts 总数**+1**（若命中 cooldown 则 `alert_created=false, suppressed_by_cooldown=true`）
+- create_alert=true 返回 `alert_created=true, alert_id=<新 id>` → alerts 总数**+1**（rule 层不做去重，每次 `create_alert=true` 都会新增一条）
 
 ---
 
@@ -538,9 +531,7 @@ echo "alerts AFTER create_alert=true = $AFTER  (期望 = BEFORE + 1 = $((BEFORE+
 | U5 | elder_wakeup grace | alerts 无新增 |
 | U6 | elder_wakeup event 短路 | alerts 无新增 |
 | U7 | fridge report-only | 正常无 `SEVERITY` → 不触发；注入 `severity=critical` 后 rule_eval 返回 `shouldAlert: true`（fridge 未声明任何抑制规则，非旧版 stub）|
-| U8 | cooldown 抑制 | 第二次 `suppressed_by_cooldown: true, alert_created: false`；alerts 只 +1 |
-| U9 | cooldown 过期 | 两次都 +1 |
-| U10 | rule_eval | dry-run 只返回 evaluator 结果不写 DB；create_alert=true 时写 DB 并走 cooldown |
+| U8 | rule_eval | dry-run 只返回 evaluator 结果不写 DB；create_alert=true 时写 DB（rule 层不做去重，每次都 +1）|
 
 ---
 
@@ -753,7 +744,7 @@ prompt 由 `video-summary-prompt-studio` skill（agent + router）起草，skill
 - `alerts` + `smartbuilding_alert_query action=latest`：应见 `[pet_safety] pet_escape: warn — ... (zone=阳台)`。
   - ⚠️ `alerts` 是瘦表，**没有** event/severity/pet_zone 列——结构化字段在 `video_summary_tasks`，查 SQLite 需 `LEFT JOIN video_summary_tasks t ON t.id=a.task_id`（见 §9.3 步骤 C 末尾）。
 
-**退路**：motion 不触发（loop 视频画面变化太小）→ 退到手塞 task + `smartbuilding_rule_eval` 单独验规则层（见 §5 U7 / U10 与 [use-case-register-verification.md §8](./dev/use-case-register-verification.md)）。
+**退路**：motion 不触发（loop 视频画面变化太小）→ 退到手塞 task + `smartbuilding_rule_eval` 单独验规则层（见 §5 U7 / U8 与 [use-case-register-verification.md §8](./dev/use-case-register-verification.md)）。
 
 **清场**：§9.3 步骤 E（停 monitor / 删关联表 / `unregister persist:true`）。
 
@@ -1067,7 +1058,7 @@ mcp_call smartbuilding_use_case_register '{"action":"unregister","use_case":"pet
 | `smartbuilding_video_summary_task` | `list` / `get` / `delete` | 直接管理 VLM `/v1/tasks`：list 看全部、get 看单条 4 常量、delete 单条 dynamic |
 | `smartbuilding_monitor_ctl` | `register_source` 等 | 加/减 monitor；`register_source` 内部自动跑 use_case_validate |
 | `smartbuilding_monitors_compose` | `up/down/...` | 批量按 `monitors.yaml` 起 monitor |
-| `smartbuilding_rule_eval` | — | dry-run 一个 completed task 看 rule 层判定，不写 DB；`create_alert=true` 时走 cooldown 落 alert |
+| `smartbuilding_rule_eval` | — | dry-run 一个 completed task 看 rule 层判定，不写 DB；`create_alert=true` 时落 alert（rule 层不做去重）|
 
 ### 9.6 `pet_safety` 验收结论
 

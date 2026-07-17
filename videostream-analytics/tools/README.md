@@ -4,6 +4,12 @@ Validation utilities for `videostream-analytics`. These are *not* unit/integrati
 tests — they require a ground-truth SRT and either a running mock webhook or an
 exported events JSON. Keep them out of `tests/` so pytest discovery stays clean.
 
+Current video corpus layout (relative to repo root):
+- `../demo-videos/cam_child/...`
+- `../demo-videos/cam_fridge/...`
+- `../demo-videos/cam_elder_bedroom/...`
+- `../demo-videos/cam_elder_bedroom_2/...`
+
 ## Quick map
 
 | Tool | Use when |
@@ -27,7 +33,7 @@ latter — `--tolerance 2.0` recovers it.
 ```bash
 # Use the dumps run_eval.sh leaves behind (file paths printed at end of run):
 .venv/bin/python tools/render_eval_timeline.py \
-    --srt ../videos/demo006-2_expanded_20min_v2_groundtruth.srt \
+  --srt ../demo-videos/cam_fridge/demo006-2_expanded_20min_v2_groundtruth.srt \
     --events-json /tmp/fridge_events_<pid>.json \
     --status-json /tmp/fridge_status_<pid>.json \
     --source-id cam_fridge --ss 0
@@ -58,10 +64,10 @@ has 2 input videos:
 
 | Scenario | source_id | Use case | Video | ss | Prefilter | GT |
 |---|---|---|---|---|---|---|
-| `child` | cam_child | child_safety | child_safety_demo.mp4 (9'15") | 40 | on | yes |
-| `fridge` | cam_fridge | fridge | demo006-2_expanded_20min_v2.mp4 (20') | 0 | **off** | yes (4 [TAKE] cues) |
-| `elder_day1` | cam_elder_bedroom | elder_wakeup | day1_elder_wakeup.mp4 (8'00") | 0 | on | yes (excl `[EMPTY]`) |
-| `elder_day2` | cam_elder_bedroom_2 | elder_wakeup | day2_elder_wakeup.mp4 (8'29") | 0 | on | yes (excl `[EMPTY]`) |
+| `child` | cam_child | child_safety | `cam_child/child_safety_demo.mp4` (9'15") | 40 | on | yes |
+| `fridge` | cam_fridge | fridge | `cam_fridge/demo006-2_expanded_20min_v2.mp4` (20') | 0 | **off** | yes (4 [TAKE] cues) |
+| `elder_day1` | cam_elder_bedroom | elder_wakeup | `cam_elder_bedroom/day1_elder_wakeup.mp4` (8'00") | 0 | on | yes (excl `[EMPTY]`) |
+| `elder_day2` | cam_elder_bedroom_2 | elder_wakeup | `cam_elder_bedroom_2/day2_elder_wakeup.mp4` (8'29") | 0 | on | yes (excl `[EMPTY]`) |
 
 Notes:
 - `fridge` runs with `prefilter.enabled=false` because `target_classes=["person"]`
@@ -132,7 +138,7 @@ Three modes (recommended → fallback):
 
 | mode | wall-clock T0 source | accuracy | requires |
 |---|---|---|---|
-| `stream-start` (default) | `GET /sources/{id}/status` → `health.start_time` | exact | service running, `--source-id` |
+| `stream-start` (default) | `GET /sources/{id}` → `health.start_time` | exact | service running, `--source-id` |
 | `first-event` | earliest motion event's `start_time` | drifts by 5-15s (motion warmup) | nothing |
 | `wallclock` | `--anchor-wallclock <ISO>` | as accurate as you measure | manual |
 
@@ -151,7 +157,7 @@ bash scripts/test-videostream-analytics.sh --local --integration-only
 # 2. In another terminal, evaluate while the service is still up.
 #    --anchor-mode stream-start asks the service for the real stream-open time.
 .venv/bin/python tools/eval_prefilter_from_webhook.py \
-    --srt ../videos/phase2/child-care/composed/child_safety_demo_groundtruth.srt \
+  --srt ../demo-videos/cam_child/child_safety_demo_groundtruth.srt \
     --source-id cam_child --ss 40
 ```
 
@@ -165,7 +171,7 @@ curl -s http://localhost:9999/recorded_events > /tmp/child_events.json
 
 # anytime later — note: first-event anchor drifts, so HIT/MISS may shift
 # by ±10s for cues near the video start. For exact replay, snapshot
-# /sources/cam_child/status as well and use --anchor-mode wallclock.
+# /sources/cam_child as well and use --anchor-mode wallclock.
 .venv/bin/python tools/eval_prefilter_from_webhook.py \
     --srt <gt.srt> --events-json /tmp/child_events.json \
     --source-id cam_child --anchor-mode first-event --ss 40
