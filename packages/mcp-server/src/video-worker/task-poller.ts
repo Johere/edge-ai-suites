@@ -3,7 +3,7 @@ import type { SmartBuildingDB } from "@smartbuilding-video/db";
 import type { VideoSummaryClient } from "@smartbuilding-video/tools";
 import type { VideoSummaryYield } from "./video-summary-yield.js";
 import type { AlertCallback } from "./index.js";
-import { evaluateWithOverride, parseSummaryFields } from "@smartbuilding-video/tools";
+import { evaluateWithOverride, normalizeSummaryTextBySchema, parseSummaryFields } from "@smartbuilding-video/tools";
 import { logger } from "../logger.js";
 
 export class TaskPoller {
@@ -101,9 +101,10 @@ export class TaskPoller {
       if (parsed.missingRequired.length > 0) {
         logger.warn(`[task-poller] task ${task.id} (${monitorId}) missing required schema fields: ${parsed.missingRequired.join(", ")}`);
       }
+      const normalizedSummaryText = normalizeSummaryTextBySchema(result.summary ?? "", extensions, parsed.fields);
 
       // Persist summary text + extension fields + service usage in one UPDATE.
-      this.db.updateTaskStatus(task.id, "completed", result.summary ?? "", {
+      this.db.updateTaskStatus(task.id, "completed", normalizedSummaryText, {
         latencySeconds,
         promptTokens: result.usage?.prompt_tokens,
         imageTokens: result.usage?.image_tokens,

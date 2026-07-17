@@ -21,6 +21,7 @@ export {
   evaluateWithOverride,
   defaultRuleEvaluator,
   parseSummaryFields,
+  normalizeSummaryTextBySchema,
 } from "./rule-engine/index.js";
 export type {
   RuleContext,

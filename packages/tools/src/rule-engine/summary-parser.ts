@@ -7,6 +7,53 @@ export interface ParsedSummary {
   missingRequired: string[];
 }
 
+function toFieldText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value) || typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Not plain JSON; continue with fenced block parse.
+  }
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (!fenced?.[1]) return null;
+  try {
+    const parsed = JSON.parse(fenced[1]);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Ignore malformed fenced JSON.
+  }
+  return null;
+}
+
+function extractFromObject(
+  obj: Record<string, unknown>,
+  wanted: Map<string, string>,
+  fields: Record<string, string>,
+): void {
+  for (const [rawKey, rawValue] of Object.entries(obj)) {
+    const canonical = wanted.get(rawKey.toLowerCase());
+    if (!canonical) continue;
+    if (fields[canonical]) continue;
+    const value = toFieldText(rawValue);
+    if (value) fields[canonical] = value;
+  }
+}
+
 /**
  * Schema-aware parser for VLM summary output.
  *
@@ -47,7 +94,38 @@ export function parseSummaryFields(
     if (value) fields[canonical] = value;
   }
 
+  // Some tasks (for example pet_safety) may return JSON; extract only schema fields.
+  const jsonObj = parseJsonObject(summaryText);
+  if (jsonObj) {
+    extractFromObject(jsonObj, wanted, fields);
+  }
+
   const missingRequired = requiredNames.filter((name) => !fields[name.toLowerCase()]);
 
   return { fields, missingRequired };
+}
+
+/**
+ * Normalize raw model output to schema-owned plain text for storage.
+ *
+ * Output contains only configured extension fields, one `name: value` per line,
+ * in schema declaration order. If no configured fields are extracted, the raw
+ * summary text is preserved.
+ */
+export function normalizeSummaryTextBySchema(
+  rawSummaryText: string,
+  extensions: SchemaExtension[],
+  parsedFields: Record<string, string>,
+): string {
+  if (!rawSummaryText || extensions.length === 0) return rawSummaryText;
+
+  const lines: string[] = [];
+  for (const ext of extensions) {
+    const value = parsedFields[ext.name.toLowerCase()];
+    if (!value) continue;
+    lines.push(`${ext.name}: ${value}`);
+  }
+
+  if (lines.length === 0) return rawSummaryText;
+  return lines.join("\n");
 }
