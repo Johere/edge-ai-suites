@@ -11,8 +11,10 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
  *   - log files older than config.logging.retentionDays
  *   - segment day-dirs older than config.storage.retentionDays
  *
- * Runs once immediately, then every 24h. Returns a stop() callback to cancel
- * the interval on shutdown.
+ * Runs once at startup, then once per day just after local midnight. Anchoring to the wall clock
+ * (rather than a 24h interval from process start) means a day-dir that expires at midnight is
+ * removed within minutes, while still waking only once a day. Each run is a cheap directory scan;
+ * an actual delete happens at most once per day per subdir. Returns a stop() callback for shutdown.
  */
 export function startStorageCleaner(config: ServerConfig): () => void {
   const run = () => {
@@ -28,17 +30,29 @@ export function startStorageCleaner(config: ServerConfig): () => void {
     }
   };
 
+  let timer: NodeJS.Timeout;
+  const scheduleNextMidnight = () => {
+    const now = new Date();
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 5, 0, 0);
+    timer = setTimeout(() => {
+      run();
+      scheduleNextMidnight();
+    }, next.getTime() - now.getTime());
+  };
+
   run();
-  const id = setInterval(run, DAY_MS);
-  return () => clearInterval(id);
+  scheduleNextMidnight();
+  return () => clearTimeout(timer);
 }
 
 /**
  * Delete .log files under logs/monitors/<monitor_id>/ whose filename date is older than retentionDays.
  */
 export function cleanupMonitorLogs(monitorsLogsDir: string, retentionDays: number): void {
+  if (retentionDays <= 0) return; // 0/negative disables cleanup
   if (!safeIsDir(monitorsLogsDir)) return;
-  const cutoff = startOfToday() - retentionDays * DAY_MS;
+  // retentionDays=N keeps exactly N calendar days (today + N-1 previous); older is deleted.
+  const cutoff = startOfToday() - (retentionDays - 1) * DAY_MS;
   let removed = 0;
   for (const monitorId of readdirSafe(monitorsLogsDir)) {
     const dir = join(monitorsLogsDir, monitorId);
@@ -67,8 +81,10 @@ export function cleanupSegments(
   cleanupSubdirs: string[],
   retentionDays: number,
 ): void {
+  if (retentionDays <= 0) return; // 0/negative disables cleanup
   if (!safeIsDir(segmentsDir)) return;
-  const cutoff = startOfToday() - retentionDays * DAY_MS;
+  // retentionDays=N keeps exactly N calendar days (today + N-1 previous); older is deleted.
+  const cutoff = startOfToday() - (retentionDays - 1) * DAY_MS;
   let removed = 0;
   for (const monitorId of readdirSafe(segmentsDir)) {
     const monitorDir = join(segmentsDir, monitorId);

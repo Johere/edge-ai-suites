@@ -151,7 +151,7 @@ Verify the connection:
 
 ```bash
 openclaw mcp probe smart-community
-# → smart-community: 8 tools, resources
+# → smart-community: X tools, resources
 ```
 
 ### 7. Install this framework adapter (the plugin)

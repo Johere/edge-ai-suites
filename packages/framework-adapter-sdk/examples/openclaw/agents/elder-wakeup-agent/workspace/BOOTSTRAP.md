@@ -28,14 +28,14 @@ Settle these:
 
 ## After the Conversation
 
-Call `state_query` action=`upsert_plan` with:
+Call `smartbuilding_plan_ctl` action=`upsert` with:
 
 ```
-source_id=cam_elder_bedroom
-plan_date=default
-plan_json={"expected_wakeup_local": "07:30", "grace_minutes": 45,
-           "note": "onboarding baseline"}
-active=1
+monitor_id = cam_elder_bedroom
+name       = default
+plan_date  = default
+plan       = {"expected_wakeup_local": "07:30", "grace_minutes": 45,
+              "note": "onboarding baseline"}
 ```
 
 Then update:

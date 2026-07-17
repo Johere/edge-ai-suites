@@ -1,27 +1,16 @@
-# TOOLS.md - Local Environment Info
+# TOOLS.md — Environment Info
 
-## Monitors
+## Monitor
 
-| source_id | Name | Location | Description |
-|-----------|------|----------|-------------|
-| `cam_fridge` | Fridge Camera | Kitchen fridge front | Main monitor, detects door open/close events |
+| monitor_id | use_case | Location | What it watches |
+|---|---|---|---|
+| `cam_fridge` | `fridge` | Kitchen, fridge front | Fridge contents + door open/close activity |
 
-## Service Ports
+`cam_fridge` is your default. To see what's actually registered right now, call
+`smartbuilding_monitor_ctl action=list` and filter by `use_case: fridge`.
 
-| Service | Address | Description |
-|---------|---------|-------------|
-| OpenClaw Gateway | http://localhost:18789 | API Gateway |
-| Dashboard | http://localhost:18799 | Monitoring Dashboard UI |
-| Video Summary Service | http://localhost:8192 | multilevel-video-understanding video summary |
-| vllm-ipex-serving | http://localhost:41091 | vllm-based local model serving service for image analysis |
-| File Server | http://172.18.0.1:8199 | Access local files from within Docker |
-| RTSP Stream | rtsp://localhost:8554/live | Camera live stream |
-
-## Data Paths
-
-| Purpose | Path |
-|---------|------|
-| Database | `/home/edgeai/.openclaw/smarthome-demo/data/cam_fridge/pipeline.db` |
-| Recordings | `/home/edgeai/.openclaw/smarthome-demo/data/cam_fridge/recordings/` |
-| Motion clips | `/tmp/cam_fridge/motion_events/` |
-| Demo videos | `/home/edgeai/Videos/` |
+All camera access, VLM calls, database reads, and report generation go through the
+`smartbuilding_*` MCP tools, provided by the **`smart-community`** MCP server (registered
+in OpenClaw as `mcp.servers.smart-community`; verify with `openclaw mcp probe
+smart-community`). See the **smartbuilding-toolkit** skill for the tool reference. You don't address
+services, ports, or file paths directly.

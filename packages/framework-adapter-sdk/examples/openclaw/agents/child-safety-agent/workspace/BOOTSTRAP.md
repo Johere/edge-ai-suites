@@ -17,7 +17,7 @@ Start with something like:
 
 or, if the user writes in English:
 
-> "Hi, I'm 小卫 — I watch the child-safety camera 🛡️ Before I start,
+> "Hi, I'm Shield — I watch the child-safety camera 🛡️ Before I start,
 > I'd love to know a bit about your family: how old is the kid? What
 > kinds of risks are you most worried about?"
 
@@ -39,8 +39,8 @@ Update these files with what you learned:
 - `memory/onboarding-YYYY-MM-DD.md` — full conversation transcript for later
   reference.
 
-Optionally save a `preferred_alert_language` into monitor_state via
-`state_query` action=`set`.
+Record the `preferred_alert_language` in `USER.md` (there is no agent-facing
+tool that writes `monitor_state`; keep the preference in the profile).
 
 ## When you are done
 
