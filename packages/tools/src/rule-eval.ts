@@ -1,26 +1,25 @@
-import type { SmartBuildingDB } from "@smartbuilding-video/db";
+import type { SmartBuildingDB, SchemaDefinition } from "@smartbuilding-video/db";
 import type { RuleContext, RuleResult } from "./rule-engine/index.js";
 import { evaluateWithOverride } from "./rule-engine/index.js";
 
 /**
- * Configuration slice needed by `ruleEval`. The tool must be able to look up
- * `evaluate_rules_path` for the monitor's use case — the same data path used
- * by TaskPoller.
+ * Configuration slice needed by `ruleEval`. The tool looks up the monitor's use
+ * case to find both its `evaluate_rules_path` and its own `schema` (extension
+ * columns) — the same per-use-case data path used by TaskPoller.
  */
 export interface RuleEvalDeps {
   useCaseDict: Record<
     string,
     {
       evaluate_rules_path?: string;
+      /**
+       * This use case's own schema. Its `video_summary_tasks.extensions` names
+       * are the columns rule_eval reads back into `RuleContext.payload.fields`
+       * (the built-in `rowToTask` mapper drops dynamic columns).
+       */
+      schema?: SchemaDefinition;
     }
   >;
-  /**
-   * Schema extension columns (`event`, `severity`, `desc`, ...) declared for
-   * `video_summary_tasks`. These are the columns rule_eval reads back into
-   * `RuleContext.payload.fields` — the built-in `rowToTask` mapper drops
-   * dynamic columns, so we look them up directly against config.
-   */
-  schemaExtensions?: Array<{ name: string; type?: string; required?: boolean }>;
 }
 
 export interface RuleEvalParams {
@@ -94,7 +93,7 @@ export async function ruleEval(
   // hard-coded core columns only; extension columns (event/severity/desc/...)
   // live in raw SQLite so we query them directly.
   const fields: Record<string, string> = {};
-  const extensionNames = (deps.schemaExtensions ?? []).map((e) => e.name);
+  const extensionNames = (useCaseCfg?.schema?.video_summary_tasks?.extensions ?? []).map((e) => e.name);
   if (extensionNames.length > 0) {
     const row = (db as any).db
       .prepare(`SELECT ${extensionNames.map((n) => `"${n}"`).join(", ")} FROM video_summary_tasks WHERE id = ?`)

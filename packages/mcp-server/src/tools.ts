@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { dirname, resolve } from "node:path";
 import type { ServerConfig } from "./config.js";
 import type { SmartBuildingDB } from "@smartbuilding-video/db";
 import type { VideoSummaryClient } from "@smartbuilding-video/tools";
@@ -147,7 +148,6 @@ export function registerTools(
         const v = await useCaseValidate({ use_case: params.use_case }, {
           useCaseDict: config.useCaseDict,
           summaryServiceUrl: config.summaryService.url,
-          schema: config.schema,
         });
         if (!v.valid) {
           throw new Error(
@@ -306,7 +306,6 @@ export function registerTools(
       const result = await useCaseValidate(params, {
         useCaseDict: config.useCaseDict,
         summaryServiceUrl: config.summaryService.url,
-        schema: config.schema,
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -351,7 +350,8 @@ export function registerTools(
         required: z.boolean(),
       })).optional().describe(
         "Additional video_summary_tasks columns this use_case needs (e.g. motion_direction, parking_zone). " +
-        "Applied via ALTER TABLE ADD COLUMN if missing (idempotent). Also merged into config.schema in memory."
+        "Applied via ALTER TABLE ADD COLUMN if missing (idempotent). Stored under this use_case's own " +
+        "schema (use_case_dict.<uc>.schema) — never a global shared schema."
       ),
       overwrite: z.boolean().optional().describe(
         "When true, replace an existing use_case entry. Default false."
@@ -366,13 +366,12 @@ export function registerTools(
   }, async (params) => {
     try {
       const { useCaseRegister } = await import("@smartbuilding-video/tools");
-      if (!config.schema) config.schema = {};
       const result = await useCaseRegister(params as any, {
         useCaseDict: config.useCaseDict,
-        schema: config.schema,
         summaryServiceUrl: config.summaryService.url,
         db: (db as any).db,
         configPath: config.configPath,
+        baseDir: config.configPath ? dirname(resolve(config.configPath)) : process.cwd(),
       });
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -432,7 +431,6 @@ export function registerTools(
         db,
         {
           useCaseDict: config.useCaseDict,
-          schemaExtensions: config.schema?.video_summary_tasks?.extensions,
         },
         params as any,
       );

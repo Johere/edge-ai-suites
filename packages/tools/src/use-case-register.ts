@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { parseDocument, isMap } from "yaml";
-import { SchemaManager, type SchemaDefinition, type SchemaExtension } from "@smartbuilding-video/db";
+import { SchemaManager, type SchemaExtension } from "@smartbuilding-video/db";
 import type { UseCaseValidateResult } from "./use-case-validate.js";
 import { useCaseValidate } from "./use-case-validate.js";
 
@@ -29,7 +30,6 @@ export interface UseCaseRegisterParams {
 
 export interface UseCaseRegisterDeps {
   useCaseDict: Record<string, any>;
-  schema?: SchemaDefinition;
   summaryServiceUrl: string;
   db: any;
   /**
@@ -38,6 +38,12 @@ export interface UseCaseRegisterDeps {
    * degrade to `steps.config_yaml: "skipped"` with a warning.
    */
   configPath?: string;
+  /**
+   * Root directory that holds `use-cases/<use_case>/{prompt.md,evaluate_rules.py}`.
+   * When `prompt_text` / `evaluate_rules_path` are omitted, register auto-picks
+   * these conventional files. Defaults to `process.cwd()` when unset.
+   */
+  baseDir?: string;
 }
 
 export interface UseCaseRegisterResult {
@@ -109,53 +115,73 @@ export async function useCaseRegister(
 
   if (params.schema_extensions && params.schema_extensions.length > 0) {
     try {
+      // ALTER the shared video_summary_tasks table (idempotent). The fields
+      // belong to THIS use case only — they are carried on the use_case_dict
+      // entry (entry.schema) below, never merged into any global schema.
       const schemaMgr = new SchemaManager(deps.db);
       const applied = schemaMgr.applySchema({
         video_summary_tasks: { extensions: params.schema_extensions },
       });
       result.steps.schema = { added: applied.added, warnings: applied.warnings };
-
-      if (!deps.schema) deps.schema = {};
-      if (!deps.schema.video_summary_tasks) {
-        deps.schema.video_summary_tasks = { extensions: [] };
-      }
-      const existing = new Map(
-        deps.schema.video_summary_tasks.extensions.map((e) => [e.name, e]),
-      );
-      for (const ext of params.schema_extensions) {
-        existing.set(ext.name, ext);
-      }
-      deps.schema.video_summary_tasks.extensions = Array.from(existing.values());
     } catch (err: any) {
       result.errors.push(`schema apply failed: ${err.message}`);
       return result;
     }
   }
 
-  if (params.prompt_text) {
+  // prompt_text resolution — convention over configuration. When the caller
+  // doesn't pass prompt_text explicitly, auto-read the conventional prompt file
+  // use-cases/<use_case>/prompt.md so agents only need to drop the file (via the
+  // video-summary-prompt-studio skill) rather than re-cat it into the call.
+  const baseDir = deps.baseDir ?? process.cwd();
+  let promptText = params.prompt_text;
+  let promptSource = "param";
+  if (!promptText) {
+    const conv = join(baseDir, "use-cases", params.use_case, "prompt.md");
+    if (existsSync(conv)) {
+      promptText = readFileSync(conv, "utf-8");
+      promptSource = conv;
+    }
+  }
+
+  if (promptText) {
     try {
       const vlmStep = await registerVlmTask(
         deps.summaryServiceUrl,
         taskName,
-        params.prompt_text,
+        promptText,
         params.description ?? `Dynamically registered use_case ${params.use_case}`,
       );
       result.steps.vlm_task = vlmStep;
+      if (promptSource !== "param") {
+        result.warnings.push(`prompt_text auto-read from ${promptSource}`);
+      }
     } catch (err: any) {
       result.errors.push(`VLM task registration failed: ${err.message}`);
       return result;
     }
   } else {
-    result.steps.vlm_task = "skipped";
-    result.warnings.push(
-      "prompt_text omitted — VLM task must be registered out-of-band before this use_case can produce alerts",
+    // No prompt anywhere → the VLM task can't be registered, so the use case
+    // would be unusable (task-poller would hit HTTP 400). Fail loudly instead of
+    // persisting a half-baked entry.
+    result.errors.push(
+      `prompt_text not provided and no use-cases/${params.use_case}/prompt.md found — ` +
+      `generate the prompt first (video-summary-prompt-studio skill) or pass prompt_text.`,
     );
+    return result;
   }
 
-  if (params.evaluate_rules_path) {
+  // evaluate_rules_path resolution — same convention: auto-pick
+  // use-cases/<use_case>/evaluate_rules.py when present and not passed explicitly.
+  let evaluateRulesPath = params.evaluate_rules_path;
+  if (!evaluateRulesPath) {
+    const conv = join(baseDir, "use-cases", params.use_case, "evaluate_rules.py");
+    if (existsSync(conv)) evaluateRulesPath = conv;
+  }
+  if (evaluateRulesPath) {
     const error = await validateEvaluateRulesOverride(
       params.use_case,
-      params.evaluate_rules_path,
+      evaluateRulesPath,
     );
     if (error) {
       result.errors.push(error);
@@ -163,13 +189,27 @@ export async function useCaseRegister(
     }
   }
 
+  // Fill defaults for optional config so a minimal (name + description) register
+  // still persists a complete entry, consistent with the other built-in UCs.
   const entry: any = {
     video_summary_task: taskName,
   };
-  if (params.description !== undefined) entry.description = params.description;
-  if (params.evaluate_rules_path !== undefined) entry.evaluate_rules_path = params.evaluate_rules_path;
-  if (params.reports !== undefined) entry.reports = params.reports;
-  if (params.summarize !== undefined) entry.summarize = params.summarize;
+  entry.description = params.description ?? `${params.use_case} use case`;
+  if (evaluateRulesPath !== undefined) entry.evaluate_rules_path = evaluateRulesPath;
+  entry.reports = params.reports ?? { data_source: "alerts", default_type: "daily", filter: {} };
+  entry.summarize = params.summarize ?? {
+    method: "SIMPLE",
+    processor_kwargs: { levels: 1, level_sizes: [-1], process_fps: 2 },
+  };
+  // Schema is owned by THIS use case: carry the declared extension columns on the
+  // entry (persisted with it). No global shared schema — each use case's pipeline
+  // parses only the fields it declares here.
+  if (params.schema_extensions && params.schema_extensions.length > 0) {
+    entry.schema = {
+      video_summary_tasks: { extensions: params.schema_extensions },
+      custom_tables: [],
+    };
+  }
 
   deps.useCaseDict[params.use_case] = entry;
   result.steps.use_case_dict = alreadyExists ? "updated" : "added";
@@ -189,7 +229,6 @@ export async function useCaseRegister(
       {
         useCaseDict: deps.useCaseDict,
         summaryServiceUrl: deps.summaryServiceUrl,
-        schema: deps.schema,
       },
     );
     if (!result.steps.validate.valid) {

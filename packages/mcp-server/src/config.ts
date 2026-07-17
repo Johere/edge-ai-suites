@@ -38,6 +38,13 @@ export interface UseCaseConfig {
   video_summary_task: string;
   /** Optional path to Python override script for rule evaluation. */
   evaluate_rules_path?: string;
+  /**
+   * DB schema owned by THIS use case: extension columns on the shared
+   * `video_summary_tasks` table (+ optional custom_tables). Each use case
+   * declares only the fields its own pipeline parses — there is no global shared
+   * schema. Applied via idempotent ALTER TABLE at startup and on register.
+   */
+  schema?: SchemaDefinition;
   /** Optional per-clip summarization tuning (see SummarizeConfig). */
   summarize?: SummarizeConfig;
   /** Optional default report configuration consumed by smartbuilding_generate_report. */
@@ -96,7 +103,6 @@ export interface ServerConfig {
     timeoutSeconds: number;       // VSA auto-pause threshold (register payload)
     checkIntervalSeconds: number; // VSA watchdog poll interval (register payload)
   };
-  schema?: SchemaDefinition;
   pollIntervalMs: number;
   videoSummaryMaxConcurrent: number;
   mcp?: {
@@ -175,7 +181,6 @@ export function loadConfig(configPath?: string): ServerConfig {
     },
     pollIntervalMs: parsed?.poll_interval_ms ?? 5000,
     videoSummaryMaxConcurrent: parsed?.video_summary_max_concurrent ?? 2,
-    schema: parsed?.schema,
     mcp: {
       port: parsed?.mcp?.port ?? 3100,
       sessionIdleTimeoutMs: parsed?.mcp?.session_idle_timeout_ms ?? 30 * 60 * 1000,

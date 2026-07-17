@@ -92,14 +92,25 @@ async function main() {
   const db = new SmartBuildingDB(config.dbPath);
   db.initialize();
 
-  if (config.schema) {
+  {
+    // Schema is owned per use case (no global shared schema). Apply each use
+    // case's declared columns to the shared video_summary_tasks table. ALTER is
+    // idempotent, so use cases that declare the same column (event/desc/...) only
+    // add it once, and a restart re-applies safely.
     const schemaManager = new SchemaManager((db as any).db);
-    const result = schemaManager.applySchema(config.schema);
-    if (result.added.length > 0) {
-      logger.info(`[schema] Added columns: ${result.added.join(", ")}`);
+    const added: string[] = [];
+    const warnings: string[] = [];
+    for (const uc of Object.values(config.useCaseDict)) {
+      if (!uc.schema) continue;
+      const result = schemaManager.applySchema(uc.schema);
+      added.push(...result.added);
+      warnings.push(...result.warnings);
     }
-    if (result.warnings.length > 0) {
-      logger.warn(`[schema] ${result.warnings.join(", ")}`);
+    if (added.length > 0) {
+      logger.info(`[schema] Added columns: ${Array.from(new Set(added)).join(", ")}`);
+    }
+    if (warnings.length > 0) {
+      logger.warn(`[schema] ${Array.from(new Set(warnings)).join(", ")}`);
     }
   }
 

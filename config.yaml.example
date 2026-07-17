@@ -72,28 +72,18 @@ mcp:
 events_webhook:
   port: 3101
 
-# DB schema extensions for video_summary_tasks.
-# MCP server auto-applies ALTER TABLE on startup if columns are missing.
-# The parser writes the parsed VLM output into these columns.
-# `alerts` table is intentionally kept use-case-agnostic — no extensions.
+# Use case library. Each entry is referenced by monitors via `use_case`.
+# A single use case may be referenced by multiple monitors.
+#
+# Schema is owned PER USE CASE — there is no global shared schema block. Each use
+# case declares, under its own `schema:`, the extension columns its pipeline
+# parses on the shared `video_summary_tasks` table (+ optional custom_tables).
+# MCP applies these via idempotent ALTER TABLE at startup (columns declared by
+# multiple use cases, e.g. event/desc, are added once). The `alerts` table is
+# intentionally kept use-case-agnostic — no extensions.
 # (Note: alerts also has a built-in core column `notified` — delivery status,
 # 1=pushed to users, 0=cooled down but still stored for audit. It is NOT a
 # use-case extension; you never configure it here.)
-schema:
-  video_summary_tasks:
-    extensions:
-      # `event` + `desc` are used by every use case (event drives rule logic;
-      # desc is the human-readable alert message tail). `severity` is
-      # optional because time-based use cases like elder_wakeup judge by event
-      # inside evaluate_rules.py (no severity ordering).
-      - { name: "event", type: "text", required: true }
-      - { name: "severity", type: "text", required: false } # critical / warn / info — used by threshold-based UCs (e.g. child_safety)
-      - { name: "desc", type: "text", required: true }
-      - { name: "confidence", type: "real", required: false } # optional VLM confidence
-  custom_tables: []
-
-# Use case library. Each entry is referenced by monitors via `use_case`.
-# A single use case may be referenced by multiple monitors.
 #
 # Alert decisions use the built-in defaultRuleEvaluator unless a use case sets
 # evaluate_rules_path to an adapter under `use-cases/<name>/evaluate_rules.py`.
@@ -101,6 +91,11 @@ use_case_dict:
   fridge:
     description: "Fridge content tracking"
     video_summary_task: fridge_monitor
+    # report-only: fridge_monitor emits no SEVERITY/EVENT lines, so no extension
+    # columns are parsed. Empty schema → nothing checked, nothing extracted.
+    schema:
+      video_summary_tasks: { extensions: [] }
+      custom_tables: []
     summarize:
       method: SIMPLE
       processor_kwargs:
@@ -116,6 +111,14 @@ use_case_dict:
     description: "Child safety monitoring"
     video_summary_task: child_safety_monitor
     # No evaluate_rules_path — defaultRuleEvaluator alerts on severity warn/critical.
+    # This use case parses severity/event/desc; severity drives the threshold rule.
+    schema:
+      video_summary_tasks:
+        extensions:
+          - { name: "severity", type: "text", required: false } # critical / warn / info
+          - { name: "event", type: "text", required: true }
+          - { name: "desc", type: "text", required: true }
+      custom_tables: []
     # Per-clip summarize tuning. Defaults (single LOCAL_PROMPT pass) suit most use cases;
     # override only when you need multi-level roll-up or T-1 temporal context.
     summarize:
@@ -133,6 +136,14 @@ use_case_dict:
     description: "Elder wakeup monitoring"
     video_summary_task: elder_wakeup_monitor
     evaluate_rules_path: ./use-cases/elder_wakeup/evaluate_rules.py
+    # Time-based UC: evaluate_rules.py judges by event + wakeup_time (no severity).
+    schema:
+      video_summary_tasks:
+        extensions:
+          - { name: "event", type: "text", required: true }
+          - { name: "wakeup_time", type: "text", required: false } # HH:MM or minutes-since-midnight
+          - { name: "desc", type: "text", required: true }
+      custom_tables: []
     summarize:
       method: SIMPLE
       processor_kwargs:

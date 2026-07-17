@@ -5,12 +5,14 @@ export interface UseCaseValidateParams {
 }
 
 export interface UseCaseValidateDeps {
-  /** Loaded use_case_dict from config.yaml; `video_summary_task` is read here. */
-  useCaseDict: Record<string, { video_summary_task: string }>;
+  /**
+   * Loaded use_case_dict from config.yaml. `video_summary_task` and the use
+   * case's own `schema` (extension columns for required-field discovery) are
+   * read here — schema is owned per use case, not globally.
+   */
+  useCaseDict: Record<string, { video_summary_task: string; schema?: SchemaDefinition }>;
   /** multilevel-video-understanding service base URL (e.g. http://localhost:8192). */
   summaryServiceUrl: string;
-  /** config.schema for required-field discovery. */
-  schema?: SchemaDefinition;
 }
 
 export interface UseCaseValidateResult {
@@ -89,8 +91,10 @@ export async function useCaseValidate(
   }
   checks.task_registered = true;
 
-  // 3. schema consistency: required schema fields must appear in LOCAL_PROMPT
-  const extensions = deps.schema?.video_summary_tasks?.extensions ?? [];
+  // 3. schema consistency: this use case's own required schema fields must appear
+  // in LOCAL_PROMPT. Schema is owned per use case, so other use cases' fields
+  // never enter this check.
+  const extensions = ucCfg.schema?.video_summary_tasks?.extensions ?? [];
   const localPrompt = extractLocalPrompt(taskBody);
   const check = SchemaManager.validatePromptSchema(extensions, localPrompt);
   checks.schema_consistent = check.valid;

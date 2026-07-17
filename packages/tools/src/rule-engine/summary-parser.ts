@@ -15,14 +15,21 @@ export interface ParsedSummary {
  *
  * Matching is case-insensitive: a schema field `event` matches `EVENT:`, `Event:`, or `event:`.
  * First occurrence wins when duplicates appear.
+ *
+ * `requiredFields` (optional) overrides which fields count as required for the
+ * `missingRequired` check — pass the current use case's effective required set so
+ * one use case's required fields don't get flagged as missing on another's tasks.
+ * When omitted, falls back to the global `extensions` required flags.
  */
 export function parseSummaryFields(
   summaryText: string,
   extensions: SchemaExtension[],
+  requiredFields?: string[],
 ): ParsedSummary {
+  const requiredNames = requiredFields ?? extensions.filter((e) => e.required).map((e) => e.name);
   const fields: Record<string, string> = {};
   if (!summaryText || extensions.length === 0) {
-    return { fields, missingRequired: extensions.filter((e) => e.required).map((e) => e.name) };
+    return { fields, missingRequired: [...requiredNames] };
   }
 
   // Build lookup: lowercased schema name → canonical (lowercased) name to store under
@@ -40,9 +47,7 @@ export function parseSummaryFields(
     if (value) fields[canonical] = value;
   }
 
-  const missingRequired = extensions
-    .filter((e) => e.required && !fields[e.name.toLowerCase()])
-    .map((e) => e.name);
+  const missingRequired = requiredNames.filter((name) => !fields[name.toLowerCase()]);
 
   return { fields, missingRequired };
 }

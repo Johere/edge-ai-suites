@@ -92,9 +92,12 @@ export class TaskPoller {
       });
       const latencySeconds = (Date.now() - t0) / 1000;
 
-      // VLM output parser: schema-aware built-in field extraction.
-      const extensions = this.config.schema?.video_summary_tasks?.extensions ?? [];
-      const parsed = parseSummaryFields(result.summary ?? "", extensions);
+      // VLM output parser: schema-aware field extraction. Schema is owned per use
+      // case — parse only the columns THIS use case declares, so one use case's
+      // fields never leak into another's parsing or required-field check.
+      const extensions = useCaseCfg?.schema?.video_summary_tasks?.extensions ?? [];
+      const requiredNames = extensions.filter((e) => e.required).map((e) => e.name);
+      const parsed = parseSummaryFields(result.summary ?? "", extensions, requiredNames);
       if (parsed.missingRequired.length > 0) {
         logger.warn(`[task-poller] task ${task.id} (${monitorId}) missing required schema fields: ${parsed.missingRequired.join(", ")}`);
       }
