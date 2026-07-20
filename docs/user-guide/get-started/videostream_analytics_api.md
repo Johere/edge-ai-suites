@@ -157,7 +157,6 @@ The nested pipeline object (`extra="forbid"`). Every sub-block is optional; when
 |-----------|-------|---------|
 | `motion` | `MotionConfig` | Frame-difference motion detector parameters. |
 | `segment` | `SegmentConfig` | Motion-clip segmentation parameters. |
-| `static` | `StaticConfig` | Quiet-period (`type=static`) close-out emission. |
 | `prefilter` | `PrefilterConfig` | Optional NPU / OpenVINO YOLO prefilter. |
 | `roi` | `RoiConfig` | Phase 9 ROI crop and trajectory-region emission. |
 | `recording` | `RecordingConfig` | Fixed-cadence continuous recording branch. |
@@ -179,13 +178,6 @@ The nested pipeline object (`extra="forbid"`). Every sub-block is optional; when
 |-------|------|---------|-------------|
 | `max_duration` | `float` | `10.0` | Hard ceiling on segment length, in seconds. |
 | `min_duration` | `float` | `1.0` | Minimum clip duration; shorter clips are discarded. |
-
-##### `StaticConfig`
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | `bool` | `true` | Emit a `type=static` event closing out each quiet period between motions. |
-| `min_duration` | `float` | `3.0` | Quiet spans shorter than this (seconds) are suppressed (no static emitted). |
 
 ##### `PrefilterConfig`
 
@@ -245,7 +237,6 @@ The nested pipeline object (`extra="forbid"`). Every sub-block is optional; when
   "pipeline": {
     "motion":    { "diff_threshold": 15, "area_ratio": 0.005, "stable_frames": 45 },
     "segment":   { "max_duration": 10, "min_duration": 1.0 },
-    "static":    { "enabled": true, "min_duration": 3.0 },
     "prefilter": {
       "enabled": true,
       "model_path": "/models/yolo11s.xml",
@@ -426,7 +417,7 @@ Every event produced by a running source is delivered as an HTTP POST to the con
 ```json
 {
   "sourceId":  "cam_child",
-  "type":      "motion | static | recording | status",
+  "type":      "motion | recording | status",
   "timestamp": "2026-06-30T14:30:15",
   "payload":   { ... }
 }
@@ -435,11 +426,11 @@ Every event produced by a running source is delivered as an HTTP POST to the con
 | Field | Type | Description |
 |-------|------|-------------|
 | `sourceId` | `string` | The `source_id` used at registration (camelCase in the envelope). |
-| `type` | `"motion" \| "static" \| "recording" \| "status"` | Event category; determines the payload schema. |
+| `type` | `"motion" \| "recording" \| "status"` | Event category; determines the payload schema. |
 | `timestamp` | `string` (ISO 8601, second precision, local timezone) | Time the event was emitted on VSA. |
 | `payload` | `object` | Body specific to the `type`. |
 
-> VSA emits `static` events (§4.x) to close out quiet periods between motions, in addition to `motion` / `recording` / `status`. `status` events are informational — MCP currently ignores unrecognized types.
+> The system design (§9.2) references a `static` event type. The current VSA implementation does not emit it; motion / recording / status are the three types produced. `status` events are informational — MCP currently ignores unrecognized types.
 
 ### 4.2 `type=motion` payload
 
@@ -456,16 +447,6 @@ Emitted by [`_emit_segment`](../../videostream-analytics/stream_monitor/rtsp_mon
 | `prefilter_classes` | `string` (JSON-encoded array) | Optional | Hit class names as a JSON string. |
 | `prefilter_confidence` | `float` | Optional | Maximum detection confidence within the clip. |
 | `trajectory_region` | `string` (`"[x0,y0,x1,y1]"`, normalized to [0,1]) | Optional | Phase 9. The union bbox accumulated by prefilter, serialised as a JSON string of four floats. |
-
-### 4.x `type=static` payload
-
-Emitted by [`_emit_static`](../../videostream-analytics/stream_monitor/rtsp_monitor.py) on the strict **Motion → static → Motion** close-out model: when a motion segment ends, the quiet period is armed; when the next motion begins (or the source shuts down while still quiet), the elapsed quiet span is emitted as a `static` event — provided `pipeline.static.enabled` and the span ≥ `pipeline.static.min_duration`. No leading static is ever fabricated before the first motion (that interval is system uptime, not a real quiet period). MCP writes this to `events` (`motion_type=static`); it creates no summary task and triggers no rule.
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `start_time` | `string` (ISO 8601) | ✅ | Quiet-period start (recorded when the preceding motion ended). |
-| `end_time` | `string` (ISO 8601) | Optional | Quiet-period end. |
-| `duration_seconds` | `float` | ✅ | Quiet-period duration in seconds (wall-clock; pause spans are excluded). |
 
 ### 4.3 `type=recording` payload
 

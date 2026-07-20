@@ -10,7 +10,6 @@ An AI Agent-native video analysis platform designed for MCP (Model Context Proto
 | Child_safety | Child danger alert notification — real-time detection of risky behaviors (jumping from heights, playing with knives/fire, etc.), immediate alerts to parents, daily summaries, and follow-up conversations | Adapter shipped (`evaluate_rules.py` + prompt) |
 | Elder_wakeup | Elder care (wake-up tracking) — monitor daily wake-up times, alert caregivers on significant deviations, weekly summary reports, and follow-up reminders | Adapter shipped (`evaluate_rules.py` + prompt) |
 
-See [docs/use-case-adapter.md](docs/use-case-adapter.md) for how to add a new use case.
 
 ## Architecture
 
@@ -43,10 +42,6 @@ The MCP server (`packages/mcp-server`) sits between AI agents and three external
 - **Startup** (`mcp-server --config config.yaml --monitors monitors.yaml`): load config → init DB → reconcile crash residue → auto-register each `enabled: true` monitor → start storage cleaner (24h period; purges expired logs and segments)
 - **Runtime** (per monitor): analytics `:8999` pulls RTSP → POSTs events to `:3101` → MCP worker polls pending tasks → calls `:8192` for summary → rule-engine decides alert → agents query via MCP tools
 - **Shutdown** (SIGINT/SIGTERM): stop cleaner → graceful-stop all workers → pause analytics sources → close DB
-
-## Status
-
-Early development — see [docs/implements/](docs/implements/) for per-component status and [docs/dev/](docs/dev/) for migration plans.
 
 ## License
 

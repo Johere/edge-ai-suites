@@ -57,3 +57,7 @@ tests/videos/
 
 # Ad-hoc test videos at repo root
 *.mp4
+
+# dev docs
+docs/*
+!docs/user-guide/**
