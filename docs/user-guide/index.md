@@ -2,7 +2,7 @@
 
 An AI Agent-native video analysis platform designed for MCP (Model Context Protocol) integration. Provides a universal, framework-agnostic toolkit for video surveillance and analysis — agents can autonomously create, manage, and respond to custom use cases without modifying core components.
 
-## Use Cases
+## Built-in Use Cases
 
 | ID | Description | Status |
 |----|-------------|--------|
@@ -42,6 +42,13 @@ The MCP server (`packages/mcp-server`) sits between AI agents and three external
 - **Startup** (`mcp-server --config config.yaml --monitors monitors.yaml`): load config → init DB → reconcile crash residue → auto-register each `enabled: true` monitor → start storage cleaner (24h period; purges expired logs and segments)
 - **Runtime** (per monitor): analytics `:8999` pulls RTSP → POSTs events to `:3101` → MCP worker polls pending tasks → calls `:8192` for summary → rule-engine decides alert → agents query via MCP tools
 - **Shutdown** (SIGINT/SIGTERM): stop cleaner → graceful-stop all workers → pause analytics sources → close DB
+
+## Supporting Resources
+
+- [Get Started Guide](./get-started.md)
+- [API Reference](./api-reference.md)
+- [System Requirements](./get-started/system-requirements.md)
+- [Release Notes](./release-notes.md)
 
 ## License
 

@@ -1,101 +1,76 @@
-# Adapter Example: Smart Community MCP × OpenClaw
+# Get Started
 
-A production-ready OpenClaw plugin that subscribes to the **Smart Community (SmartBuilding) MCP
-server**'s per-monitor alert resources and injects each new alert into the routed OpenClaw
-session(s). It is the reference implementation of a **framework adapter** built on
-[`@smartbuilding-video/framework-adapter-sdk`](../../).
+**Agentic Smart Community** is an AI Agent-native video analysis platform built around the Model Context Protocol (MCP). This guide brings up the **framework-agnostic core** — the piece that any MCP host (OpenClaw, Claude Desktop, Hermes, …) talks to. It provides step-by-step instructions to:
 
-## What this integrates
+- Set up an on-device GenAI model serving (VLM + LLM) that exposes an OpenAI-compatible API.
+- Start the three core services and the MCP server using pre-built Docker images / host scripts.
+- Push the bundled demo videos as RTSP streams so the three demo monitors (fridge / child / elder) start running.
+- Learn where to modify basic configuration to suit specific requirements.
 
-The Smart Community MCP server is **host-agnostic** — it knows nothing about OpenClaw, Feishu, or
-agent sessions. When its rule engine fires an alert it only emits the protocol-standard
-`notifications/resources/updated` (uri only, no payload). This plugin is the bridge that turns those
-notifications into chat turns inside OpenClaw:
+Once you finish this guide the MCP server is up, and the demo monitors are processing video.
 
-- It runs the SDK's long-lived MCP client (subscribe, cursor dedup, per-monitor ordering, reconnect).
-- It owns the **route table** (`monitor → OpenClaw session[]`) — the MCP server has no concept of
-  sessions, so routing lives here in plugin config.
-- It does **raw pass-through** — no embedded rule engine, no persona polish. The SDK owns the
-  protocol; the plugin just appends each alert into the target session.
+To integrate with OpenClaw, continue with an **agent-host adapter** — see [Next steps](#next-steps--connect-an-agent-host).
 
-This is the light **MCP-subscribe + raw pass-through** path. The result: a monitor alert appears in
-the agent's chat session as if the user had spoken it, driving both proactive notifications and
-reactive follow-up Q&A from the same transcript.
+## Prerequisites
 
-## Architecture
+Before you begin, ensure the following:
 
-```
-   Video pipeline + rule engine
-   (per-monitor alerts)
-             │
-             ▼
-   ┌──────────────────────┐       notifications/resources/updated       ┌───────────────────────────┐
-   │  Smart Community MCP  │  ─────────────── (uri only) ─────────────▶  │   Adapter  (this plugin)   │
-   │       server          │                                             │  ┌──────────────────────┐ │
-   │   (host-agnostic)     │  ◀──── resources/read ?since=<cursor> ────  │  │ MCP client (SDK)     │ │
-   └──────────────────────┘  ──────────── alerts[] + latestId ────────▶  │  │ subscribe · dedup ·  │ │
-                                                                         │  │ order · reconnect    │ │
-                                                                         │  └──────────┬───────────┘ │
-                                                                         │  ┌──────────▼───────────┐ │
-                                                                         │  │ route table          │ │
-                                                                         │  │ monitor → session[]  │ │
-                                                                         │  └──────────┬───────────┘ │
-                                                                         └─────────────┼─────────────┘
-                                                                                       │ append alert turn
-                                                                                       ▼
-                                                                          OpenClaw agent sessions
-                                                                       (proactive push + follow-up Q&A)
-```
+- **System Requirements**: Verify that your system meets the [minimum requirements](./get-started/system-requirements.md).
+- **GPU Driver Installed**: This guide assumes the GPU driver on the target machine is already installed. If it is not, install the Intel GPU driver packages by following the official [Installing Packages from the Intel PPA](https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html) guide first.
+- **Docker Installed**: Install Docker. For installation instructions, see [Get Docker](https://docs.docker.com/get-docker/).
+- **ffmpeg / ffprobe**: needed to push and verify the demo RTSP streams (`sudo apt install ffmpeg`).
 
-The adapter is a thin, long-lived bridge: the MCP server decides *what* is an alert, the adapter
-decides *where* it goes. It carries no rules and no persona — an alert lands in the target session
-verbatim, as if the user had typed it, so the same transcript serves both the proactive push and the
-user's follow-up questions.
+This guide assumes basic familiarity with Docker commands and terminal usage. If you are new to Docker, see [Docker Documentation](https://docs.docker.com/) for an introduction.
 
-Each route can be delivered in one of two modes (see `deliver` in [Configure](#configure)):
-**`deliver:false`** injects the alert straight into the OpenClaw session with zero LLM;
-**`deliver:true`** additionally relays it out through an external channel. The lower-level injection
-mechanics (transcript API vs. legacy FS-append, idempotency, write locking) are handled by the SDK
-and documented in the source under `src/`.
+### Memory & swap requirements
 
-## Get Started Guide
+`Qwen3.5-35B-A3B` in FP8 with a 60k context window is memory-hungry on a shared-RAM host. The default configuration targets a **64 GB system**:
 
-### 1. Install plain OpenClaw
+- Provide at least **32 GB of swap** so the weight load and KV cache can spill under peak pressure without the OOM killer stepping in. If your host lacks enough swap, see guidelines in: [Adding Swap Space](./get-started/add-swap.md).
+- To lower the footprint, reduce `MAX_MODEL_LEN` (e.g. `32768`) or switch `LOAD_QUANTIZATION` to `awq` / `sym_int4` in [set_env.sh](../../docker/set_env.sh).
+- The **first startup takes 3–20 minutes** while the weights are downloaded and compiled. The serving becomes healthy once it answers on `http://<host>:41091/v1/models`.
 
-Follow [`scripts/openclaw/README.md`](../../../../scripts/openclaw/README.md) to install the pure OpenClaw.
+## Step 1 — Start the three core services
 
-### 2. Start the video-summary dependency (VLM)
+The full on-device stack is defined in [docker/compose.yaml](../../docker/compose.yaml) and orchestrated by [setup_docker.sh](../../setup_docker.sh):
+
+| Service | Port | Role |
+|---|---|---|
+| `vllm-ipex-serving` | `:41091` | on-device model serving (one Qwen3.5-35B-A3B fills both the VLM and LLM roles) |
+| `multilevel-video-understanding` | `:8192` | video-segment summary microservice |
+| `videostream-analytics` | host net | RTSP capture + NPU YOLO prefilter; POSTs events to the MCP webhook `:3101` |
 
 ```bash
-cd docker/video-summary/
-source set_env.sh
-docker compose build multilevel-video-understanding
-docker compose up -d
+source docker/set_env.sh   # deployment env (model, ports, group ids, data dir); the script also sources it itself
+
+# First time only — build the two local images (multilevel + videostream-analytics):
+bash setup_docker.sh --build
+
+# Start all three services:
+bash setup_docker.sh
 ```
 
-### 3. *(optional)* Fire model providers
+> - Use `bash setup_docker.sh --light` to reuse an already-warm serving and start only `multilevel-video-understanding` + `videostream-analytics`.
+> - Use `bash setup_docker.sh --down` to tear down.
 
-On a fresh machine you still need model providers wired into `~/.openclaw/openclaw.json`. The dev
-convenience script re-applies this machine's providers (a local vLLM + minimax cloud):
+The first run pulls and compiles the model in `vllm-ipex-serving` (3–20+ min). Confirm the serving is healthy before continuing:
 
 ```bash
-bash packages/framework-adapter-sdk/examples/openclaw/scripts/fire_models.sh
+curl -s http://localhost:41091/v1/models   # returns the model "id" once ready
 ```
-### 4. Start the demo video RTSP streams
 
-The pipeline reads its cameras over RTSP. For the demo, the bundled clips are pushed to a local
-mediamtx RTSP server (one path per camera: `live/fridge`, `live/child`, `live/elder`, …):
+## Step 2 — Prepare the demo video RTSP streams
+
+The pipeline reads its cameras over RTSP. For the demo, the bundled clips are pushed to a local mediamtx RTSP server (one path per camera: `live/fridge`, `live/child`, `live/elder`):
 
 ```bash
 cd demo-videos
-bash start-streams.sh          # start every enabled stream
+bash start-streams.sh            # start every enabled stream
 # bash start-streams.sh --status   # show running pushers
 # bash start-streams.sh --stop     # stop them
 ```
 
-Each enabled stream loops forever, so the demo keeps running. Edit [`streams.yaml`](../../../../demo-videos/streams.yaml)
-to change the input source: toggle `enabled` per camera, swap the `file`, or adjust the `rtsp_url` /
-mediamtx port. Verify a stream is live with:
+Each enabled stream loops forever, so the demo keeps running. Edit [demo-videos/streams.yaml](../../demo-videos/streams.yaml) to change the input source: toggle `enabled` per camera, swap the `file`, or adjust the `rtsp_url` / mediamtx port. Verify a stream is live with:
 
 ```bash
 ffprobe -rtsp_transport tcp rtsp://localhost:8554/live/child
@@ -103,188 +78,48 @@ ffprobe -rtsp_transport tcp rtsp://localhost:8554/live/child
 
 This runs on the host in the background — continue in the same terminal.
 
-### 5. Start the videostream-analytics dependency
+## Step 3 — (Optional) Configure the MCP server
+
+The MCP server reads two files: `config.yaml` (services, retention, use cases) and `monitors.yaml` (per-camera declarations). If you don't create them, the start script falls back to the tracked [config.yaml.example](../../config.yaml.example) / [monitors.yaml.example](../../monitors.yaml.example), which already declare the three demo monitors — so the demo runs out of the box.
+
+To customize, copy the examples and edit your own copy (the `.example` files stay as a pristine reference):
 
 ```bash
-cd videostream-analytics
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[npu,dev]"
-videostream-analytics serve --config config/config.yaml   # first edit the OpenVINO model path in the config
+cp config.yaml.example   config.yaml
+cp monitors.yaml.example monitors.yaml
 ```
 
-This runs on the host in the foreground — open **another terminal** to continue with the next step.
+All runtime data (SQLite DB, video segments, logs) is stored under a single root directory, `~/.mcp-smartbuilding` by default. Override it with `export SMARTBUILDING_DATA_DIR=/path/to/data`.
 
-### 6. Build and start the MCP server
+## Step 4 — Start the MCP server
 
-From the repo root, install deps, compile, and start the server in Streamable-HTTP mode:
+The MCP server runs as a **host** process (like OpenClaw) — Streamable-HTTP on `:3100` plus the events webhook on `:3101`. The first run builds the workspace automatically:
 
 ```bash
-npm install
-npm run build
-node packages/mcp-server/dist/index.js --http --config config.yaml.example --monitors monitors.yaml.example
-# → [mcp-server] Streamable HTTP on http://localhost:3100/mcp
+bash scripts/mcp-server/start.sh
+# → MCP:    http://localhost:3100/mcp
+# → events: http://localhost:3101/events
+# → logs:   /tmp/smartbuilding-<uid>/mcp-server.log
 ```
 
-This runs on the host in the foreground — open **another terminal** to continue.
+> To stop the server, run `bash scripts/mcp-server/stop.sh`.
 
-Then register it in `~/.openclaw/openclaw.json` as a Streamable-HTTP MCP server:
+## Step 5 — Verify the monitors are running
 
-```json
-{
-  "mcp": {
-    "servers": {
-      "smart-community": {
-        "transport": "streamable-http",
-        "url": "http://localhost:3100/mcp"
-      }
-    }
-  }
-}
-```
-Then restart the openclaw:
-```bash
-openclaw gateway restart
-```
+At startup the MCP server auto-registers every `enabled: true` monitor and starts pulling its RTSP stream through `videostream-analytics`. Confirm it end to end:
 
-Verify the connection:
+- **Database** is created at `~/.mcp-smartbuilding/smartbuilding.db`; video segments and per-monitor logs appear under `~/.mcp-smartbuilding/segments/<monitor_id>/`.
 
-```bash
-openclaw mcp probe smart-community
-# → smart-community: X tools, resources
-```
+At this point the core is fully live: three services + MCP server + three demo monitors processing video.
 
-### 7. Install this framework adapter (the plugin)
+## Next steps — connect an agent host
 
-```bash
-cd packages/framework-adapter-sdk/examples/openclaw
-bash install.sh
-```
+The MCP server is host-agnostic, it is easily to integrate with a specific agent framework:
 
-That fully installs the adapter — no manual `openclaw.json` editing required. It:
+- **OpenClaw** — see [Adapter Example: Smart Community MCP × OpenClaw](../../packages/framework-adapter-sdk/examples/openclaw/README.md). It installs plain OpenClaw, wires model providers, registers this MCP server in `openclaw.json`, and installs the adapter plugin that routes each monitor's alerts into the matching agent session.
 
-1. builds the SDK and installs the plugin's deps,
-2. registers the plugin entry in `openclaw.json`,
-3. merges the demo agents into `agents.list[]` (merge-by-id — never clobbers agents you added),
-4. links the plugin into `~/.openclaw/extensions/smartbuilding-alerts`,
-5. seeds the bundled agent personas into `~/.openclaw/agents/`,
-6. restarts the OpenClaw gateway (`openclaw gateway restart`),
-7. wakes the demo agents (`openclaw agent -m hi`) so their sessions exist.
+## Supporting Resources
 
-### 8. What you can do once it's running
-
-Forward the gateway port from your local machine and open the OpenClaw dashboard UI:
-
-```bash
-ssh -L 18789:127.0.0.1:18789 user@host-ip
-```
-
-Then browse to the dashboard locally. You'll see **3 agents**; the `cam_child` and
-`cam_elder_bedroom` sessions receive live alert pushes as the pipeline fires events.
-
-The database on the service host lives at `~/.mcp-smartbuilding/smartbuilding.db`.
-
-## Configure
-
-`install.sh` writes this into `plugins.entries.smartbuilding-alerts` of
-`~/.openclaw/openclaw.json` — you normally don't edit it by hand:
-
-```json
-"smartbuilding-alerts": {
-  "enabled": true,
-  "config": {
-    "mcpServer": { "url": "http://localhost:3100/mcp" },
-    "monitors": {
-      "cam_child": {
-        "alerts": [
-          { "agentId": "child-safety-agent", "sessionKey": "agent:child-safety-agent:cam_child", "deliver": false }
-        ]
-      },
-      "cam_elder_bedroom": {
-        "alerts": [
-          { "agentId": "elder-wakeup-agent", "sessionKey": "agent:elder-wakeup-agent:cam_elder_bedroom", "deliver": false }
-        ]
-      }
-    }
-  }
-}
-```
-
-| Field | Meaning |
-|-------|---------|
-| `mcpServer.url` | SmartBuilding MCP endpoint (Streamable HTTP). `mcpServer.headers` for auth if needed. |
-| `monitors.<id>.alerts[]` | Where this monitor's alerts go. `<id>` maps to `smartbuilding://monitor/<id>/alerts`. |
-| `agentId` | Agent owning the target session (resolves the JSONL path for FS-append). |
-| `sessionKey` | Target OpenClaw session key, `agent:<agentId>:<session>`. The examples route each monitor into its own session (`…:cam_child`), so alerts don't mix with the agent's `main` chat. |
-| `deliver` | `false` (default) → inject the alert turn into the session, zero LLM. `true` → channel delivery via `subagent.run` (e.g. a Feishu group session) — *not yet verified end-to-end*. `deliver` no longer selects the write mechanism (both share the same session-injection primitive); it only decides whether to *also* push to an external channel. |
-| `cursorFile` | *(optional)* delivery cursor path. Default `<OPENCLAW_HOME>/smartbuilding-alerts-cursor.json`. |
-| `pollFallbackMs` | *(optional)* safety-net poll (ms) against a lost notification. Default `0` (off). |
-
-> **Adding another monitor or agent:**
-Add a `monitors.<id>` entry and (if new) seed the agent's personas under `~/.openclaw/agents/<id>/`.
-No code change is needed — the adapter subscribes to whatever monitor ids appear in config.
-
-## Subscription data flow
-
-The runtime subscription sequence — connect, subscribe, alert broadcast, cursor read — end to end
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Client as MCP Client<br/>(this adapter)
-    participant Transport as StreamableHTTPServerTransport
-    participant Registry as McpSubscriberRegistry
-    participant Server as McpServer (per session)
-    participant Poller as TaskPoller
-    participant DB as SQLite (per monitor)
-
-    rect rgb(240, 248, 255)
-    Note over Client,Registry: ① Connect + register (sessionIdGenerator assigns a real sid)
-    Client->>Transport: POST /mcp  initialize
-    Transport->>Transport: sessionIdGenerator() → sid (uuid)
-    Transport-->>Client: 200 + header mcp-session-id: sid
-    Transport->>Registry: onsessioninitialized(sid)<br/>register(sid, {server, transport, subscriptions: ∅})
-    end
-
-    rect rgb(255, 250, 235)
-    Note over Client,Registry: ② Subscribe (getSessionId() lazy-eval)
-    Client->>Transport: POST /mcp  notifications/initialized
-    Client->>Transport: POST /mcp  resources/subscribe<br/>{uri: smartbuilding://monitor/cam_child/alerts}
-    Transport->>Server: SubscribeRequestSchema handler
-    Server->>Server: sid = getSessionId()  // transport.sessionId
-    Server->>Registry: addSubscription(sid, uri)
-    Server-->>Client: {} (ack)
-    end
-
-    rect rgb(255, 240, 240)
-    Note over Poller,Client: ③ Alert fires → broadcast (onAlert)
-    Poller->>DB: createAlert({monitorId, ...})
-    Poller->>Poller: onAlert(monitorId)
-    Poller->>Registry: findSubscribers(uri)
-    Registry-->>Poller: [subscriber entries]
-    loop each session subscribed to this uri
-        Poller->>Server: server.sendResourceUpdated({uri})
-        Server-->>Client: SSE  notifications/resources/updated {uri}
-    end
-    end
-
-    rect rgb(240, 255, 240)
-    Note over Client,DB: ④ Client pulls the delta itself (notification carries no payload)
-    Client->>Transport: resources/read<br/>uri=.../alerts?since=cursor
-    Transport->>DB: queryAlerts({monitorId, sinceId})
-    DB-->>Transport: alerts[] + latestId
-    Transport-->>Client: alerts + latestId (stored as next cursor)
-    end
-
-    Note over Transport,Registry: On disconnect: transport.onclose → registry.unregister(sid)
-```
-
-- **① Connect** — the adapter's MCP client initializes; the server's stateful HTTP transport mints a
-  real `mcp-session-id` and registers it in the `McpSubscriberRegistry`.
-- **② Subscribe** — the adapter subscribes to each configured monitor's `…/alerts` URI *before* its
-  first read, so no notification is lost in the startup window (cursor dedup covers the overlap).
-- **③ Broadcast** — when the rule engine's `TaskPoller` creates an alert, `onAlert` looks up every
-  session subscribed to that URI and pushes a payload-less `notifications/resources/updated` over SSE.
-- **④ Delta read** — on notification the adapter reads `…/alerts?since=<cursor>`, gets the new alerts
-  plus a fresh `latestId`, advances its cursor atomically after all sinks succeed (at-least-once),
-  and appends each alert into the routed OpenClaw session.
+- [Overview](./index.md)
+- [API Reference](./api-reference.md)
+- [System Requirements](./get-started/system-requirements.md)

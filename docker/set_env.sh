@@ -43,6 +43,9 @@ export VLLM_SERVICE_PORT=41091
 # =========================================================================
 # multilevel-video-understanding microservice
 # =========================================================================
+# Its source (edge-ai-libraries) is not vendored here — setup_docker.sh clones it
+# into the fixed path .external/edge-ai-libraries, which docker/compose.yaml
+# `extends` from. No env var needed.
 export REGISTRY_URL=intel/
 export REGISTRY=${REGISTRY_URL}
 export TAG=latest
@@ -80,3 +83,16 @@ mkdir -p "${VIDEO_SUMMARY_CACHE_HOST}/tasks"
 # multilevel itself doesn't know about SmartBuilding's layout — MCP server's
 # summary_service.path_remap rewrites paths from this host prefix to /data.
 export SMARTBUILDING_DATA_DIR=${SMARTBUILDING_DATA_DIR:-${HOME}/.mcp-smartbuilding}
+
+# =========================================================================
+# videostream-analytics (RTSP capture + NPU YOLO prefilter)
+# =========================================================================
+# Runs on the host network, so it reaches the MCP server's EventsEndpoint (a host
+# process on localhost:3101 — see scripts/mcp-server/). Override only if the MCP
+# server listens elsewhere.
+export WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:3101/events}
+
+# Host directory holding the YOLO prefilter model(s); bind-mounted read-only at
+# the same path inside the container (identity mount). SMARTBUILDING_DATA_DIR
+# (above) is reused as VSA's recordings/segments root.
+export MODEL_DIR=${MODEL_DIR:-${HOME}/models}

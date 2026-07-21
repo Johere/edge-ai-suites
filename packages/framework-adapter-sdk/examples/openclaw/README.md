@@ -60,20 +60,25 @@ and documented in the source under `src/`.
 
 ## Get Started Guide
 
+### 0. Bring up the host-agnostic core first
+
+This adapter only wires an already-running MCP server into OpenClaw — it does **not** start the
+video pipeline itself. Before installing it, follow
+[**Get Started**](../../../../docs/user-guide/get-started.md) to bring up the core:
+
+- the three core services (`vllm-ipex-serving` :41091, `multilevel-video-understanding` :8192,
+  `videostream-analytics`),
+- the demo video RTSP streams (`live/fridge`, `live/child`, `live/elder`),
+- the **MCP server** on Streamable-HTTP `:3100/mcp` + events webhook `:3101`.
+
+Come back here once `curl http://localhost:3100/mcp` responds and the demo monitors are running.
+The remaining steps are OpenClaw-specific.
+
 ### 1. Install plain OpenClaw
 
 Follow [`scripts/openclaw/README.md`](../../../../scripts/openclaw/README.md) to install the pure OpenClaw.
 
-### 2. Start the video-summary dependency (VLM)
-
-```bash
-cd docker/video-summary/
-source set_env.sh
-docker compose build multilevel-video-understanding
-docker compose up -d
-```
-
-### 3. *(optional)* Fire model providers
+### 2. *(optional)* Fire model providers
 
 On a fresh machine you still need model providers wired into `~/.openclaw/openclaw.json`. The dev
 convenience script re-applies this machine's providers (a local vLLM + minimax cloud):
@@ -81,51 +86,11 @@ convenience script re-applies this machine's providers (a local vLLM + minimax c
 ```bash
 bash packages/framework-adapter-sdk/examples/openclaw/scripts/fire_models.sh
 ```
-### 4. Start the demo video RTSP streams
 
-The pipeline reads its cameras over RTSP. For the demo, the bundled clips are pushed to a local
-mediamtx RTSP server (one path per camera: `live/fridge`, `live/child`, `live/elder`, …):
+### 3. Register the MCP server in OpenClaw
 
-```bash
-cd demo-videos
-bash start-streams.sh          # start every enabled stream
-# bash start-streams.sh --status   # show running pushers
-# bash start-streams.sh --stop     # stop them
-```
-
-Each enabled stream loops forever, so the demo keeps running. Edit [`streams.yaml`](../../../../demo-videos/streams.yaml)
-to change the input source: toggle `enabled` per camera, swap the `file`, or adjust the `rtsp_url` /
-mediamtx port. Verify a stream is live with:
-
-```bash
-ffprobe -rtsp_transport tcp rtsp://localhost:8554/live/child
-```
-
-This runs on the host in the background — continue in the same terminal.
-
-### 5. Start the videostream-analytics dependency
-
-```bash
-cd videostream-analytics
-docker compose -f docker/docker-compose.yaml up -d  # first edit the OpenVINO model path in the config
-```
-
-This runs on the host in the foreground — open **another terminal** to continue with the next step.
-
-### 6. Build and start the MCP server
-
-From the repo root, install deps, compile, and start the server in Streamable-HTTP mode:
-
-```bash
-npm install
-npm run build
-node packages/mcp-server/dist/index.js --http --config config.yaml.example --monitors monitors.yaml.example
-# → [mcp-server] Streamable HTTP on http://localhost:3100/mcp
-```
-
-This runs on the host in the foreground — open **another terminal** to continue.
-
-Then register it in `~/.openclaw/openclaw.json` as a Streamable-HTTP MCP server:
+The MCP server is already running from [Get Started](../../../../docs/user-guide/get-started.md).
+Register it in `~/.openclaw/openclaw.json` as a Streamable-HTTP MCP server:
 
 ```json
 {
@@ -151,7 +116,7 @@ openclaw mcp probe smart-community
 # → smart-community: X tools, resources
 ```
 
-### 7. Install this framework adapter (the plugin)
+### 4. Install this framework adapter (the plugin)
 
 ```bash
 cd packages/framework-adapter-sdk/examples/openclaw
@@ -168,7 +133,7 @@ That fully installs the adapter — no manual `openclaw.json` editing required. 
 6. restarts the OpenClaw gateway (`openclaw gateway restart`),
 7. wakes the demo agents (`openclaw agent -m hi`) so their sessions exist.
 
-### 8. What you can do once it's running
+### 5. What you can do once it's running
 
 Forward the gateway port from your local machine and open the OpenClaw dashboard UI:
 
