@@ -1,4 +1,0 @@
-[submodule "edge-ai-libraries"]
-	path = edge-ai-libraries
-	url = https://github.com/Johere/edge-ai-libraries.git
-	branch = dev/smarthome-prompt
