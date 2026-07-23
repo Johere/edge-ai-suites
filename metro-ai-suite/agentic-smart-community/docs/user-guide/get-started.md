@@ -25,7 +25,7 @@ This guide assumes basic familiarity with Docker commands and terminal usage. If
 
 ## Step-by-step Installation
 
-Clone the repository and change directory to the `multilevel-video-understanding` microservice:
+Clone the repository and change directory to `agentic-smart-community`:
 
 ```bash
 git clone https://github.com/open-edge-platform/edge-ai-suites ~/edge-ai-suites -b main
