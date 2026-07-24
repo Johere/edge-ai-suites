@@ -8,8 +8,6 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
-    ports:
-      - "8999:8999"
     environment:
       - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:3101/events}
       # MCP server's data root. Defaults to ~/.mcp-smartbuilding (the MCP default);
