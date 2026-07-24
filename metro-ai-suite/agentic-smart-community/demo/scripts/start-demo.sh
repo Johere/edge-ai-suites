@@ -22,21 +22,19 @@ ANALYTICS_URL="${ANALYTICS_URL:-http://localhost:8999}"  # videostream-analytics
 command -v curl >/dev/null || { echo "curl not found in PATH" >&2; exit 1; }
 command -v jq   >/dev/null || { echo "jq not found in PATH"   >&2; exit 1; }
 
-# 0. Pre-requisites: videostream-analytics + multilevel-video-understanding must be healthy.
-#    Both expose GET /health; the demo cannot register tasks or process clips without them.
-check_health() {
-  local name="$1" url="$2"
-  if curl -fsS --max-time 5 "$url/health" >/dev/null 2>&1; then
-    echo "  ok: $name ($url)"
-  else
-    echo "prerequisite not healthy: $name — expected GET $url/health to succeed." >&2
-    echo "  start it first, or override with SUMMARY_URL / ANALYTICS_URL." >&2
-    exit 1
-  fi
-}
+# 0. Pre-requisites must be healthy before we register tasks or process clips.
+#    Note the two services expose DIFFERENT health paths.
 echo "checking prerequisites…"
-check_health "multilevel-video-understanding" "$SUMMARY_URL"
-check_health "videostream-analytics"          "$ANALYTICS_URL"
+
+# multilevel-video-understanding — GET /v1/health
+curl -fsS --max-time 5 "$SUMMARY_URL/v1/health" >/dev/null 2>&1 \
+  || { echo "prerequisite not healthy: multilevel-video-understanding — expected GET $SUMMARY_URL/v1/health to succeed (override with SUMMARY_URL)." >&2; exit 1; }
+echo "  ok: multilevel-video-understanding ($SUMMARY_URL)"
+
+# videostream-analytics — GET /health
+curl -fsS --max-time 5 "$ANALYTICS_URL/health" >/dev/null 2>&1 \
+  || { echo "prerequisite not healthy: videostream-analytics — expected GET $ANALYTICS_URL/health to succeed (override with ANALYTICS_URL)." >&2; exit 1; }
+echo "  ok: videostream-analytics ($ANALYTICS_URL)"
 
 # 1. Register demo tasks to multilevel-video-understanding (see ../prompts/curl_register_task.md).
 #    Fetch the current task list once, then POST only the tasks that aren't registered yet.

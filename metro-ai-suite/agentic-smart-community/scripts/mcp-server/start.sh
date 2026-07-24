@@ -38,6 +38,9 @@ if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null;
 fi
 rm -f "$PID_FILE"
 
+# Fresh log per launch — truncate instead of appending so it doesn't grow unbounded.
+: >"$LOG_FILE"
+
 cd "$REPO_DIR"
 
 # Build the workspace once if the compiled entrypoint is missing.
