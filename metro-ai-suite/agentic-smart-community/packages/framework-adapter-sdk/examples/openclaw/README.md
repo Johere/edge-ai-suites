@@ -167,13 +167,15 @@ openclaw cron rm  <job-id>               # remove a job to redo it — takes the
 
 ### 3. What you get
 
-Forward the gateway port from your local machine and open the OpenClaw dashboard UI:
+Open the OpenClaw dashboard UI:
 
 ```bash
-ssh -L 18789:127.0.0.1:18789 user@host-ip
-```
+openclaw dashboard
 
-Then browse to the dashboard locally.
+# Dashboard URL: http://127.0.0.1:18789/
+```
+> To log-in, find your gateway token from `openclaw.json`
+
 You'll see **3 agents**; the `cam_child` and `cam_elder_bedroom` sessions receive live alert pushes as the pipeline fires events.
 
 The database on the service host lives at `~/.mcp-smartbuilding/smartbuilding.db`.
