@@ -1,0 +1,679 @@
+1
+00:00:00,000 --> 00:00:02,000
+[META] timeline_id=elder_care_day_v2 mode=rtsp24h slots=5760 events=169 clip_seconds=15 slots_sha1=4248a4a813debbd58594a0301f1c838cc4dc0513 generated=2026-08-21T16:00:25
+
+2
+00:00:00,000 --> 00:00:15,000
+#0000 [NIGHT] Elder tossing and turning repeatedly in bed, unable to settle
+
+3
+01:20:00,000 --> 01:20:15,000
+#0320 [NIGHT] Elder sitting up on the bed edge at night, motionless and dazed
+
+4
+02:10:00,000 --> 02:10:15,000
+#0520 [NIGHT] Elder tossing and turning repeatedly in bed, unable to settle
+
+5
+02:30:00,000 --> 02:30:15,000
+#0600 [NIGHT] Elder sitting up on the bed edge at night, motionless and dazed
+
+6
+02:50:00,000 --> 02:50:15,000
+#0680 [NIGHT] Elder out of bed at night, lamp on, pacing inside the room
+
+7
+03:10:00,000 --> 03:10:15,000
+#0760 [NIGHT] Elder getting out of bed and leaving the room at night
+
+8
+03:30:00,000 --> 03:30:15,000
+#0840 [NIGHT] Elder returning to the room and lying back down in bed
+
+9
+03:50:00,000 --> 03:50:15,000
+#0920 [STAFF] Care worker entering the room at night for a check, then leaving
+
+10
+06:03:00,000 --> 06:03:15,000
+#1452 [WAKE] Elder getting up in the morning and opening the curtain
+
+11
+06:09:00,000 --> 06:09:15,000
+#1476 [CALM] Elder sitting on the bed edge looking at a phone
+
+12
+06:15:00,000 --> 06:15:15,000
+#1500 [CALM] Elder sitting quietly in the armchair reading a book
+
+13
+06:21:00,000 --> 06:21:15,000
+#1524 [CALM] Elder sitting on the bed edge looking at a phone
+
+14
+06:27:00,000 --> 06:27:15,000
+#1548 [CALM] Elder sitting quietly in the armchair reading a book
+
+15
+06:33:00,000 --> 06:33:15,000
+#1572 [CALM] Elder sitting in the armchair watching television
+
+16
+06:39:00,000 --> 06:39:15,000
+#1596 [CALM] Elder sitting quietly in the armchair reading a book
+
+17
+06:45:00,000 --> 06:45:15,000
+#1620 [CALM] Elder sitting on the bed edge looking at a phone
+
+18
+06:51:00,000 --> 06:51:15,000
+#1644 [CALM] Elder sitting in the armchair watching television
+
+19
+06:57:00,000 --> 06:57:15,000
+#1668 [CALM] Elder sitting quietly in the armchair reading a book
+
+20
+07:03:00,000 --> 07:03:15,000
+#1692 [CALM] Elder sitting quietly in the armchair reading a book
+
+21
+07:09:00,000 --> 07:09:15,000
+#1716 [CALM] Elder sitting in the armchair watching television
+
+22
+07:15:00,000 --> 07:15:15,000
+#1740 [ACTIVITY] Elder pacing back and forth across the room
+
+23
+07:21:00,000 --> 07:21:15,000
+#1764 [CALM] Elder sitting quietly in the armchair reading a book
+
+24
+07:27:00,000 --> 07:27:15,000
+#1788 [CALM] Elder sitting on the bed edge looking at a phone
+
+25
+07:33:00,000 --> 07:33:15,000
+#1812 [CALM] Elder sitting in the armchair watching television
+
+26
+07:39:00,000 --> 07:39:15,000
+#1836 [CALM] Elder sitting quietly in the armchair reading a book
+
+27
+07:45:00,000 --> 07:45:15,000
+#1860 [ACTIVITY] Elder pacing back and forth across the room
+
+28
+07:51:00,000 --> 07:51:15,000
+#1884 [STAFF] Care worker entering the room in daylight, then leaving
+
+29
+07:57:00,000 --> 07:57:15,000
+#1908 [CALM] Elder sitting in the armchair watching television
+
+30
+08:03:00,000 --> 08:03:15,000
+#1932 [CALM] Elder sitting quietly in the armchair reading a book
+
+31
+08:09:00,000 --> 08:09:15,000
+#1956 [REST] Elder lying on the bed taking an afternoon nap
+
+32
+08:15:00,000 --> 08:15:15,000
+#1980 [ACTIVITY] Elder pacing back and forth across the room
+
+33
+08:21:00,000 --> 08:21:15,000
+#2004 [CALM] Elder sitting quietly in the armchair reading a book
+
+34
+08:27:00,000 --> 08:27:15,000
+#2028 [CALM] Elder sitting in the armchair watching television
+
+35
+08:33:00,000 --> 08:33:15,000
+#2052 [CALM] Elder sitting on the bed edge looking at a phone
+
+36
+08:39:00,000 --> 08:39:15,000
+#2076 [CALM] Elder sitting quietly in the armchair reading a book
+
+37
+08:45:00,000 --> 08:45:15,000
+#2100 [ACTIVITY] Elder pacing back and forth across the room
+
+38
+08:51:00,000 --> 08:51:15,000
+#2124 [CALM] Elder sitting in the armchair watching television
+
+39
+08:57:00,000 --> 08:57:15,000
+#2148 [CALM] Elder sitting quietly in the armchair reading a book
+
+40
+09:03:00,000 --> 09:03:15,000
+#2172 [REST] Elder lying on the bed taking an afternoon nap
+
+41
+09:09:00,000 --> 09:09:15,000
+#2196 [CALM] Elder sitting in the armchair watching television
+
+42
+09:15:00,000 --> 09:15:15,000
+#2220 [ACTIVITY] Elder pacing back and forth across the room
+
+43
+09:21:00,000 --> 09:21:15,000
+#2244 [CALM] Elder sitting quietly in the armchair reading a book
+
+44
+09:27:00,000 --> 09:27:15,000
+#2268 [CALM] Elder sitting on the bed edge looking at a phone
+
+45
+09:33:00,000 --> 09:33:15,000
+#2292 [CALM] Elder sitting in the armchair watching television
+
+46
+09:39:00,000 --> 09:39:15,000
+#2316 [CALM] Elder sitting quietly in the armchair reading a book
+
+47
+09:45:00,000 --> 09:45:15,000
+#2340 [ACTIVITY] Elder pacing back and forth across the room
+
+48
+09:51:00,000 --> 09:51:15,000
+#2364 [STAFF] Care worker entering the room in daylight, then leaving
+
+49
+09:57:00,000 --> 09:57:15,000
+#2388 [CALM] Elder sitting in the armchair watching television
+
+50
+10:03:00,000 --> 10:03:15,000
+#2412 [CALM] Elder sitting quietly in the armchair reading a book
+
+51
+10:09:00,000 --> 10:09:15,000
+#2436 [REST] Elder lying on the bed taking an afternoon nap
+
+52
+10:15:00,000 --> 10:15:15,000
+#2460 [ACTIVITY] Elder pacing back and forth across the room
+
+53
+10:21:00,000 --> 10:21:15,000
+#2484 [CALM] Elder sitting quietly in the armchair reading a book
+
+54
+10:27:00,000 --> 10:27:15,000
+#2508 [CALM] Elder sitting in the armchair watching television
+
+55
+10:33:00,000 --> 10:33:15,000
+#2532 [CALM] Elder sitting on the bed edge looking at a phone
+
+56
+10:39:00,000 --> 10:39:15,000
+#2556 [CALM] Elder sitting quietly in the armchair reading a book
+
+57
+10:45:00,000 --> 10:45:15,000
+#2580 [ACTIVITY] Elder pacing back and forth across the room
+
+58
+10:51:00,000 --> 10:51:15,000
+#2604 [REST] Elder lying on the bed taking an afternoon nap
+
+59
+10:57:00,000 --> 10:57:15,000
+#2628 [CALM] Elder sitting quietly in the armchair reading a book
+
+60
+11:03:00,000 --> 11:03:15,000
+#2652 [REST] Elder lying on the bed taking an afternoon nap
+
+61
+11:09:00,000 --> 11:09:15,000
+#2676 [CALM] Elder sitting quietly in the armchair reading a book
+
+62
+11:15:00,000 --> 11:15:15,000
+#2700 [REST] Elder lying on the bed taking an afternoon nap
+
+63
+11:21:00,000 --> 11:21:15,000
+#2724 [CALM] Elder sitting in the armchair watching television
+
+64
+11:27:00,000 --> 11:27:15,000
+#2748 [REST] Elder lying on the bed taking an afternoon nap
+
+65
+11:33:00,000 --> 11:33:15,000
+#2772 [CALM] Elder sitting quietly in the armchair reading a book
+
+66
+11:39:00,000 --> 11:39:15,000
+#2796 [REST] Elder lying on the bed taking an afternoon nap
+
+67
+11:45:00,000 --> 11:45:15,000
+#2820 [ACTIVITY] Elder pacing back and forth across the room
+
+68
+11:51:00,000 --> 11:51:15,000
+#2844 [REST] Elder lying on the bed taking an afternoon nap
+
+69
+11:57:00,000 --> 11:57:15,000
+#2868 [CALM] Elder sitting quietly in the armchair reading a book
+
+70
+12:03:00,000 --> 12:03:15,000
+#2892 [REST] Elder lying on the bed taking an afternoon nap
+
+71
+12:09:00,000 --> 12:09:15,000
+#2916 [CALM] Elder sitting in the armchair watching television
+
+72
+12:15:00,000 --> 12:15:15,000
+#2940 [REST] Elder lying on the bed taking an afternoon nap
+
+73
+12:21:00,000 --> 12:21:15,000
+#2964 [CALM] Elder sitting quietly in the armchair reading a book
+
+74
+12:27:00,000 --> 12:27:15,000
+#2988 [REST] Elder lying on the bed taking an afternoon nap
+
+75
+12:33:00,000 --> 12:33:15,000
+#3012 [ACTIVITY] Elder pacing back and forth across the room
+
+76
+12:39:00,000 --> 12:39:15,000
+#3036 [REST] Elder lying on the bed taking an afternoon nap
+
+77
+12:45:00,000 --> 12:45:15,000
+#3060 [CALM] Elder sitting quietly in the armchair reading a book
+
+78
+12:51:00,000 --> 12:51:15,000
+#3084 [REST] Elder lying on the bed taking an afternoon nap
+
+79
+12:57:00,000 --> 12:57:15,000
+#3108 [CALM] Elder sitting in the armchair watching television
+
+80
+13:03:00,000 --> 13:03:15,000
+#3132 [CALM] Elder sitting in the armchair watching television
+
+81
+13:09:00,000 --> 13:09:15,000
+#3156 [CALM] Elder sitting quietly in the armchair reading a book
+
+82
+13:15:00,000 --> 13:15:15,000
+#3180 [ACTIVITY] Elder pacing back and forth across the room
+
+83
+13:21:00,000 --> 13:21:15,000
+#3204 [REST] Elder lying on the bed taking an afternoon nap
+
+84
+13:27:00,000 --> 13:27:15,000
+#3228 [CALM] Elder sitting quietly in the armchair reading a book
+
+85
+13:33:00,000 --> 13:33:15,000
+#3252 [CALM] Elder sitting in the armchair watching television
+
+86
+13:39:00,000 --> 13:39:15,000
+#3276 [ACTIVITY] Elder pacing back and forth across the room
+
+87
+13:45:00,000 --> 13:45:15,000
+#3300 [CALM] Elder sitting quietly in the armchair reading a book
+
+88
+13:51:00,000 --> 13:51:15,000
+#3324 [REST] Elder lying on the bed taking an afternoon nap
+
+89
+13:57:00,000 --> 13:57:15,000
+#3348 [CALM] Elder sitting quietly in the armchair reading a book
+
+90
+14:03:00,000 --> 14:03:15,000
+#3372 [ACTIVITY] Elder pacing back and forth across the room
+
+91
+14:09:00,000 --> 14:09:15,000
+#3396 [CALM] Elder sitting quietly in the armchair reading a book
+
+92
+14:15:00,000 --> 14:15:15,000
+#3420 [RESTLESS] Elder repeatedly sitting down and standing up, visibly restless
+
+93
+14:21:00,000 --> 14:21:15,000
+#3444 [ACTIVITY] Elder pacing back and forth across the room
+
+94
+14:27:00,000 --> 14:27:15,000
+#3468 [CALM] Elder sitting in the armchair watching television
+
+95
+14:33:00,000 --> 14:33:15,000
+#3492 [RESTLESS] Elder repeatedly sitting down and standing up, visibly restless
+
+96
+14:39:00,000 --> 14:39:15,000
+#3516 [CALM] Elder sitting quietly in the armchair reading a book
+
+97
+14:45:00,000 --> 14:45:15,000
+#3540 [ACTIVITY] Elder pacing back and forth across the room
+
+98
+14:51:00,000 --> 14:51:15,000
+#3564 [CALM] Elder sitting on the bed edge looking at a phone
+
+99
+14:57:00,000 --> 14:57:15,000
+#3588 [RESTLESS] Elder repeatedly sitting down and standing up, visibly restless
+
+100
+15:03:00,000 --> 15:03:15,000
+#3612 [CALM] Elder sitting in the armchair watching television
+
+101
+15:09:00,000 --> 15:09:15,000
+#3636 [ACTIVITY] Elder pacing back and forth across the room
+
+102
+15:15:00,000 --> 15:15:15,000
+#3660 [CALM] Elder sitting quietly in the armchair reading a book
+
+103
+15:21:00,000 --> 15:21:15,000
+#3684 [RESTLESS] Elder repeatedly sitting down and standing up, visibly restless
+
+104
+15:27:00,000 --> 15:27:15,000
+#3708 [ACTIVITY] Elder pacing back and forth across the room
+
+105
+15:33:00,000 --> 15:33:15,000
+#3732 [CALM] Elder sitting in the armchair watching television
+
+106
+15:39:00,000 --> 15:39:15,000
+#3756 [CALM] Elder sitting on the bed edge looking at a phone
+
+107
+15:45:00,000 --> 15:45:15,000
+#3780 [CALM] Elder sitting quietly in the armchair reading a book
+
+108
+15:51:00,000 --> 15:51:15,000
+#3804 [ACTIVITY] Elder pacing back and forth across the room
+
+109
+15:57:00,000 --> 15:57:15,000
+#3828 [CALM] Elder sitting in the armchair watching television
+
+110
+16:03:00,000 --> 16:03:15,000
+#3852 [CALM] Elder sitting in the armchair watching television
+
+111
+16:09:00,000 --> 16:09:15,000
+#3876 [ACTIVITY] Elder pacing back and forth across the room
+
+112
+16:15:00,000 --> 16:15:15,000
+#3900 [CALM] Elder sitting quietly in the armchair reading a book
+
+113
+16:21:00,000 --> 16:21:15,000
+#3924 [CALM] Elder sitting in the armchair watching television
+
+114
+16:27:00,000 --> 16:27:15,000
+#3948 [ACTIVITY] Elder pacing back and forth across the room
+
+115
+16:33:00,000 --> 16:33:15,000
+#3972 [STAFF] Care worker entering the room in daylight, then leaving
+
+116
+16:39:00,000 --> 16:39:15,000
+#3996 [CALM] Elder sitting in the armchair watching television
+
+117
+16:45:00,000 --> 16:45:15,000
+#4020 [ACTIVITY] Elder pacing back and forth across the room
+
+118
+16:51:00,000 --> 16:51:15,000
+#4044 [CALM] Elder sitting quietly in the armchair reading a book
+
+119
+16:57:00,000 --> 16:57:15,000
+#4068 [CALM] Elder sitting in the armchair watching television
+
+120
+17:03:00,000 --> 17:03:15,000
+#4092 [ACTIVITY] Elder pacing back and forth across the room
+
+121
+17:09:00,000 --> 17:09:15,000
+#4116 [CALM] Elder sitting in the armchair watching television
+
+122
+17:15:00,000 --> 17:15:15,000
+#4140 [CALM] Elder sitting quietly in the armchair reading a book
+
+123
+17:21:00,000 --> 17:21:15,000
+#4164 [ACTIVITY] Elder pacing back and forth across the room
+
+124
+17:27:00,000 --> 17:27:15,000
+#4188 [STAFF] Care worker entering the room in daylight, then leaving
+
+125
+17:33:00,000 --> 17:33:15,000
+#4212 [CALM] Elder sitting in the armchair watching television
+
+126
+17:39:00,000 --> 17:39:15,000
+#4236 [ACTIVITY] Elder pacing back and forth across the room
+
+127
+17:45:00,000 --> 17:45:15,000
+#4260 [CALM] Elder sitting quietly in the armchair reading a book
+
+128
+17:51:00,000 --> 17:51:15,000
+#4284 [CALM] Elder sitting in the armchair watching television
+
+129
+17:57:00,000 --> 17:57:15,000
+#4308 [CALM] Elder sitting in the armchair watching television
+
+130
+18:03:00,000 --> 18:03:15,000
+#4332 [CALM] Elder sitting in the armchair watching television
+
+131
+18:09:00,000 --> 18:09:15,000
+#4356 [CALM] Elder sitting quietly in the armchair reading a book
+
+132
+18:15:00,000 --> 18:15:15,000
+#4380 [ACTIVITY] Elder pacing back and forth across the room
+
+133
+18:21:00,000 --> 18:21:15,000
+#4404 [CALM] Elder sitting in the armchair watching television
+
+134
+18:27:00,000 --> 18:27:15,000
+#4428 [CALM] Elder sitting quietly in the armchair reading a book
+
+135
+18:33:00,000 --> 18:33:15,000
+#4452 [CALM] Elder sitting on the bed edge looking at a phone
+
+136
+18:39:00,000 --> 18:39:15,000
+#4476 [CALM] Elder sitting in the armchair watching television
+
+137
+18:45:00,000 --> 18:45:15,000
+#4500 [ACTIVITY] Elder pacing back and forth across the room
+
+138
+18:51:00,000 --> 18:51:15,000
+#4524 [CALM] Elder sitting quietly in the armchair reading a book
+
+139
+18:57:00,000 --> 18:57:15,000
+#4548 [CALM] Elder sitting in the armchair watching television
+
+140
+19:03:00,000 --> 19:03:15,000
+#4572 [STAFF] Care worker entering the room in daylight, then leaving
+
+141
+19:09:00,000 --> 19:09:15,000
+#4596 [CALM] Elder sitting quietly in the armchair reading a book
+
+142
+19:15:00,000 --> 19:15:15,000
+#4620 [ACTIVITY] Elder pacing back and forth across the room
+
+143
+19:21:00,000 --> 19:21:15,000
+#4644 [CALM] Elder sitting in the armchair watching television
+
+144
+19:27:00,000 --> 19:27:15,000
+#4668 [CALM] Elder sitting quietly in the armchair reading a book
+
+145
+19:33:00,000 --> 19:33:15,000
+#4692 [CALM] Elder sitting on the bed edge looking at a phone
+
+146
+19:39:00,000 --> 19:39:15,000
+#4716 [CALM] Elder sitting in the armchair watching television
+
+147
+19:45:00,000 --> 19:45:15,000
+#4740 [ACTIVITY] Elder pacing back and forth across the room
+
+148
+19:51:00,000 --> 19:51:15,000
+#4764 [CALM] Elder sitting quietly in the armchair reading a book
+
+149
+19:57:00,000 --> 19:57:15,000
+#4788 [CALM] Elder sitting in the armchair watching television
+
+150
+20:03:00,000 --> 20:03:15,000
+#4812 [CALM] Elder sitting quietly in the armchair reading a book
+
+151
+20:09:00,000 --> 20:09:15,000
+#4836 [ACTIVITY] Elder pacing back and forth across the room
+
+152
+20:15:00,000 --> 20:15:15,000
+#4860 [CALM] Elder sitting in the armchair watching television
+
+153
+20:21:00,000 --> 20:21:15,000
+#4884 [CALM] Elder sitting quietly in the armchair reading a book
+
+154
+20:27:00,000 --> 20:27:15,000
+#4908 [CALM] Elder sitting on the bed edge looking at a phone
+
+155
+20:33:00,000 --> 20:33:15,000
+#4932 [CALM] Elder sitting in the armchair watching television
+
+156
+20:39:00,000 --> 20:39:15,000
+#4956 [ACTIVITY] Elder pacing back and forth across the room
+
+157
+20:45:00,000 --> 20:45:15,000
+#4980 [CALM] Elder sitting quietly in the armchair reading a book
+
+158
+20:51:00,000 --> 20:51:15,000
+#5004 [CALM] Elder sitting in the armchair watching television
+
+159
+20:57:00,000 --> 20:57:15,000
+#5028 [CALM] Elder sitting quietly in the armchair reading a book
+
+160
+21:03:00,000 --> 21:03:15,000
+#5052 [ACTIVITY] Elder pacing back and forth across the room
+
+161
+21:09:00,000 --> 21:09:15,000
+#5076 [CALM] Elder sitting in the armchair watching television
+
+162
+21:15:00,000 --> 21:15:15,000
+#5100 [CALM] Elder sitting on the bed edge looking at a phone
+
+163
+21:21:00,000 --> 21:21:15,000
+#5124 [CALM] Elder sitting quietly in the armchair reading a book
+
+164
+21:27:00,000 --> 21:27:15,000
+#5148 [CALM] Elder sitting in the armchair watching television
+
+165
+21:33:00,000 --> 21:33:15,000
+#5172 [ACTIVITY] Elder pacing back and forth across the room
+
+166
+21:39:00,000 --> 21:39:15,000
+#5196 [CALM] Elder sitting quietly in the armchair reading a book
+
+167
+21:45:00,000 --> 21:45:15,000
+#5220 [CALM] Elder sitting in the armchair watching television
+
+168
+21:51:00,000 --> 21:51:15,000
+#5244 [CALM] Elder sitting in the armchair watching television
+
+169
+21:57:00,000 --> 21:57:15,000
+#5268 [REST] Elder drawing the curtain, turning off the light and going to bed
+
+170
+22:40:00,000 --> 22:40:15,000
+#5440 [STAFF] Care worker entering the room at night for a check, then leaving

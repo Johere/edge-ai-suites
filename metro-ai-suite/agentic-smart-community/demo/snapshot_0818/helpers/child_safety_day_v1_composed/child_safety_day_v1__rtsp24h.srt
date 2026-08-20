@@ -1,0 +1,603 @@
+1
+00:00:00,000 --> 00:00:02,000
+[META] timeline_id=child_safety_day_v1 mode=rtsp24h slots=8640 events=150 clip_seconds=10 slots_sha1=a5d14b71dd63151445f01a043c3cd0544c80a990 generated=2026-08-21T16:00:25
+
+2
+06:33:00,000 --> 06:33:10,000
+#2358 [SAFE] Child eating at the dining table with a spoon
+
+3
+06:39:00,000 --> 06:39:10,000
+#2394 [SAFE] Child reading a book on the sofa
+
+4
+06:45:00,000 --> 06:45:10,000
+#2430 [SAFE] Child eating at the dining table with a spoon
+
+5
+06:51:00,000 --> 06:51:10,000
+#2466 [SAFE] Child sitting on the rug playing with building blocks
+
+6
+06:57:00,000 --> 06:57:10,000
+#2502 [SAFE] Child reading a book on the sofa
+
+7
+07:03:00,000 --> 07:03:10,000
+#2538 [JUMP] Child jumping on the sofa back
+
+8
+07:09:00,000 --> 07:09:10,000
+#2574 [SAFE] Child eating at the dining table with a spoon
+
+9
+07:15:00,000 --> 07:15:10,000
+#2610 [SAFE] Child reading a book on the sofa
+
+10
+07:21:00,000 --> 07:21:10,000
+#2646 [SAFE] Child sitting on the rug playing with building blocks
+
+11
+07:27:00,000 --> 07:27:10,000
+#2682 [SAFE] Child eating at the dining table with a spoon
+
+12
+07:33:00,000 --> 07:33:10,000
+#2718 [SAFE] Child reading a book on the sofa
+
+13
+07:39:00,000 --> 07:39:10,000
+#2754 [JUMP] Child jumping on the sofa back
+
+14
+07:45:00,000 --> 07:45:10,000
+#2790 [SAFE] Child eating at the dining table with a spoon
+
+15
+07:51:00,000 --> 07:51:10,000
+#2826 [SAFE] Child reading a book on the sofa
+
+16
+07:57:00,000 --> 07:57:10,000
+#2862 [SAFE] Child sitting on the rug playing with building blocks
+
+17
+08:03:00,000 --> 08:03:10,000
+#2898 [SAFE] Child sitting on the rug playing with building blocks
+
+18
+08:09:00,000 --> 08:09:10,000
+#2934 [SAFE] Child reading a book on the sofa
+
+19
+08:15:00,000 --> 08:15:10,000
+#2970 [SAFE] Child eating at the dining table with a spoon
+
+20
+08:21:00,000 --> 08:21:10,000
+#3006 [JUMP] Child jumping on the sofa back
+
+21
+08:27:00,000 --> 08:27:10,000
+#3042 [SAFE] Child sitting on the rug playing with building blocks
+
+22
+08:33:00,000 --> 08:33:10,000
+#3078 [SAFE] Child reading a book on the sofa
+
+23
+08:39:00,000 --> 08:39:10,000
+#3114 [SAFE] Child eating at the dining table with a spoon
+
+24
+08:45:00,000 --> 08:45:10,000
+#3150 [CLIMB] Child climbing a chair to reach the window sill
+
+25
+08:51:00,000 --> 08:51:10,000
+#3186 [SAFE] Child sitting on the rug playing with building blocks
+
+26
+08:57:00,000 --> 08:57:10,000
+#3222 [SAFE] Child reading a book on the sofa
+
+27
+09:03:00,000 --> 09:03:10,000
+#3258 [SAFE] Child eating at the dining table with a spoon
+
+28
+09:09:00,000 --> 09:09:10,000
+#3294 [JUMP] Child jumping on the sofa back
+
+29
+09:15:00,000 --> 09:15:10,000
+#3330 [SAFE] Child sitting on the rug playing with building blocks
+
+30
+09:21:00,000 --> 09:21:10,000
+#3366 [SAFE] Child reading a book on the sofa
+
+31
+09:27:00,000 --> 09:27:10,000
+#3402 [KNIFE] Child handling scissors and cutting paper
+
+32
+09:33:00,000 --> 09:33:10,000
+#3438 [SAFE] Child eating at the dining table with a spoon
+
+33
+09:39:00,000 --> 09:39:10,000
+#3474 [SAFE] Child sitting on the rug playing with building blocks
+
+34
+09:45:00,000 --> 09:45:10,000
+#3510 [SAFE] Child reading a book on the sofa
+
+35
+09:51:00,000 --> 09:51:10,000
+#3546 [SAFE] Child eating at the dining table with a spoon
+
+36
+09:57:00,000 --> 09:57:10,000
+#3582 [CLIMB] Child standing on the window sill holding the frame
+
+37
+10:03:00,000 --> 10:03:10,000
+#3618 [SAFE] Child sitting on the rug playing with building blocks
+
+38
+10:09:00,000 --> 10:09:10,000
+#3654 [SAFE] Child reading a book on the sofa
+
+39
+10:15:00,000 --> 10:15:10,000
+#3690 [SAFE] Child eating at the dining table with a spoon
+
+40
+10:21:00,000 --> 10:21:10,000
+#3726 [JUMP] Child jumping on the sofa back
+
+41
+10:27:00,000 --> 10:27:10,000
+#3762 [SAFE] Child sitting on the rug playing with building blocks
+
+42
+10:33:00,000 --> 10:33:10,000
+#3798 [SAFE] Child reading a book on the sofa
+
+43
+10:39:00,000 --> 10:39:10,000
+#3834 [SAFE] Child eating at the dining table with a spoon
+
+44
+10:45:00,000 --> 10:45:10,000
+#3870 [SAFE] Child sitting on the rug playing with building blocks
+
+45
+10:51:00,000 --> 10:51:10,000
+#3906 [SAFE] Child reading a book on the sofa
+
+46
+10:57:00,000 --> 10:57:10,000
+#3942 [SAFE] Child eating at the dining table with a spoon
+
+47
+11:03:00,000 --> 11:03:10,000
+#3978 [SAFE] Child eating at the dining table with a spoon
+
+48
+11:09:00,000 --> 11:09:10,000
+#4014 [SAFE] Child reading a book on the sofa
+
+49
+11:15:00,000 --> 11:15:10,000
+#4050 [SAFE] Child eating at the dining table with a spoon
+
+50
+11:21:00,000 --> 11:21:10,000
+#4086 [SAFE] Child sitting on the rug playing with building blocks
+
+51
+11:27:00,000 --> 11:27:10,000
+#4122 [JUMP] Child jumping on the sofa back
+
+52
+11:33:00,000 --> 11:33:10,000
+#4158 [SAFE] Child eating at the dining table with a spoon
+
+53
+11:39:00,000 --> 11:39:10,000
+#4194 [SAFE] Child reading a book on the sofa
+
+54
+11:45:00,000 --> 11:45:10,000
+#4230 [SAFE] Child eating at the dining table with a spoon
+
+55
+11:51:00,000 --> 11:51:10,000
+#4266 [SAFE] Child sitting on the rug playing with building blocks
+
+56
+11:57:00,000 --> 11:57:10,000
+#4302 [CLIMB] Child on the window sill pushing the casement open
+
+57
+12:03:00,000 --> 12:03:10,000
+#4338 [SAFE] Child eating at the dining table with a spoon
+
+58
+12:09:00,000 --> 12:09:10,000
+#4374 [SAFE] Child reading a book on the sofa
+
+59
+12:15:00,000 --> 12:15:10,000
+#4410 [SAFE] Child eating at the dining table with a spoon
+
+60
+12:21:00,000 --> 12:21:10,000
+#4446 [SAFE] Child sitting on the rug playing with building blocks
+
+61
+12:27:00,000 --> 12:27:10,000
+#4482 [FALL] Child tripping and falling onto the floor
+
+62
+12:33:00,000 --> 12:33:10,000
+#4518 [SAFE] Child eating at the dining table with a spoon
+
+63
+12:39:00,000 --> 12:39:10,000
+#4554 [SAFE] Child reading a book on the sofa
+
+64
+12:45:00,000 --> 12:45:10,000
+#4590 [SAFE] Child eating at the dining table with a spoon
+
+65
+12:51:00,000 --> 12:51:10,000
+#4626 [SAFE] Child sitting on the rug playing with building blocks
+
+66
+12:57:00,000 --> 12:57:10,000
+#4662 [SAFE] Child reading a book on the sofa
+
+67
+13:03:00,000 --> 13:03:10,000
+#4698 [SAFE] Child reading a book on the sofa
+
+68
+13:09:00,000 --> 13:09:10,000
+#4734 [SAFE] Child sitting on the rug playing with building blocks
+
+69
+13:15:00,000 --> 13:15:10,000
+#4770 [SAFE] Child reading a book on the sofa
+
+70
+13:21:00,000 --> 13:21:10,000
+#4806 [CLIMB] Child climbing a chair to reach the window sill
+
+71
+13:27:00,000 --> 13:27:10,000
+#4842 [SAFE] Child reading a book on the sofa
+
+72
+13:33:00,000 --> 13:33:10,000
+#4878 [SAFE] Child sitting on the rug playing with building blocks
+
+73
+13:39:00,000 --> 13:39:10,000
+#4914 [SAFE] Child reading a book on the sofa
+
+74
+13:45:00,000 --> 13:45:10,000
+#4950 [SAFE] Child eating at the dining table with a spoon
+
+75
+13:51:00,000 --> 13:51:10,000
+#4986 [JUMP] Child jumping on the sofa back
+
+76
+13:57:00,000 --> 13:57:10,000
+#5022 [SAFE] Child reading a book on the sofa
+
+77
+14:03:00,000 --> 14:03:10,000
+#5058 [SAFE] Child sitting on the rug playing with building blocks
+
+78
+14:09:00,000 --> 14:09:10,000
+#5094 [SAFE] Child reading a book on the sofa
+
+79
+14:15:00,000 --> 14:15:10,000
+#5130 [KNIFE] Child handling scissors and cutting paper
+
+80
+14:21:00,000 --> 14:21:10,000
+#5166 [SAFE] Child reading a book on the sofa
+
+81
+14:27:00,000 --> 14:27:10,000
+#5202 [SAFE] Child sitting on the rug playing with building blocks
+
+82
+14:33:00,000 --> 14:33:10,000
+#5238 [SAFE] Child reading a book on the sofa
+
+83
+14:39:00,000 --> 14:39:10,000
+#5274 [SAFE] Child eating at the dining table with a spoon
+
+84
+14:45:00,000 --> 14:45:10,000
+#5310 [CLIMB] Child standing on the window sill holding the frame
+
+85
+14:51:00,000 --> 14:51:10,000
+#5346 [SAFE] Child reading a book on the sofa
+
+86
+14:57:00,000 --> 14:57:10,000
+#5382 [SAFE] Child sitting on the rug playing with building blocks
+
+87
+15:03:00,000 --> 15:03:10,000
+#5418 [SAFE] Child sitting on the rug playing with building blocks
+
+88
+15:09:00,000 --> 15:09:10,000
+#5454 [SAFE] Child reading a book on the sofa
+
+89
+15:15:00,000 --> 15:15:10,000
+#5490 [CLIMB] Child climbing a chair to reach the window sill
+
+90
+15:21:00,000 --> 15:21:10,000
+#5526 [SAFE] Child sitting on the rug playing with building blocks
+
+91
+15:27:00,000 --> 15:27:10,000
+#5562 [SAFE] Child reading a book on the sofa
+
+92
+15:33:00,000 --> 15:33:10,000
+#5598 [KNIFE] Child handling scissors and cutting paper
+
+93
+15:39:00,000 --> 15:39:10,000
+#5634 [SAFE] Child sitting on the rug playing with building blocks
+
+94
+15:45:00,000 --> 15:45:10,000
+#5670 [SAFE] Child reading a book on the sofa
+
+95
+15:51:00,000 --> 15:51:10,000
+#5706 [JUMP] Child jumping on the sofa back
+
+96
+15:57:00,000 --> 15:57:10,000
+#5742 [SAFE] Child sitting on the rug playing with building blocks
+
+97
+16:03:00,000 --> 16:03:10,000
+#5778 [SAFE] Child reading a book on the sofa
+
+98
+16:09:00,000 --> 16:09:10,000
+#5814 [CLIMB] Child standing on the window sill holding the frame
+
+99
+16:15:00,000 --> 16:15:10,000
+#5850 [SAFE] Child sitting on the rug playing with building blocks
+
+100
+16:21:00,000 --> 16:21:10,000
+#5886 [SAFE] Child reading a book on the sofa
+
+101
+16:27:00,000 --> 16:27:10,000
+#5922 [KNIFE] Child handling scissors and cutting paper
+
+102
+16:33:00,000 --> 16:33:10,000
+#5958 [SAFE] Child sitting on the rug playing with building blocks
+
+103
+16:39:00,000 --> 16:39:10,000
+#5994 [SAFE] Child eating at the dining table with a spoon
+
+104
+16:45:00,000 --> 16:45:10,000
+#6030 [CLIMB] Child on the window sill pushing the casement open
+
+105
+16:51:00,000 --> 16:51:10,000
+#6066 [SAFE] Child reading a book on the sofa
+
+106
+16:57:00,000 --> 16:57:10,000
+#6102 [SAFE] Child sitting on the rug playing with building blocks
+
+107
+17:03:00,000 --> 17:03:10,000
+#6138 [SAFE] Child eating at the dining table with a spoon
+
+108
+17:09:00,000 --> 17:09:10,000
+#6174 [SAFE] Child reading a book on the sofa
+
+109
+17:15:00,000 --> 17:15:10,000
+#6210 [SAFE] Child eating at the dining table with a spoon
+
+110
+17:21:00,000 --> 17:21:10,000
+#6246 [SAFE] Child sitting on the rug playing with building blocks
+
+111
+17:27:00,000 --> 17:27:10,000
+#6282 [SAFE] Child eating at the dining table with a spoon
+
+112
+17:33:00,000 --> 17:33:10,000
+#6318 [FALL] Child tripping and falling onto the floor
+
+113
+17:39:00,000 --> 17:39:10,000
+#6354 [SAFE] Child eating at the dining table with a spoon
+
+114
+17:45:00,000 --> 17:45:10,000
+#6390 [SAFE] Child reading a book on the sofa
+
+115
+17:51:00,000 --> 17:51:10,000
+#6426 [SAFE] Child eating at the dining table with a spoon
+
+116
+17:57:00,000 --> 17:57:10,000
+#6462 [SAFE] Child sitting on the rug playing with building blocks
+
+117
+18:03:00,000 --> 18:03:10,000
+#6498 [SAFE] Child sitting on the rug playing with building blocks
+
+118
+18:09:00,000 --> 18:09:10,000
+#6534 [SAFE] Child reading a book on the sofa
+
+119
+18:15:00,000 --> 18:15:10,000
+#6570 [FIRE] Child playing with a lighter near the curtain
+
+120
+18:21:00,000 --> 18:21:10,000
+#6606 [SAFE] Child sitting on the rug playing with building blocks
+
+121
+18:27:00,000 --> 18:27:10,000
+#6642 [SAFE] Child reading a book on the sofa
+
+122
+18:33:00,000 --> 18:33:10,000
+#6678 [JUMP] Child jumping on the sofa back
+
+123
+18:39:00,000 --> 18:39:10,000
+#6714 [SAFE] Child sitting on the rug playing with building blocks
+
+124
+18:45:00,000 --> 18:45:10,000
+#6750 [SAFE] Child reading a book on the sofa
+
+125
+18:51:00,000 --> 18:51:10,000
+#6786 [SAFE] Child eating at the dining table with a spoon
+
+126
+18:57:00,000 --> 18:57:10,000
+#6822 [CLIMB] Child climbing a chair to reach the window sill
+
+127
+19:03:00,000 --> 19:03:10,000
+#6858 [SAFE] Child sitting on the rug playing with building blocks
+
+128
+19:09:00,000 --> 19:09:10,000
+#6894 [SAFE] Child reading a book on the sofa
+
+129
+19:15:00,000 --> 19:15:10,000
+#6930 [FIRE] Child playing with a lighter near the curtain
+
+130
+19:21:00,000 --> 19:21:10,000
+#6966 [SAFE] Child sitting on the rug playing with building blocks
+
+131
+19:27:00,000 --> 19:27:10,000
+#7002 [SAFE] Child reading a book on the sofa
+
+132
+19:33:00,000 --> 19:33:10,000
+#7038 [JUMP] Child jumping on the sofa back
+
+133
+19:39:00,000 --> 19:39:10,000
+#7074 [SAFE] Child sitting on the rug playing with building blocks
+
+134
+19:45:00,000 --> 19:45:10,000
+#7110 [SAFE] Child reading a book on the sofa
+
+135
+19:51:00,000 --> 19:51:10,000
+#7146 [SAFE] Child eating at the dining table with a spoon
+
+136
+19:57:00,000 --> 19:57:10,000
+#7182 [SAFE] Child sitting on the rug playing with building blocks
+
+137
+20:03:00,000 --> 20:03:10,000
+#7218 [SAFE] Child reading a book on the sofa
+
+138
+20:09:00,000 --> 20:09:10,000
+#7254 [SAFE] Child sitting on the rug playing with building blocks
+
+139
+20:15:00,000 --> 20:15:10,000
+#7290 [JUMP] Child jumping on the sofa back
+
+140
+20:21:00,000 --> 20:21:10,000
+#7326 [SAFE] Child reading a book on the sofa
+
+141
+20:27:00,000 --> 20:27:10,000
+#7362 [SAFE] Child sitting on the rug playing with building blocks
+
+142
+20:33:00,000 --> 20:33:10,000
+#7398 [SAFE] Child reading a book on the sofa
+
+143
+20:39:00,000 --> 20:39:10,000
+#7434 [FALL] Child tripping and falling onto the floor
+
+144
+20:45:00,000 --> 20:45:10,000
+#7470 [SAFE] Child reading a book on the sofa
+
+145
+20:51:00,000 --> 20:51:10,000
+#7506 [SAFE] Child sitting on the rug playing with building blocks
+
+146
+20:57:00,000 --> 20:57:10,000
+#7542 [SAFE] Child reading a book on the sofa
+
+147
+21:03:00,000 --> 21:03:10,000
+#7578 [JUMP] Child jumping on the sofa back
+
+148
+21:09:00,000 --> 21:09:10,000
+#7614 [SAFE] Child reading a book on the sofa
+
+149
+21:15:00,000 --> 21:15:10,000
+#7650 [SAFE] Child sitting on the rug playing with building blocks
+
+150
+21:21:00,000 --> 21:21:10,000
+#7686 [SAFE] Child reading a book on the sofa
+
+151
+21:27:00,000 --> 21:27:10,000
+#7722 [SAFE] Child sitting on the rug playing with building blocks

@@ -1,0 +1,205 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# Child-safety EDL — the single source of truth for every generated artifact.
+#
+#   build_timeline.py --mode rtsp24h   -> ffconcat playlist (RTSP, never lands on disk) + full-day SRT
+#   build_timeline.py --mode showcase  -> concat list -> short reel + SRT
+#   build_timeline.py --mode validate  -> concat list -> 4h mp4 + SRT
+#   seed_history.py                    -> backfilled DB rows for previous days
+#
+# Every artifact is named `<id>__<mode>.<ext>` and declares `id` plus a hash of
+# the resolved slot list in its SRT `[META]` cue, so a stale SRT is detectable
+# rather than silently wrong (`build_timeline.py --check`).
+#
+# This replaces the pre-baked 1h loop (demo/videos/cam_child/…_expanded_1h.mp4),
+# which had no day/night arc at all: it produced six danger alerts every hour,
+# round the clock, including four `critical` at 03:00.
+
+id: child_safety_day_v1
+description: "Child safety living room — 24h day, awake 06:30-21:30"
+
+clip_seconds: 10
+# Hard budget asserted by build_timeline.py. Every awake block declares exactly
+# `10 x hours` events, so each waking hour lands on the budget instead of near it.
+max_events_per_hour: 10
+
+clips_dir: ./child_safety_snippets/normalized
+
+# Non-event filler. Both are stills of the same empty living room, so day/night
+# transitions do not read as a camera cut. A still has zero motion, so the
+# pipeline's motion gate drops it and it costs no VLM work.
+filler:
+  day: E1_empty
+  night: E2_empty
+
+# ── Clip semantics ───────────────────────────────────────────────────────────
+# `desc` feeds the SRT cue text; `desc_zh` is what seed_history.py writes to the
+# database, so seeded rows read like the Chinese the live VLM actually produces.
+# Every `event` comes from the vocabulary in demo/prompts/child_safety_monitor.txt
+# and every `severity` matches that prompt's critical/warn/info definitions.
+clips:
+  A1_normal:
+    event: normal
+    severity: info
+    tag: SAFE
+    desc: "Child reading a book on the sofa"
+    desc_zh: "儿童拿着书本在客厅走动并坐在沙发上翻阅"
+  A2_normal:
+    event: normal
+    severity: info
+    tag: SAFE
+    desc: "Child eating at the dining table with a spoon"
+    desc_zh: "儿童坐在桌前使用勺子进食碗中的食物"
+  A3_normal:
+    event: normal
+    severity: info
+    tag: SAFE
+    desc: "Child sitting on the rug playing with building blocks"
+    desc_zh: "儿童走进房间后坐在地板上玩玩具"
+  J1_jump:
+    event: jump
+    severity: warn
+    tag: JUMP
+    desc: "Child jumping on the sofa back"
+    desc_zh: "儿童在沙发靠背上站立并蹦跳"
+  F1_fall:
+    event: fall
+    severity: critical
+    tag: FALL
+    desc: "Child tripping and falling onto the floor"
+    # No live precedent for this one — the VLM has never returned `fall` for this
+    # clip (see the README's known-gaps appendix), so the wording is written to
+    # the prompt's DESC rules by hand: the action, never the consequence.
+    desc_zh: "儿童在客厅奔跑时失去平衡并侧身倒在地板上"
+  K1_knife:
+    event: knife
+    severity: critical
+    tag: KNIFE
+    desc: "Child handling scissors and cutting paper"
+    desc_zh: "儿童手持红色剪刀在桌边剪纸"
+  R1_fire:
+    event: fire
+    severity: critical
+    tag: FIRE
+    desc: "Child playing with a lighter near the curtain"
+    desc_zh: "儿童手持打火机靠近窗帘并尝试点火"
+  # Three distinct climb clips, each with its own wording: seed_history.py rotates
+  # within an (event, severity) group per day, so a week of rows shows three
+  # different sentences instead of the same one six times.
+  C1_climb:
+    event: climb
+    severity: critical
+    tag: CLIMB
+    desc: "Child climbing a chair to reach the window sill"
+    desc_zh: "儿童独自爬上椅子并攀爬窗台"
+  C2_climb:
+    event: climb
+    severity: critical
+    tag: CLIMB
+    desc: "Child standing on the window sill holding the frame"
+    desc_zh: "儿童独自站在窗台上并扶着窗框"
+  C3_climb:
+    event: climb
+    severity: critical
+    tag: CLIMB
+    desc: "Child on the window sill pushing the casement open"
+    desc_zh: "儿童攀在窗台上并伸手推动窗扇"
+  E1_empty:
+    event: normal
+    severity: info
+    tag: EMPTY
+    desc: "Empty living room, lights on, no person present"
+    desc_zh: "客厅内无人，光线正常"
+  E2_empty:
+    event: normal
+    severity: info
+    tag: EMPTY
+    desc: "Empty living room at night, lights off"
+    desc_zh: "夜间客厅内无人，灯已关闭"
+
+# ── Daily schedule ───────────────────────────────────────────────────────────
+# Blocks tile 24h exactly. Each awake block declares `10 x hours` events, which
+# spread_positions then distributes evenly, so every whole waking hour gets
+# exactly 10. The two half-hour edges (06:30-07:00, 21:00-21:30) get 5 each and
+# the other half of those clock hours is a night block, so hour 6 and hour 21
+# total 5 — nothing ever exceeds the budget.
+#
+# No clip declares `after_filler`: unlike the elder room (lights out, leaving,
+# returning) nothing here changes the room's persistent state, so each block's
+# own filler governs throughout.
+schedule:
+  # Nine continuous hours of a dark, motionless living room: no motion trigger,
+  # no VLM work, no alerts. This is the property the old 1h loop lacked.
+  - at: "21:30"
+    until: "06:30"
+    filler: night
+    events: []
+
+  # Breakfast and quiet play before school.
+  - at: "06:30"
+    until: "08:00"
+    filler: day
+    events: [A2_normal, A1_normal, A2_normal, A3_normal, A1_normal, J1_jump,
+             A2_normal, A1_normal, A3_normal, A2_normal, A1_normal, J1_jump,
+             A2_normal, A1_normal, A3_normal]
+
+  - at: "08:00"
+    until: "11:00"
+    filler: day
+    events: [A3_normal, A1_normal, A2_normal, J1_jump, A3_normal, A1_normal,
+             A2_normal, C1_climb, A3_normal, A1_normal, A2_normal, J1_jump,
+             A3_normal, A1_normal, K1_knife, A2_normal, A3_normal, A1_normal,
+             A2_normal, C2_climb, A3_normal, A1_normal, A2_normal, J1_jump,
+             A3_normal, A1_normal, A2_normal, A3_normal, A1_normal, A2_normal]
+
+  # Lunch — eating-heavy.
+  - at: "11:00"
+    until: "13:00"
+    filler: day
+    events: [A2_normal, A1_normal, A2_normal, A3_normal, J1_jump, A2_normal,
+             A1_normal, A2_normal, A3_normal, C3_climb, A2_normal, A1_normal,
+             A2_normal, A3_normal, F1_fall, A2_normal, A1_normal, A2_normal,
+             A3_normal, A1_normal]
+
+  - at: "13:00"
+    until: "15:00"
+    filler: day
+    events: [A1_normal, A3_normal, A1_normal, C1_climb, A1_normal, A3_normal,
+             A1_normal, A2_normal, J1_jump, A1_normal, A3_normal, A1_normal,
+             K1_knife, A1_normal, A3_normal, A1_normal, A2_normal, C2_climb,
+             A1_normal, A3_normal]
+
+  # Peak danger window — six of the day's thirty danger events, three of them
+  # window-sill climbs. This is the block a live demo wants to land in.
+  - at: "15:00"
+    until: "17:00"
+    filler: day
+    events: [A3_normal, A1_normal, C1_climb, A3_normal, A1_normal, K1_knife,
+             A3_normal, A1_normal, J1_jump, A3_normal, A1_normal, C2_climb,
+             A3_normal, A1_normal, K1_knife, A3_normal, A2_normal, C3_climb,
+             A1_normal, A3_normal]
+
+  # Dinner.
+  - at: "17:00"
+    until: "18:00"
+    filler: day
+    events: [A2_normal, A1_normal, A2_normal, A3_normal, A2_normal, F1_fall,
+             A2_normal, A1_normal, A2_normal, A3_normal]
+
+  # Evening — the only two `fire` events of the day sit here.
+  - at: "18:00"
+    until: "20:00"
+    filler: day
+    events: [A3_normal, A1_normal, R1_fire, A3_normal, A1_normal, J1_jump,
+             A3_normal, A1_normal, A2_normal, C1_climb, A3_normal, A1_normal,
+             R1_fire, A3_normal, A1_normal, J1_jump, A3_normal, A1_normal,
+             A2_normal, A3_normal]
+
+  # Winding down towards the 21:30 lights-out.
+  - at: "20:00"
+    until: "21:30"
+    filler: day
+    events: [A1_normal, A3_normal, J1_jump, A1_normal, A3_normal, A1_normal,
+             F1_fall, A1_normal, A3_normal, A1_normal, J1_jump, A1_normal,
+             A3_normal, A1_normal, A3_normal]

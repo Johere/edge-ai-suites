@@ -1,0 +1,278 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# Elder-care EDL — the single source of truth for every generated artifact.
+#
+#   build_timeline.py --mode rtsp24h   -> ffconcat playlist (RTSP, never lands on disk) + full-day SRT
+#   build_timeline.py --mode showcase  -> concat list -> ~13min mp4 + SRT
+#   build_timeline.py --mode validate  -> concat list -> 4h mp4 + SRT
+#   seed_history.py                    -> backfilled DB rows for previous days
+#
+# Every artifact is named `<id>__<mode>.<ext>` and declares `id` plus a hash of
+# the resolved slot list in its SRT `[META]` cue, so a stale SRT is detectable
+# rather than silently wrong (`build_timeline.py --check`).
+#
+# ── v2: 10 observations per waking hour ──────────────────────────────────────
+# v1 authored 32 events/day (1.33/hour averaged over 24h, with 7 hours empty),
+# which made the room look nearly motionless next to the child-safety camera.
+# v2 fills the waking window at the same 10/hour density the budget declares.
+#
+# The event vocabulary splits cleanly, and only one half was densified:
+#
+#   State events (in_bed, in_room_activity, sit_up_in_bed) are observations. A
+#   camera reporting "sitting in the armchair" every six minutes is exactly what
+#   the real pipeline produces, so these carry the added volume.
+#
+#   Transition and alert events (out_of_bed, return_to_bed, night_out_of_room,
+#   restlessness, staff_visit) are UNCHANGED in count. Getting up ten times an
+#   hour has no meaning, and "four restlessness observations in the afternoon" is
+#   this use case's headline statistic — inflating it would dilute the finding.
+#
+# The id was bumped v1 -> v2 because `slots_sha1` necessarily changed and
+# demo/user-case-register/elder_care_timeline.yaml still holds the v1 content
+# under the v1 id. Sharing an id across differing content would make each SRT
+# look stale to the other's `--check`.
+
+id: elder_care_day_v2
+description: "Elder care single room — 24h day, 10 observations per waking hour"
+
+clip_seconds: 15
+# Hard budget asserted by build_timeline.py. Every waking block declares exactly
+# `10 x hours` events, so each waking hour lands on the budget rather than near it.
+max_events_per_hour: 10
+
+clips_dir: ./elder_care_snippets/normalized
+
+# Non-event filler. Motion gating + the `person` prefilter mean these produce no
+# VLM work. A schedule block names its default, and a clip can hand over to a
+# different one via `after_filler` once it changes what the room looks like.
+# Night blocks default to `sleep`, not `night`: an empty bedroom at night would
+# imply the resident is missing. `night` is used only after he actually leaves.
+filler:
+  day: D7      # empty room, daylight
+  night: N7    # empty room, dark — the resident is out
+  sleep: N1    # resident asleep in bed
+
+# ── Clip semantics ───────────────────────────────────────────────────────────
+# Drives SRT cue text, seeded DB rows, and the event counts that `--verify`
+# reports. Frequency and duration are derived by counting rows and summing
+# events.duration_seconds — never by asking the model for a number.
+#
+# `desc` feeds the SRT; `desc_zh` is what seed_history.py writes to the database,
+# so seeded rows read like the Chinese the live VLM actually produces. Several
+# are lifted verbatim from observed cam_elder_care rows.
+clips:
+  D1:
+    event: in_room_activity
+    subject: resident
+    severity: info
+    tag: CALM
+    desc: "Elder sitting quietly in the armchair reading a book"
+    desc_zh: "一位老年住户坐在房间内的扶手椅上阅读。"
+  D2:
+    event: in_room_activity
+    subject: resident
+    severity: info
+    tag: CALM
+    desc: "Elder sitting in the armchair watching television"
+    desc_zh: "住户坐在扶手椅上观看电视，保持坐姿。"
+  D3:
+    event: sit_up_in_bed
+    subject: resident
+    severity: info
+    tag: CALM
+    desc: "Elder sitting on the bed edge looking at a phone"
+    desc_zh: "住户坐在床沿，低头看着手中的物品。"
+  D4:
+    event: in_bed
+    subject: resident
+    severity: info
+    tag: REST
+    desc: "Elder lying on the bed taking an afternoon nap"
+    desc_zh: "住户平躺在床上休息，仅有轻微的手部动作，未见起身或离床。"
+  D5:
+    event: restlessness
+    subject: resident
+    severity: warn
+    tag: RESTLESS
+    desc: "Elder repeatedly sitting down and standing up, visibly restless"
+    desc_zh: "老年住户在房间内反复进行坐起、站立、行走并再次坐下的动作，表现出多次姿态转换。"
+  D6:
+    event: in_room_activity
+    subject: resident
+    severity: info
+    tag: ACTIVITY
+    desc: "Elder pacing back and forth across the room"
+    desc_zh: "住户在房间内来回走动，经过门口和窗户区域，表现出明显的活动状态。"
+  D7:
+    event: room_empty
+    subject: none
+    severity: info
+    tag: EMPTY
+    desc: "Empty room, daylight, no person present"
+    desc_zh: "房间内无人，光线为白天。"
+  N7:
+    event: room_empty
+    subject: none
+    severity: info
+    tag: EMPTY
+    desc: "Empty room at night, bed unoccupied"
+    desc_zh: "夜间房间内无人，床铺空置。"
+  N1:
+    event: in_bed
+    subject: resident
+    severity: info
+    tag: SLEEP
+    desc: "Elder asleep in bed, no movement"
+    desc_zh: "住户身穿蓝色睡衣平躺在病床上，处于静止休息状态。"
+  N2:
+    event: in_bed
+    subject: resident
+    severity: info
+    tag: NIGHT
+    desc: "Elder tossing and turning repeatedly in bed, unable to settle"
+    desc_zh: "住户躺在床上反复翻身调整姿势，未见起身或离床。"
+  N3:
+    event: sit_up_in_bed
+    subject: resident
+    severity: info
+    tag: NIGHT
+    desc: "Elder sitting up on the bed edge at night, motionless and dazed"
+    desc_zh: "住户从平躺姿势坐起，双腿垂在床沿，双脚着地。"
+  N4:
+    event: out_of_bed
+    subject: resident
+    severity: info
+    tag: NIGHT
+    desc: "Elder out of bed at night, lamp on, pacing inside the room"
+    desc_zh: "住户夜间下床，床头灯亮起，在房间内走动。"
+  N5:
+    event: night_out_of_room
+    subject: resident
+    severity: warn
+    tag: NIGHT
+    desc: "Elder getting out of bed and leaving the room at night"
+    desc_zh: "住户从床上起身，下床后走到门口并开门离开，片段结束时房间内已无人。"
+    # Room stays empty until the next event (N6 returns him to bed).
+    after_filler: night
+  N6:
+    event: return_to_bed
+    subject: resident
+    severity: info
+    tag: NIGHT
+    desc: "Elder returning to the room and lying back down in bed"
+    desc_zh: "住户返回房间并重新躺回床上。"
+    # Ends the out-of-room window opened by N5 — occupied and asleep again.
+    after_filler: sleep
+  T1:
+    event: in_bed
+    subject: resident
+    severity: info
+    tag: REST
+    desc: "Elder drawing the curtain, turning off the light and going to bed"
+    desc_zh: "住户在房间内走动，先拉上窗帘，随后在房间内活动并躺上床铺。"
+    # Dusk hand-off: the room is dark and occupied from here on.
+    after_filler: sleep
+  T2:
+    event: out_of_bed
+    subject: resident
+    severity: info
+    tag: WAKE
+    desc: "Elder getting up in the morning and opening the curtain"
+    desc_zh: "住户从床上坐起并双脚着地站立，随后离开床铺走向窗户。"
+    # Dawn hand-off: daylight from here on.
+    after_filler: day
+  S1:
+    event: staff_visit
+    subject: staff
+    severity: info
+    tag: STAFF
+    desc: "Care worker entering the room in daylight, then leaving"
+    desc_zh: "一名身穿护理制服的人员进入房间，走到床边查看住户情况，随后转身离开房间。"
+  S2:
+    event: staff_visit
+    subject: staff
+    severity: info
+    tag: STAFF
+    desc: "Care worker entering the room at night for a check, then leaving"
+    desc_zh: "一名身穿护理制服的人员夜间进入房间，在床边短暂查看后离开。"
+
+# ── Daily schedule ───────────────────────────────────────────────────────────
+# Blocks tile 24h exactly. Each waking block (06:00-22:00) declares `10 x hours`
+# events, which spread_positions distributes evenly, so every waking hour gets
+# exactly 10. The night blocks keep v1's small set of meaningful events.
+#
+# Two ordering constraints, both load-bearing because spread_positions assigns
+# increasing offsets in list order:
+#   T2 must be FIRST in the 06:00 block  — it is what turns the room bright.
+#   T1 must be LAST in the 18:00 block   — it is what puts him to bed.
+schedule:
+  # Still dark and in bed until T2 opens the curtain — T2's `after_filler: day`
+  # is what turns the room bright, so this block's default must stay `sleep`.
+  - at: "06:00"
+    until: "07:00"
+    filler: sleep
+    events: [T2, D3, D1, D3, D1, D2, D1, D3, D2, D1]
+
+  - at: "07:00"
+    until: "11:00"
+    filler: day
+    events: [D1, D2, D6, D1, D3, D2, D1, D6, S1, D2,
+             D1, D4, D6, D1, D2, D3, D1, D6, D2, D1,
+             D4, D2, D6, D1, D3, D2, D1, D6, S1, D2,
+             D1, D4, D6, D1, D2, D3, D1, D6, D4, D1]
+
+  # Midday rest — nap-heavy.
+  - at: "11:00"
+    until: "14:00"
+    filler: day
+    events: [D4, D1, D4, D2, D4, D1, D4, D6, D4, D1,
+             D4, D2, D4, D1, D4, D6, D4, D1, D4, D2,
+             D2, D1, D6, D4, D1, D2, D6, D1, D4, D1]
+
+  # Afternoon restlessness window — the headline statistic: four `restlessness`
+  # observations plus supporting activity, all countable as rows. The count is
+  # deliberately unchanged from v1.
+  - at: "14:00"
+    until: "16:00"
+    filler: day
+    events: [D6, D1, D5, D6, D2, D5, D1, D6, D3, D5,
+             D2, D6, D1, D5, D6, D2, D3, D1, D6, D2]
+
+  - at: "16:00"
+    until: "18:00"
+    filler: day
+    events: [D2, D6, D1, D2, D6, S1, D2, D6, D1, D2,
+             D6, D2, D1, D6, S1, D2, D6, D1, D2, D2]
+
+  # Evening, ending with lights-out. T1 lands at roughly 21:57 and hands the
+  # filler over to `sleep`, so the handful of slots after it are already dark.
+  # In v1 T1 sat in the 16:00-18:00 block, which made everything after 18:00
+  # night-time and left no room for a 16-hour waking window.
+  - at: "18:00"
+    until: "22:00"
+    filler: day
+    events: [D2, D1, D6, D2, D1, D3, D2, D6, D1, D2,
+             S1, D1, D6, D2, D1, D3, D2, D6, D1, D2,
+             D1, D6, D2, D1, D3, D2, D6, D1, D2, D1,
+             D6, D2, D3, D1, D2, D6, D1, D2, D2, T1]
+
+  # N1 is the night filler, so it is never listed as an event — a motionless
+  # sleeping clip produces no motion trigger and therefore no observation.
+  - at: "22:00"
+    until: "02:00"
+    filler: sleep
+    events: [S2, N2, N3]
+
+  # Night-activity window — out of bed, leaves the room, comes back, staff check.
+  - at: "02:00"
+    until: "04:00"
+    filler: sleep
+    events: [N2, N3, N4, N5, N6, S2]
+
+  # Deep sleep before dawn — no events at all. The single wake-up is the T2 in the
+  # next block; a second T2 here would mean getting up twice.
+  - at: "04:00"
+    until: "06:00"
+    filler: sleep
+    events: []

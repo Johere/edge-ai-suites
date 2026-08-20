@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+# Shared RTSP server for the 0818 demo — both cameras publish to :8557.
+#
+# This file exists because the pushers cannot own the server. Both
+# timeline_to_rtsp.sh and local_video_to_rtsp.sh generate a MediaMTX config
+# declaring exactly ONE path, and they kill the server they started on exit. Two
+# pushers on the same port would therefore fail two ways: the second one reuses a
+# server that has no path for it, and whichever one exits first takes the server
+# down with it.
+#
+# start_rtsp_server.sh brings this up first. Both pushers then find :8557 already
+# listening and take their "reuse the existing server" branch, so neither owns it.
+#
+# Port :8557 keeps this demo clear of the ready-to-run demo on :8554.
+#
+# Paths are listed explicitly rather than using the catch-all `all:`. A typo in a
+# pusher's --url then fails immediately instead of silently creating a new path
+# that nothing reads from.
+
+logLevel: warn
+rtsp: true
+rtspTransports: [tcp]
+rtspAddress: :8557
+rtmp: false
+hls: false
+webrtc: false
+srt: false
+api: false
+
+paths:
+  live/child:
+    source: publisher
+  live/eldercare:
+    source: publisher

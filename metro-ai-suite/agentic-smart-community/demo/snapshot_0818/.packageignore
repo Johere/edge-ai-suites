@@ -1,0 +1,7 @@
+snapshot_0818/.run
+snapshot_0818/__pycache__
+snapshot_0818/*.log
+snapshot_0818/*.pid
+snapshot_0818/helpers/*_composed
+snapshot_0818/helpers/*/normalized
+snapshot_0818/helpers/verify_timeline.log
