@@ -152,11 +152,10 @@ The seeded week is what makes the trend questions answerable. Both agents are bi
 
 **Elder Care agent** (`cam_elder_care`)
 
-- 老人这周几点起床？ / What time did Dad get up this week?
-- 今天有没有躁动不安？ / Any restlessness today?
-- 这周有几次夜间离室？ / How many night out-of-room events this week?
-- 生成今天的老人照护日报。 / Generate today's elder-care report.
-- 今天有什么异常吗？ / Anything unusual today?
+- 观察并整理老人的生活、睡眠 周趋势 / Observe and summarize weekly trends in the senior's daily life and sleep patterns.
+- 工作人员什么时候进来的？/ When did staff members enter the room?
+- 他昨晚离床几次？/ How many times did the senior get out of bed last night?
+- 生成今天的观察日报 / Generate today's daily observation report.
 
 Follow up naturally — "why did you flag that", "which day was worst", "check the current scene again".
 

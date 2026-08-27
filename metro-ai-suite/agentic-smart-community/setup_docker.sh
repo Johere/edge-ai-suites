@@ -230,11 +230,7 @@ DOCKER_CMD="docker compose -f compose.yaml"
 
 # compose.yaml `extends` the upstream service defs from .external/edge-ai-libraries,
 # so it must exist before ANY compose command below can even parse the file.
-if [ "$DOWN_CONTAINERS" = true ] || [ "$LIGHT_DOWN" = true ]; then
-  ensure_edge_ai_libraries false
-else
-  ensure_edge_ai_libraries true
-fi
+ensure_edge_ai_libraries false
 
 # --- fetch-only ---------------------------------------------------------------
 if [ "$FETCH_ONLY" = true ]; then

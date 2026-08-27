@@ -24,6 +24,9 @@ export HF_HOME
 # Create if not exists, so Docker bind-mounts it as a user-owned dir instead of root-owned.
 mkdir -p "${HF_HOME}"
 
+# If want to run in offline mode, uncomment the following line to disable HF Hub access.
+# export HF_HUB_OFFLINE=1
+
 # Change to https://hf-mirror.com if you are in China and want to use the mirror site for Hugging Face.
 # export HF_ENDPOINT=https://hf-mirror.com
 export HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
