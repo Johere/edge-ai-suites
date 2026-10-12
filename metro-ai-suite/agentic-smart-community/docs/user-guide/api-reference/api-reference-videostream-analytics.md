@@ -25,7 +25,7 @@ The service is a long-running single process. Each registered source spawns back
 | Method | Path | Purpose | See |
 |--------|------|---------|-----|
 | `GET`    | `/health` | Liveness probe. | §3.1 |
-| `GET`    | `/capabilities/prefilter` | Report the deployed prefilter model and available devices. | §3.2 |
+| `GET`    | `/capabilities/prefilter` | List the selectable prefilter models and available devices. | §3.2 |
 | `GET`    | `/sources` | List all registered sources (bare array). | §3.3 |
 | `GET`    | `/sources/{source_id}` | Get source status. | §3.4 |
 | `GET`    | `/sources/{source_id}/status` | Alias of `/sources/{source_id}`; the MCP server calls this to check for existence. | §3.4 |
@@ -68,26 +68,73 @@ Liveness probe.
 
 ### 3.2 `GET /capabilities/prefilter`
 
-Report the prefilter capabilities of the deployed model.
+Report the prefilter models a monitor may select, and the inference devices this host offers.
 
-**Request**: no body.
+**Query parameters**:
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| `model` | `string` | Optional. Return just that model's entry (the object shape of a `models[]` element) instead of the full report. `404` when the name is not a usable registered model. |
 
 **Response 200**:
 
 ```json
 {
   "enabled": true,
-  "model_path": "/models/yolo11s.xml",
+  "default_model": "yolo11s",
+  "supported_kinds": ["detection"],
+  "supported_backends": ["openvino"],
+  "available_devices": ["CPU", "GPU", "NPU"],
+  "models": [
+    {
+      "name": "yolo11s",
+      "kind": "detection",
+      "backend": "openvino",
+      "model_path": "/home/user/models/openvino/yolo11s/FP16/yolo11s.xml",
+      "description": "YOLO11s FP16, static 1280x704 input, COCO-80 classes",
+      "class_names": ["person", "car"],
+      "labels_source": "embedded",
+      "input_shape": "[1,3,704,1280]",
+      "output_shape": "[1,84,18480]"
+    }
+  ],
+  "rejected": [
+    { "name": "helmet_v2", "model_path": "...", "reason": "cannot read .../helmet_v2.bin: No such file or directory" }
+  ],
+  "model_path": "/home/user/models/openvino/yolo11s/FP16/yolo11s.xml",
   "class_names": ["person", "car"],
-  "labels_source": "embedded",
-  "available_devices": ["CPU", "GPU"]
+  "labels_source": "embedded"
 }
 ```
 
+`models` is the selectable set — only these `name` values are accepted as
+`pipeline.prefilter.model`. `rejected` lists registered entries that failed
+validation, each with the reason; it is an operator diagnostic and those names
+are not selectable. The top-level `model_path` / `class_names` /
+`labels_source` are a flattened view of `default_model`, for clients that only
+consume a single model.
+
 `labels_source` is `embedded` when the model exposes authoritative labels. It
 may be `fallback_coco` or `unavailable`; clients must not treat those values as
-an authoritative model class list. When the configured model is unavailable,
-`class_names` is an empty array.
+an authoritative model class list.
+
+`input_shape` with no `?` is static and therefore NPU-capable; a dynamic shape
+must run on `CPU` or `GPU`.
+
+### 3.2.1 Model registration
+
+An entry becomes selectable only when every check passes:
+
+1. `kind` is in `supported_kinds`;
+2. `backend` is in `supported_backends`;
+3. `model_path`, after symlink resolution, is under `model_dir`;
+4. the path ends in `.xml` and both it and the sibling `.bin` exist and are non-empty;
+5. OpenVINO™ can read the model;
+6. the output tensor is detection-shaped — rank 3, `[1, 4+nc, anchors]` — and, when labels are `embedded`, `nc` equals the label count.
+
+Rules 4–6 are specific to the `openvino` backend; 1–3 apply to every entry. A
+failure at any step puts the entry in `rejected` rather than failing startup, so
+one bad entry never stops the service from serving its other monitors.
 
 ### 3.3 `GET /sources`
 
@@ -218,8 +265,9 @@ by `setup_docker.sh`. A deployment that loads a different `VIDEOSTREAM_CONFIG` i
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | `bool` | `true` | Enable OpenVINO™ YOLO prefilter on motion clips. |
-| `model_path` | `string` | Generated from `PREFILTER_MODEL` | Absolute path to the OpenVINO™ `.xml` model. When supplied in a request it must resolve (after symlinks) inside a permitted model root — the directory of `defaults.prefilter.model_path`, plus anything in `security.allowed_model_roots` — otherwise the request is rejected with 400. Omit it to inherit the deployment default, which is what the MCP server does; the stored value is the resolved path. |
-| `target_classes` | `array<string>` | `["person"]` | Class labels that count as a hit. |
+| `model` | `string` | `defaults.prefilter.model` | Name of a `prefilter_models` entry (§5.1). Must be one of the `models[].name` values from §3.2, otherwise the request is rejected with 422. Omit it to inherit the deployment default — for `PUT /sources/{id}/pipeline`, to keep the model the source is already running. |
+| `model_path` | — | — | **Not accepted in a request.** Models are selected by registry name; a request carrying `model_path` is rejected with 422. The server fills this field from the named entry, and it is the path the running pipeline loads. |
+| `target_classes` | `array<string>` | `["person"]` | Class labels that count as a hit. Rejected with 422 when a name is absent from the model's `class_names` and `labels_source` is `embedded`. |
 | `min_confidence` | `float` | `0.4` | Minimum detection confidence. Must be within 0–1. |
 | `min_frames_hit` | `int` | `1` | Number of hits within a clip required for PASS. Must be ≥ 1. |
 | `detect_fps` | `float` | `2.0` | YOLO inference rate; inference does not run on every frame. Must be > 0. |
@@ -273,7 +321,7 @@ by `setup_docker.sh`. A deployment that loads a different `VIDEOSTREAM_CONFIG` i
     "segment":   { "max_duration": 10, "min_duration": 1.0 },
     "prefilter": {
       "enabled": true,
-      "model_path": "/models/yolo11s.xml",
+      "model": "yolo11s",
       "target_classes": ["person"],
       "detect_fps": 2.0,
       "device": "NPU"
@@ -611,12 +659,42 @@ Retention responsibilities:
 | `security.allowed_source_schemes` | `["rtsp", "rtsps", "http", "https"]` | Schemes accepted in a register `source_url`. The URL is handed to `ffmpeg -i` verbatim, and ffmpeg can open local files and exotic inputs without this gate. |
 | `security.allow_file_source` | `false` | Also allow `file://` sources. Enable only for offline evaluation against sample clips on disk; in any shared deployment it is an arbitrary-file-read. |
 | `security.ffmpeg_protocol_whitelist` | `[file, crypto, rtp, udp, tcp, tls, rtsp, rtsps, http, https]` | Passed to ffmpeg as `-protocol_whitelist` — a second gate inside ffmpeg itself, so an input that slips past the scheme check still cannot be opened. `file` and `crypto` are required by the segment muxer's own output handling. |
-| `security.allowed_model_roots` | `[]` (empty) | Additional roots a request-supplied `prefilter.model_path` may live under, on top of the directory holding `defaults.prefilter.model_path`. Empty means that one directory is the only permitted root — enough for the standard deployment, since neither the MCP server nor the API test suite ever sends `model_path`. A request-supplied path reaches `read_model()` both during validation and in the running pipeline, so leaving it unconfined on an unauthenticated API is a file-existence oracle plus an arbitrary-file-parse primitive. Set this only for a deployment that genuinely switches models over the API. |
+| `model_dir` (or env `MODEL_DIR`) | `~/models` | Root every registered prefilter model must live under. Docker Compose bind-mounts this host directory read-only at the same path in-container, so a model outside it is unreadable at runtime. Subdirectory layout below the root is unconstrained. |
+| `prefilter_models` | `{}` (empty) | The models a monitor may select, keyed by the name `prefilter.model` uses. See §5.1. |
+| `defaults.prefilter.model` | — | Registry key sources inherit when they do not name one themselves. |
 | `SMART_COMMUNITY_DATA_DIR` | `~/.mcp-smart-community` | Overrides the platform data root; VSA writes under its `segments/` subdirectory. |
+| `MODEL_DIR` | `~/models` | Sets `model_dir` above, and what `${MODEL_DIR}` in `config.yaml` expands to. Docker Compose passes it into the container as well as using it for the read-only bind mount — the container sets `HOME=/tmp`, so a `~/models` fallback would resolve elsewhere. |
 | `VIDEOSTREAM_CONFIG` | `config/config.yaml` | Alternate configuration file path. |
-| `PREFILTER_MODEL` | `~/models/openvino/yolo11s/FP16/yolo11s.xml` | OpenVINO™ prefilter XML. `setup_docker.sh` validates the XML/BIN pair before startup and prepares the static YOLO11s IR automatically when it is missing. The model must be under `MODEL_DIR`, which is mounted read-only into the container. |
-| `VIDEOSTREAM_CONFIG_FILE` | Generated by `setup_docker.sh` | Host-side runtime configuration mounted at `/app/config/config.yaml` by Docker Compose. It is generated from the tracked default with `defaults.prefilter.model_path` set to the absolute `PREFILTER_MODEL` path. |
+| `PREFILTER_MODEL` | `~/models/openvino/yolo11s/FP16/yolo11s.xml` | OpenVINO™ prefilter XML. Retargets the registry entry named by `defaults.prefilter.model`, creating a `detection`/`openvino` entry called `default` when none is configured. `setup_docker.sh` validates the XML/BIN pair before startup and prepares the static YOLO11s IR automatically when it is missing. The model must be under `MODEL_DIR`. |
+| `VIDEOSTREAM_CONFIG_FILE` | Generated by `setup_docker.sh` | Host-side runtime configuration mounted at `/app/config/config.yaml` by Docker Compose. It is generated from the tracked default with `model_dir` and the default model's registry `model_path` pinned to the absolute, validated paths. |
 | `OV_CACHE_DIR` | `/tmp/ov_cache` | OpenVINO™ model cache used by the YOLO prefilter. |
+
+### 5.1 `prefilter_models`
+
+Each entry declares one selectable model. Registration makes a model *eligible*;
+it becomes *selectable* only after passing the validation in §3.2.1.
+
+```yaml
+model_dir: "${MODEL_DIR}"
+
+prefilter_models:
+  yolo11s:
+    kind: detection
+    backend: openvino
+    model_path: "${MODEL_DIR}/openvino/yolo11s/FP16/yolo11s.xml"
+    description: "YOLO11s FP16, static 1280x704 input, COCO-80 classes"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `kind` | `string` | — | Required. What the model does. Supported: `detection`. |
+| `backend` | `string` | `"openvino"` | Runtime that executes it, case-insensitive. Supported: `openvino`. |
+| `model_path` | `string` | — | Required. Absolute path to the IR `.xml`, under `model_dir`. `${MODEL_DIR}`, `${HOME}` and `~` are expanded. |
+| `description` | `string` | `""` | Free text, surfaced to agents helping a user choose a model. |
+
+Unknown fields are rejected. `kind` and `backend` accept one value each today;
+they are validated rather than assumed so a future model type or runtime needs
+no change to how monitors are configured.
 
 Ports used by the service and local verification recipes:
 
@@ -631,7 +709,7 @@ Ports used by the service and local verification recipes:
 
 Use the following test suites for unit and integration verification:
 
-- Unit tests: `pytest tests/unit/ --timeout=60` — expected `210 passed`.
+- Unit tests: `pytest tests/unit/ --timeout=60` — expected `391 passed`.
 - Integration tests: `pytest tests/integration/ -m integration --timeout=300` — expected `27 passed` (requires MediaMTX, mock webhook, and ffmpeg producer).
 - Manual verification (`V1`–`V12`) covers the `/health` probe, source registration, lifecycle transitions, motion / recording event delivery, health strategies, CLI, real MCP integration, keepalive, and trajectory + ROI crop.
 

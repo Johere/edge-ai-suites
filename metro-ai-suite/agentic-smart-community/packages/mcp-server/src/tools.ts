@@ -168,8 +168,10 @@ export function registerTools(
     description: "Manage monitor lifecycle: register_source | unregister | start | stop | status | list | prefilter_options. " +
       "For register_source, use_case must be a key in config.yaml's use_case_dict; the tool runs " +
       "smart_community_use_case_validate as a pre-check (rejecting if missing fields or summary service issues). " +
-      "prefilter_options is a read-only query returning the prefilter model's selectable target_classes " +
-      "(class_names + labels_source) so a caller can build pipeline_config.prefilter before register_source.",
+      "prefilter_options is a read-only query listing the prefilter models an operator registered, each with its " +
+      "selectable target_classes (class_names + labels_source), plus `rejected` entries that cannot be used and why. " +
+      "Put a monitor on one by setting pipeline_config.prefilter.model to a listed model name — a raw model_path " +
+      "in the request is rejected, since models are selected from the server-side registry.",
     inputSchema: {
       action: z.enum(["start", "stop", "register_source", "unregister", "status", "list", "prefilter_options"])
         .describe("Control action"),
@@ -178,6 +180,9 @@ export function registerTools(
       name: z.string().optional().describe("Display name (for register_source)"),
       use_case: z.string().optional().describe("Use case key from config.yaml use_case_dict (required for register_source)"),
       pipeline_config: z.record(z.unknown()).optional().describe("Pipeline config object (for register_source)"),
+      model: z.string().optional().describe(
+        "Prefilter model name (for prefilter_options): return just that model's detail instead of the whole list"
+      ),
       persist: z.boolean().default(true).describe(
         "Mirror the change back to the monitors.yaml the server was booted from (--monitors), " +
         "comment-preserving (default true): register_source writes the entry (lets a restart " +

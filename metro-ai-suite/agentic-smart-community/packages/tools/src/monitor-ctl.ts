@@ -23,6 +23,13 @@ export interface MonitorCtlParams {
   use_case?: string;
   video_summary_task?: string;
   pipeline_config?: Record<string, unknown>;
+  /**
+   * Prefilter model registry key. With `prefilter_options`, narrows the query
+   * to that one model instead of listing every registered one. To put a monitor
+   * ON a model, set `pipeline_config.prefilter.model` at register_source — the
+   * analytics service rejects a raw `model_path` from a request.
+   */
+  model?: string;
   webhook_url?: string;
   /**
    * Absolute path videostream-analytics should write this monitor's data to.
@@ -166,19 +173,25 @@ async function analyticsSourceExists(analyticsUrl: string, monitorId: string): P
 }
 
 /**
- * Fetch the prefilter model's capabilities (selectable `target_classes`) from
- * videostream-analytics. Returns the raw JSON: `{ enabled, model_path,
- * class_names, labels_source, available_devices }`. `labels_source` is
- * `embedded | fallback_coco | unavailable` — only `embedded` names are
+ * Fetch the selectable prefilter models from videostream-analytics. Returns the
+ * raw JSON: `{ enabled, default_model, supported_kinds, supported_backends,
+ * available_devices, models, rejected, ... }`. `models[].name` is what
+ * `pipeline_config.prefilter.model` accepts; `rejected` lists registered
+ * entries that cannot be used, with the reason. `labels_source` on each model
+ * is `embedded | fallback_coco | unavailable` — only `embedded` names are
  * authoritative; otherwise the list is a COCO guess the caller must confirm.
+ *
+ * With `model`, returns that one entry's detail instead (404 if it is not a
+ * usable registered model).
  */
-async function analyticsPrefilterOptions(analyticsUrl: string): Promise<unknown> {
-  const resp = await fetch(`${analyticsUrl}/capabilities/prefilter`, {
+async function analyticsPrefilterOptions(analyticsUrl: string, model?: string): Promise<unknown> {
+  const query = model ? `?model=${encodeURIComponent(model)}` : "";
+  const resp = await fetch(`${analyticsUrl}/capabilities/prefilter${query}`, {
     signal: AbortSignal.timeout(10_000),
   });
   if (!resp.ok) {
     const t = await resp.text().catch(() => "");
-    throw new Error(`analytics GET /capabilities/prefilter failed HTTP ${resp.status}: ${t.slice(0, 200)}`);
+    throw new Error(`analytics GET /capabilities/prefilter${query} failed HTTP ${resp.status}: ${t.slice(0, 200)}`);
   }
   return resp.json();
 }
@@ -440,7 +453,7 @@ export async function monitorCtl(
     // -----------------------------------------------------------------------
     case "prefilter_options": {
       // Read-only capability query — no monitor_id / DB / worker involvement.
-      return await analyticsPrefilterOptions(analyticsUrl);
+      return await analyticsPrefilterOptions(analyticsUrl, params.model);
     }
 
     // -----------------------------------------------------------------------

@@ -30,6 +30,35 @@ data_dir: "~/.mcp-smart-community/segments"
 # allowed_data_roots:
 #   - "/mnt/nvme/vsa-segments"
 
+# Root every registered prefilter model must live under. docker-compose mounts
+# this host directory read-only at the same path in-container, so a model
+# outside it is unreadable at runtime no matter how valid the host path looks.
+# Overridden by the MODEL_DIR environment variable.
+model_dir: "${MODEL_DIR}"
+
+# Selectable prefilter models. A monitor picks one by the key used here
+# (`pipeline.prefilter.model` in a register_source body, `prefilter.model` in
+# monitors.yaml) — a raw path in a request is rejected, so every model the
+# service loads is one an operator put in this list.
+#
+# Organize the files under `model_dir` however you like; only containment is
+# enforced. An entry is selectable once it passes validation: supported `kind`
+# and `backend`, path under `model_dir`, a complete IR pair on disk, readable by
+# OpenVINO, and a detection-shaped output. `GET /capabilities/prefilter` lists
+# the ones that pass and reports why the others do not.
+#
+#   kind        required. What the model does. Supported: detection
+#   backend     optional, default `openvino` (case-insensitive). Supported: openvino
+#   model_path  required. Absolute path to the IR `.xml`; `${MODEL_DIR}`,
+#               `${HOME}` and `~` are expanded
+#   description optional. Shown to agents helping a user choose
+prefilter_models:
+  yolo11s:
+    kind: detection
+    backend: openvino
+    model_path: "${MODEL_DIR}/openvino/yolo11s/FP16/yolo11s.xml"
+    description: "YOLO11s FP16, static 1280x704 input, COCO-80 classes"
+
 # Input-surface restrictions on the `source_url` a register_source request may
 # supply. The URL is handed verbatim to `ffmpeg -i` and cv2.VideoCapture, and
 # ffmpeg speaks far more than RTSP: `file:`, `concat:`, `subfile:`, `data:`.
@@ -69,7 +98,9 @@ defaults:
     fps: 15
   prefilter:
     enabled: true
-    model_path: /path/to/prefilter-ov-model.xml
+    # Key from `prefilter_models` above. Sources that omit `prefilter` inherit
+    # this whole block, including the model.
+    model: yolo11s
     target_classes: ["person"]
     min_confidence: 0.4
     min_frames_hit: 1

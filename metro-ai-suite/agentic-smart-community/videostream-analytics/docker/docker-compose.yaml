@@ -13,12 +13,20 @@ services:
         NO_PROXY: ${NO_PROXY:-${no_proxy:-}}
     environment:
       - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:3101/events}
-      # Absolute, container-visible prefilter model path. Overrides the (possibly
-      # placeholder) model_path in the mounted config.yaml so prefilter works even
-      # on a plain `docker compose up`. Interpolated on the host; MODEL_DIR is
-      # bind-mounted at the same host path (below) so this resolves in-container.
-      # Default matches docker/set_env.sh and setup_docker.sh's DEFAULT_PREFILTER_MODEL.
+      # Absolute, container-visible path of the deployment's prefilter model. It
+      # retargets the registry entry named by `defaults.prefilter.model`, so
+      # prefilter works even on a plain `docker compose up` that mounts the
+      # tracked config.yaml instead of the one setup_docker.sh generates.
+      # Interpolated on the host; MODEL_DIR is bind-mounted at the same host path
+      # (below) so this resolves in-container. Default matches docker/set_env.sh
+      # and setup_docker.sh's DEFAULT_PREFILTER_MODEL.
       - PREFILTER_MODEL=${PREFILTER_MODEL:-${HOME}/models/openvino/yolo11s/FP16/yolo11s.xml}
+      # Root every registered prefilter model must live under, and what
+      # `${MODEL_DIR}` in the mounted config.yaml expands to. It has to be IN the
+      # container environment, not merely interpolated host-side: the container
+      # sets HOME=/tmp, so a `~/models` fallback would resolve elsewhere entirely.
+      # Same value as the read-only bind mount below.
+      - MODEL_DIR=${MODEL_DIR:-${HOME}/models}
       # MCP server's data root. Defaults to ~/.mcp-smart-community (the MCP default);
       # override by exporting SMART_COMMUNITY_DATA_DIR before `docker compose up`.
       # VSA derives its default output root as <SMART_COMMUNITY_DATA_DIR>/segments; the

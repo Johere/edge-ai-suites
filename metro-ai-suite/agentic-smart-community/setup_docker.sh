@@ -454,7 +454,8 @@ prepare_videostream_config() {
   source_config="${SCRIPT_DIR}/videostream-analytics/config/config.yaml"
   runtime_config="${SCRIPT_DIR}/.docker/videostream-analytics.config.yaml"
   mkdir -p "$(dirname "$runtime_config")"
-  PREFILTER_MODEL="$prefilter_model" python3 - "$source_config" "$runtime_config" <<'PY'
+  PREFILTER_MODEL="$prefilter_model" MODEL_DIR="$model_dir" \
+    python3 - "$source_config" "$runtime_config" <<'PY'
 import os
 import sys
 import tempfile
@@ -465,7 +466,21 @@ source_path, output_path = sys.argv[1:]
 with open(source_path, encoding="utf-8") as source_file:
     config = yaml.safe_load(source_file) or {}
 
-config.setdefault("defaults", {}).setdefault("prefilter", {})["model_path"] = os.environ["PREFILTER_MODEL"]
+# Pin the absolute, validated paths the container will see. The tracked
+# config.yaml carries ${MODEL_DIR} placeholders; writing the resolved values
+# here keeps the deployment working even if the variable is not exported into
+# the container. The model the deployment defaults to is retargeted in the
+# registry, which is the only place a model path is accepted from.
+config["model_dir"] = os.environ["MODEL_DIR"]
+defaults = config.setdefault("defaults", {}).setdefault("prefilter", {})
+name = defaults.get("model") or "default"
+defaults["model"] = name
+registry = config.setdefault("prefilter_models", {})
+entry = registry.setdefault(name, {})
+entry.setdefault("kind", "detection")
+entry.setdefault("backend", "openvino")
+entry["model_path"] = os.environ["PREFILTER_MODEL"]
+
 output_dir = os.path.dirname(output_path)
 with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=output_dir, delete=False) as output_file:
     yaml.safe_dump(config, output_file, default_flow_style=False, sort_keys=False)

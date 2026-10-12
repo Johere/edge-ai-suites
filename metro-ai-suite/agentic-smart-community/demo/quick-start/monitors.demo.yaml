@@ -35,8 +35,12 @@ monitors:
     pipeline_config:
       motion: { enabled: true, diff_threshold: 25, area_ratio: 0.015, stable_frames: 30 }
       # Hazard prefilter: NPU YOLO11s gates summary requests on target classes.
+      # `model` names an entry in videostream-analytics config.yaml's
+      # `prefilter_models`; `smart_community_monitor_ctl action=prefilter_options`
+      # lists what is registered. Each monitor picks its own model and device.
       prefilter:
         enabled: true
+        model: yolo11s
         target_classes: [person, knife, scissors, bottle]
         min_confidence: 0.4
         detect_fps: 2
@@ -72,6 +76,13 @@ monitors:
     use_case: elder_wakeup
     pipeline_config:
       motion: { enabled: true, diff_threshold: 20, area_ratio: 0.004, stable_frames: 20 }
+      # Omitting `model` inherits defaults.prefilter.model. To run this camera on
+      # a different detector, register it under `prefilter_models` in
+      # videostream-analytics config.yaml and name it here — the model and the
+      # device are independent per-monitor choices:
+      #   model: my_detector
+      #   device: GPU
+      # See docs/user-guide/how-to-guides/configure-prefilter-model.md
       prefilter:
         enabled: true
         device: NPU

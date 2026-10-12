@@ -5,18 +5,20 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager, contextmanager
-from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi import Path as PathParam
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from shared import model_registry
 from shared.config import (
+    SUPPORTED_MODEL_BACKENDS,
+    SUPPORTED_MODEL_KINDS,
     AppConfig,
     SourceConfig,
     MotionConfig,
@@ -28,9 +30,8 @@ from shared.config import (
     HealthConfig,
     KeepaliveConfig,
     SecurityConfig,
-    expand_user_path,
-    resolve_contained_file,
 )
+from shared.model_registry import ModelInfo, ModelNotAvailable
 from source_worker import SourceManager
 
 logger = logging.getLogger(__name__)
@@ -237,10 +238,31 @@ def _available_devices() -> list[str]:
         return ["CPU"]
 
 
+def resolve_default_prefilter_model(config: AppConfig) -> None:
+    """Fill ``defaults.prefilter.model_path`` from the registry.
+
+    Sources that omit `prefilter` entirely inherit `defaults.prefilter`
+    wholesale, so the default's path has to be resolved once up front rather
+    than per request. Fail-soft: an unusable default is logged and leaves the
+    path empty, which `_init_prefilter` already treats as "no prefilter" — one
+    bad registry entry must not stop the service from serving other monitors.
+    """
+    name = config.defaults.prefilter.model
+    if not name:
+        return
+    try:
+        config.defaults.prefilter.model_path = model_registry.resolve(
+            config, name
+        ).model_path
+    except ModelNotAvailable as e:
+        logger.warning("default prefilter model %r is unavailable: %s", name, e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _manager
     config: AppConfig = app.state.config
+    resolve_default_prefilter_model(config)
     _manager = SourceManager(config)
     logger.info("videostream-analytics started on :%d", config.server.port)
     yield
@@ -322,124 +344,130 @@ def create_app(config: AppConfig) -> FastAPI:
         return {"status": "ok", "service": "videostream-analytics"}
 
     @app.get("/capabilities/prefilter")
-    async def prefilter_capabilities() -> dict[str, Any]:
-        """Advertise the prefilter model's selectable ``target_classes``.
+    async def prefilter_capabilities(
+        model: Annotated[str | None, Query(max_length=128)] = None,
+    ) -> dict[str, Any]:
+        """Advertise the selectable prefilter models and their ``target_classes``.
 
-        The valid class set is whatever the deployed OpenVINO model embeds in
-        its ``rt_info`` labels, so it can only be known at runtime. When
-        ``labels_source`` is not ``embedded`` the returned ``class_names`` are
-        an untrustworthy COCO fallback and callers should confirm names rather
-        than treat the list as authoritative.
+        ``models`` holds every registry entry that validates — those are the
+        values ``pipeline.prefilter.model`` accepts. ``rejected`` is an operator
+        diagnostic: registered entries that cannot be used, with the reason.
+        Entries listed there are not selectable.
+
+        A class list is only as good as its source: ``labels_source`` is
+        ``embedded`` when the names came from the model's own ``rt_info``, and
+        ``fallback_coco``/``unavailable`` when they are a COCO-80 guess that
+        callers should confirm rather than trust.
+
+        With ``?model=<name>`` the response is that one entry's detail instead.
         """
-        pf = config.defaults.prefilter
-        if not pf.model_path or not Path(pf.model_path).exists():
-            return {
-                "enabled": pf.enabled,
-                "model_path": pf.model_path,
-                "class_names": [],
-                "labels_source": "unavailable",
-                "available_devices": _available_devices(),
-            }
-        from stream_monitor.pipeline.prefilter_yolo import read_model_labels
+        available, rejected = model_registry.list_models(config)
+        if model is not None:
+            for info in available:
+                if info.name == model:
+                    return info.to_dict()
+            reason = next(
+                (r["reason"] for r in rejected if r["name"] == model),
+                f"prefilter model '{model}' is not registered",
+            )
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "model_not_available", "model": model, "reason": reason},
+            )
 
-        class_names, labels_source = read_model_labels(pf.model_path)
+        pf = config.defaults.prefilter
+        default = next((m for m in available if m.name == pf.model), None)
         return {
             "enabled": pf.enabled,
-            "model_path": pf.model_path,
-            "class_names": class_names,
-            "labels_source": labels_source,
+            "default_model": pf.model,
+            "supported_kinds": list(SUPPORTED_MODEL_KINDS),
+            "supported_backends": list(SUPPORTED_MODEL_BACKENDS),
             "available_devices": _available_devices(),
+            "models": [m.to_dict() for m in available],
+            "rejected": rejected,
+            # Flattened view of the default model, for callers that only ever
+            # used the single-model shape.
+            "model_path": default.model_path if default else "",
+            "class_names": default.class_names if default else [],
+            "labels_source": default.labels_source if default else "unavailable",
         }
 
-    def _model_roots() -> list[str]:
-        """Directories a request-supplied ``model_path`` may live under.
+    def resolve_prefilter_model(
+        prefilter: PrefilterConfig | None, current_model: str = ""
+    ) -> ModelInfo | None:
+        """Resolve the effective ``prefilter.model`` against the registry.
 
-        The deployment's own model directory, plus any explicit escape hatch.
-        Derived from ``defaults.prefilter.model_path`` rather than from
-        ``MODEL_DIR``: that variable is host-side only (docker-compose uses it
-        for the read-only bind mount and never puts it in the container
-        environment), and the container sets ``HOME=/tmp``, so a ``~/models``
-        fallback here would resolve to the wrong directory entirely. The
-        configured model path is already absolute and container-valid.
+        Effective name is the requested one, else the source's current one
+        (`current_model`, supplied by `update_pipeline`), else the deployment
+        default. Writes the entry's validated path onto ``prefilter`` so the
+        running pipeline (rtsp_monitor._init_prefilter) loads it, and returns
+        the entry for `_validate_target_classes`. ``None`` means no model is in
+        play — nothing registered under any of those names.
+
+        A request may not carry ``model_path``: the whole point of the registry
+        is that paths come from config, so accepting one would reopen an
+        unauthenticated path into `read_model()`.
+
+        Raises HTTPException(422) for a rejected or unknown key.
         """
-        roots = []
-        if config.defaults.prefilter.model_path:
-            roots.append(os.path.dirname(config.defaults.prefilter.model_path))
-        roots.extend(config.security.allowed_model_roots)
-        return [r for r in roots if r]
+        if prefilter is not None and "model_path" in prefilter.model_fields_set:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "model_path is not accepted",
+                    "hint": "select a registered model by name with pipeline.prefilter.model; "
+                            "GET /capabilities/prefilter lists the registered models",
+                },
+            )
 
-    def validate_model_path(prefilter: PrefilterConfig | None) -> str:
-        """Confine a request-supplied ``prefilter.model_path`` to a model root.
-
-        Returns the resolved path (``""`` when the request omitted it and the
-        deployment default should be inherited — trusted config, deliberately
-        not re-checked), and also writes it back onto ``prefilter`` so the
-        running pipeline (rtsp_monitor._init_prefilter) loads the resolved path
-        rather than the raw request string.
-
-        Callers must pass the RETURN VALUE on to `_validate_target_classes`
-        instead of letting it re-read ``prefilter.model_path``. The write-back
-        alone is not enough: taint is tracked on the `prefilter` object, so
-        reading the attribute off it again re-derives the unvalidated value and
-        `py/path-injection` still reports `Path(model_path)`. Only the returned
-        string carries the containment check on its data flow.
-
-        Raises ValueError (-> 400 via `_guard`), matching `validate_source_url`.
-        """
-        if not prefilter or not prefilter.model_path:
-            return ""
-        resolved = resolve_contained_file(
-            _model_roots(), expand_user_path(prefilter.model_path), "model"
-        )
-        prefilter.model_path = resolved
-        return resolved
+        requested = prefilter.model if prefilter and prefilter.model else ""
+        name = requested or current_model or config.defaults.prefilter.model
+        if not name:
+            return None
+        try:
+            info = model_registry.resolve(config, name)
+        except ModelNotAvailable as e:
+            # The rejection reason embeds absolute server paths, and this API has
+            # no authentication — log it, and answer with the selectable names
+            # only. `GET /capabilities/prefilter` is where reasons are reported.
+            logger.warning("prefilter model %r unavailable: %s", name, e)
+            available, _ = model_registry.list_models(config)
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "model_not_available",
+                    "model": name,
+                    "models": [m.name for m in available],
+                    "hint": "GET /capabilities/prefilter reports why a registered "
+                            "model is unavailable",
+                },
+            ) from e
+        if prefilter is not None:
+            prefilter.model = info.name
+            prefilter.model_path = info.model_path
+        return info
 
     def _validate_target_classes(
-        prefilter: PrefilterConfig | None, model_path: str
+        prefilter: PrefilterConfig | None, model: ModelInfo | None
     ) -> None:
         """Reject ``target_classes`` not in the model's embedded label set.
 
         Only hard-fails when labels are trustworthy (``embedded``); a
         ``fallback_coco``/``unavailable`` label set is a guess, so we let the
         request through rather than block on an untrusted list.
-
-        ``model_path`` is the confined, resolved path returned by
-        `validate_model_path` — empty when the request omitted it, in which case
-        the trusted deployment default applies. It is passed in rather than read
-        back off ``prefilter`` on purpose; see `validate_model_path`.
         """
         if not prefilter or not prefilter.enabled or not prefilter.target_classes:
             return
-        model_path = model_path or config.defaults.prefilter.model_path
-        if not model_path:
+        if model is None or model.labels_source != "embedded":
             return
-        try:
-            model_exists = Path(model_path).exists()
-        except OSError:
-            # `exists()` only swallows ENOENT/ENOTDIR/ELOOP; an un-stat-able
-            # path (ENAMETOOLONG, EACCES, …) propagates. Request-supplied paths
-            # no longer reach this — `validate_model_path` rejects them with a
-            # 400 first — but the *configured* default is not containment-
-            # checked, so a mistyped config.yaml can still land here. Such a
-            # path cannot name a readable model either, so treat it exactly
-            # like a missing one: labels unavailable, skip the check rather
-            # than crash.
-            model_exists = False
-        if not model_exists:
-            return
-        from stream_monitor.pipeline.prefilter_yolo import read_model_labels
-
-        class_names, labels_source = read_model_labels(model_path)
-        if labels_source != "embedded":
-            return
-        unknown = [c for c in prefilter.target_classes if c not in class_names]
+        unknown = [c for c in prefilter.target_classes if c not in model.class_names]
         if unknown:
             raise HTTPException(
                 status_code=422,
                 detail={
                     "error": "unknown target_classes",
                     "unknown": unknown,
-                    "class_names": class_names,
+                    "class_names": model.class_names,
                 },
             )
 
@@ -470,8 +498,8 @@ def create_app(config: AppConfig) -> FastAPI:
         mgr = get_manager()
         with _guard("register_source"):
             validate_source_url(req.source_url, config.security)
-            model_path = validate_model_path(req.pipeline.prefilter)
-            _validate_target_classes(req.pipeline.prefilter, model_path)
+            model = resolve_prefilter_model(req.pipeline.prefilter)
+            _validate_target_classes(req.pipeline.prefilter, model)
         source = SourceConfig(
             source_id=req.source_id,
             source_url=req.source_url,
@@ -555,8 +583,10 @@ def create_app(config: AppConfig) -> FastAPI:
     ) -> dict[str, Any]:
         mgr = get_manager()
         with _guard("update_pipeline"):
-            model_path = validate_model_path(req.pipeline.prefilter)
-            _validate_target_classes(req.pipeline.prefilter, model_path)
+            model = resolve_prefilter_model(
+                req.pipeline.prefilter, mgr.get_source_prefilter_model(source_id)
+            )
+            _validate_target_classes(req.pipeline.prefilter, model)
             result = mgr.update_pipeline_config(
                 source_id=source_id,
                 motion=req.pipeline.motion,

@@ -454,6 +454,21 @@ class SourceManager:
             return None
         return self._describe_bundle(source_id, bundle)
 
+    def get_source_prefilter_model(self, source_id: str) -> str:
+        """Registry key the source is currently running, ``""`` if unknown.
+
+        `update_pipeline` needs this: a PUT that changes only, say,
+        `min_confidence` must keep the source on its own model rather than
+        silently inherit the deployment default, because the override is merged
+        onto the source's *effective* prefilter config.
+        """
+        with self._registry_lock:
+            bundle = self._bundles.get(source_id)
+        if bundle is None:
+            return ""
+        prefilter = bundle.pipeline.source.prefilter
+        return prefilter.model if prefilter else ""
+
     def _describe_bundle(self, source_id: str, bundle: SourceBundle) -> dict[str, Any]:
         pipe = bundle.pipeline
         ts = bundle.last_keepalive_at

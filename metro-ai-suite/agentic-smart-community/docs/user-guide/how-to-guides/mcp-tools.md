@@ -124,12 +124,13 @@ passed here.
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `action` | enum | ✅ | `list` \| `status` \| `start` \| `stop` \| `register_source` \| `unregister` |
-| `monitor_id` | string | — | Required for all except `list` |
+| `action` | enum | ✅ | `list` \| `status` \| `start` \| `stop` \| `register_source` \| `unregister` \| `prefilter_options` |
+| `monitor_id` | string | — | Required for all except `list` and `prefilter_options` |
 | `source_url` | string | — | Source URL — any protocol analytics supports: rtsp / http / onvif / file / … (required for `register_source`) |
 | `name` | string | — | Display name (for `register_source`) |
 | `use_case` | string | — | `use_case_dict` key (**required** for `register_source`) |
 | `pipeline_config` | object | — | Analytics pipeline config (default: motion + recording) |
+| `model` | string | — | Prefilter model name (for `prefilter_options`): return that one model's detail instead of the full list |
 
 **Actions**
 
@@ -141,8 +142,45 @@ passed here.
 | `unregister` | Graceful-stop worker → analytics DELETE → delete DB record | `{ success, monitor_id }` |
 | `start` | Resume: analytics `/resume` + start worker + DB `online` | `{ success, monitor_id, status }` |
 | `stop` | Pause: graceful-stop worker → analytics `/pause` → DB `offline` | `{ success, monitor_id, status }` |
+| `prefilter_options` | Read-only: list the selectable prefilter models (see below) | `{ models, rejected, default_model, available_devices, … }` |
 
 > `stop` / `unregister` are **destructive** — confirm with the user first.
+
+### 5.1 `prefilter_options` — choosing a prefilter model
+
+Prefilter models are registered server-side and selected **by name**. Call this before
+`register_source` to learn which names and which `target_classes` are valid:
+
+```json
+{
+  "default_model": "yolo11s",
+  "supported_kinds": ["detection"],
+  "supported_backends": ["openvino"],
+  "available_devices": ["CPU", "GPU", "NPU"],
+  "models": [
+    { "name": "yolo11s", "kind": "detection", "backend": "openvino",
+      "description": "YOLO11s FP16, static 1280x704 input, COCO-80 classes",
+      "class_names": ["person", "knife", "…"], "labels_source": "embedded",
+      "input_shape": "[1,3,704,1280]" }
+  ],
+  "rejected": [ { "name": "helmet_v2", "reason": "cannot read …/helmet_v2.bin: …" } ]
+}
+```
+
+- **`models`** is the selectable set — only these names are accepted as
+  `pipeline_config.prefilter.model`. A raw `model_path` in the request is rejected with 422.
+- **`rejected`** lists registered entries that failed validation, with the reason. Operator
+  diagnostics; these names cannot be selected.
+- **`labels_source`** qualifies `class_names`: `embedded` is authoritative (a class outside the
+  list is rejected with 422 at registration), while `fallback_coco` / `unavailable` are guesses
+  the user should confirm.
+- **`input_shape`** containing `?` means a dynamic shape, which cannot run on `device: NPU`.
+
+Assemble the result as `pipeline_config.prefilter = { enabled: true, model: <name>,
+target_classes: [...], device: <device> }`. Each monitor chooses independently, so different
+cameras can run different models on different devices. See
+[Configure the Prefilter Model for a Monitor](./configure-prefilter-model.md) for how an operator
+registers a new model.
 
 ---
 
