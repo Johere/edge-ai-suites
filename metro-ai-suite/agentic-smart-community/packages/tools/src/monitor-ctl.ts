@@ -16,7 +16,7 @@ export interface IWorkerService {
 }
 
 export interface MonitorCtlParams {
-  action: "start" | "stop" | "register_source" | "unregister" | "status" | "list" | "prefilter_options";
+  action: "start" | "stop" | "register_source" | "unregister" | "status" | "list" | "prefilter_options" | "reload_config";
   monitor_id?: string;
   source_url?: string;
   name?: string;
@@ -192,6 +192,24 @@ async function analyticsPrefilterOptions(analyticsUrl: string, model?: string): 
   if (!resp.ok) {
     const t = await resp.text().catch(() => "");
     throw new Error(`analytics GET /capabilities/prefilter${query} failed HTTP ${resp.status}: ${t.slice(0, 200)}`);
+  }
+  return resp.json();
+}
+
+/**
+ * Ask analytics to re-read its configuration file and swap it in without a
+ * restart (POST /config/reload). Running sources are untouched; new
+ * registrations and capability queries see the reloaded registry. Returns the
+ * service's summary: { status, path, models, rejected }.
+ */
+async function analyticsReloadConfig(analyticsUrl: string): Promise<unknown> {
+  const resp = await fetch(`${analyticsUrl}/config/reload`, {
+    method: "POST",
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!resp.ok) {
+    const t = await resp.text().catch(() => "");
+    throw new Error(`analytics POST /config/reload failed HTTP ${resp.status}: ${t.slice(0, 300)}`);
   }
   return resp.json();
 }
@@ -454,6 +472,13 @@ export async function monitorCtl(
     case "prefilter_options": {
       // Read-only capability query — no monitor_id / DB / worker involvement.
       return await analyticsPrefilterOptions(analyticsUrl, params.model);
+    }
+
+    // -----------------------------------------------------------------------
+    case "reload_config": {
+      // Hot-swap the analytics configuration without a restart — used after
+      // the operator edits the VSA config file (e.g. adds a prefilter model).
+      return await analyticsReloadConfig(analyticsUrl);
     }
 
     // -----------------------------------------------------------------------

@@ -46,8 +46,9 @@ models, rejected }`. Work through it in two steps.
   (`${VIDEOSTREAM_CACHE_HOST}/config.yaml`, reachable in the repo as
   `videostream-analytics/config/config.yaml`), which the MCP server cannot
   write. Hand the user the entry YAML to paste and the absolute path to edit,
-  then have them restart the service; afterwards confirm with
-  `prefilter_options` that the model moved from `rejected` to `models`.
+  then apply it with `smart_community_monitor_ctl action=reload_config` (no
+  service restart needed) and confirm with `prefilter_options` that the model
+  moved from `rejected` to `models`.
 
 Models are selected by **name**. Never put a `model_path` in
 `pipeline_config` — the server rejects it with 422.

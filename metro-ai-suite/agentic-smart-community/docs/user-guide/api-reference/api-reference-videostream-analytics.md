@@ -37,6 +37,7 @@ The service is a long-running single process. Each registered source spawns back
 | `POST`   | `/sources/{source_id}/resume` | Resume a paused pipeline. | §3.8 |
 | `POST`   | `/sources/{source_id}/keepalive` | Refresh the keepalive timestamp. | §3.9 |
 | `PUT`    | `/sources/{source_id}/pipeline` | Hot-update supported pipeline configuration. | §3.10 |
+| `POST`   | `/config/reload` | Re-read the configuration file and swap it in without a restart. | §3.11 |
 
 ---
 
@@ -70,11 +71,16 @@ Liveness probe.
 
 Report the prefilter models a monitor may select, and the inference devices this host offers.
 
+```bash
+curl -s localhost:8999/capabilities/prefilter                  # full report
+curl -s 'localhost:8999/capabilities/prefilter?model=yolo11s'  # one model's detail
+```
+
 **Query parameters**:
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| `model` | `string` | Optional. Return just that model's entry (the object shape of a `models[]` element) instead of the full report. `404` when the name is not a usable registered model. |
+| `model` | `string` | Optional. Appended as `?model=<name>` (URL-encode the value). Return just that model's entry (the object shape of a `models[]` element) instead of the full report. `404` when the name is not a usable registered model. |
 
 **Response 200**:
 
@@ -100,19 +106,17 @@ Report the prefilter models a monitor may select, and the inference devices this
   ],
   "rejected": [
     { "name": "helmet_v2", "model_path": "...", "reason": "cannot read .../helmet_v2.bin: No such file or directory" }
-  ],
-  "model_path": "/home/user/models/openvino/yolo11s/FP16/yolo11s.xml",
-  "class_names": ["person", "car"],
-  "labels_source": "embedded"
+  ]
 }
 ```
 
 `models` is the selectable set — only these `name` values are accepted as
 `pipeline.prefilter.model`. `rejected` lists registered entries that failed
 validation, each with the reason; it is an operator diagnostic and those names
-are not selectable. The top-level `model_path` / `class_names` /
-`labels_source` are a flattened view of `default_model`, for clients that only
-consume a single model.
+are not selectable. `default_model` names the registry key a source inherits
+when it does not name one itself; that entry's detail is inside `models[]`
+(or fetched alone via `?model=<name>`) — the report intentionally carries no
+flattened duplicate of it.
 
 `labels_source` is `embedded` when the model exposes authoritative labels. It
 may be `fallback_coco` or `unavailable`; clients must not treat those values as
@@ -495,6 +499,51 @@ restarting the pipeline.
 
 ---
 
+### 3.11 `POST /config/reload`
+
+Re-read the configuration file and swap it in without restarting the service — the way to
+apply an edited configuration (a new `prefilter_models` entry, tuned `defaults`, a changed
+`webhook.url`) without dropping every running source's pipeline.
+
+The service also **watches the file and reloads automatically** within a couple of seconds
+of an edit (one `stat` per 2s poll; the parse + registry validation only runs on an actual
+change). Calling this endpoint is the explicit form of the same operation: use it when you
+want the reload to happen now, or its response as confirmation.
+
+**Semantics**:
+
+- Running sources are untouched; their pipelines were merged at registration. The reloaded
+  configuration applies to new `register_source` calls, `PUT /sources/{id}/pipeline` updates,
+  `GET /capabilities/prefilter`, and the default webhook sink.
+- The service reads `--reload-config` when it is set and exists — the compose deployment
+  points it at `/host-config/config.yaml`, a directory bind-mount view of the same file.
+  This matters because a single-file bind mount pins the inode the container started with,
+  so edits saved atomically (VS Code, vim, `sed -i` — anything that writes a temp file and
+  renames) never become visible through it; a directory mount reflects renames immediately.
+  Without `--reload-config` (or if it does not exist), the startup `--config` path is read.
+- A missing file answers **400** (`config_not_found`) and an unparsable or schema-invalid
+  file answers **422** (`config_invalid`): in both cases the running configuration is kept.
+  Reload never falls back to built-in defaults — that would silently empty the model registry.
+
+**Request**: empty body.
+
+```bash
+curl -X POST localhost:8999/config/reload
+```
+
+**Response 200** — the post-reload registry, so the caller can confirm immediately:
+
+```json
+{
+  "status": "reloaded",
+  "path": "/host-config/config.yaml",
+  "models": ["yolo11s", "helmet_v2"],
+  "rejected": []
+}
+```
+
+---
+
 ## 4. Event Plane — VSA → Downstream Webhook
 
 Every event produced by a running source is delivered as an HTTP POST to the configured webhook URL. The envelope shape is aligned with the MCP `events-endpoint` (see [MCP Webhook Event API Reference](./api-reference-mcp-webhook-event.md) for the receiving contract).
@@ -657,6 +706,12 @@ Four paths come up around configuration, and they are easy to confuse:
 - `videostream-analytics/config/config.yaml` — a **symlink** `setup_vsa.sh` creates to your live configuration, so the familiar in-tree path edits the same file. Ignored by git.
 - `/app/config/config.yaml` — the **mount point** your live configuration is bind-mounted at inside the container.
 
+Ports around the service:
+
+- `:8999` — VSA service (this document).
+- `:3101` — MCP server `events-endpoint`, the default webhook target in the standard deployment.
+- `:8554` — MediaMTX RTSP server in the demo quick-start; the typical `source_url` upstream.
+
 | Env / Config | Default | Purpose |
 |--------------|---------|---------|
 | `server.host` / `server.port` | `127.0.0.1:8999` | HTTP bind address. Loopback by default because the service is unauthenticated; widen only for a cross-host deployment that adds its own authentication. |
@@ -666,14 +721,13 @@ Four paths come up around configuration, and they are easy to confuse:
 | `security.allowed_source_schemes` | `["rtsp", "rtsps", "http", "https"]` | Schemes accepted in a register `source_url`. The URL is handed to `ffmpeg -i` verbatim, and ffmpeg can open local files and exotic inputs without this gate. |
 | `security.allow_file_source` | `false` | Also allow `file://` sources. Enable only for offline evaluation against sample clips on disk; in any shared deployment it is an arbitrary-file-read. |
 | `security.ffmpeg_protocol_whitelist` | `[file, crypto, rtp, udp, tcp, tls, rtsp, rtsps, http, https]` | Passed to ffmpeg as `-protocol_whitelist` — a second gate inside ffmpeg itself, so an input that slips past the scheme check still cannot be opened. `file` and `crypto` are required by the segment muxer's own output handling. |
-| `model_dir` (or env `MODEL_DIR`) | `~/models/openvino` | Root every registered prefilter model must live under. Docker Compose bind-mounts this host directory read-only at the same path in-container, so a model outside it is unreadable at runtime. Subdirectory layout below the root is unconstrained. |
+| `model_dir` (or env `PREFILTER_MODEL_DIR`) | — (required) | Root every registered prefilter model must live under. Docker Compose bind-mounts this host directory read-only at the same path in-container, so a model outside it is unreadable at runtime. Subdirectory layout below the root is unconstrained. Required in every configuration file; an empty or unresolved-placeholder value falls back to `~/models/openvino`. |
 | `prefilter_models` | `{}` (empty) | The models a monitor may select, keyed by the name `prefilter.model` uses. See §5.1. |
 | `defaults.prefilter.model` | — | Registry key sources inherit when they do not name one themselves. |
 | `SMART_COMMUNITY_DATA_DIR` | `~/.mcp-smart-community` | Overrides the platform data root; VSA writes under its `segments/` subdirectory. |
-| `MODEL_DIR` | `~/models/openvino` | Sets `model_dir` above, and what `${MODEL_DIR}` in `config.yaml` expands to. Docker Compose passes it into the container as well as using it for the read-only bind mount — the container sets `HOME=/tmp`, so a `~/models/openvino` fallback would resolve elsewhere. |
+| `PREFILTER_MODEL_DIR` | `~/models/openvino` | Sets `model_dir` above, and what `${PREFILTER_MODEL_DIR}` in `config.yaml` expands to. Docker Compose passes it into the container as well as using it for the read-only bind mount — the container sets `HOME=/tmp`, so a `~/models/openvino` fallback would resolve elsewhere. |
 | `VIDEOSTREAM_CACHE_HOST` | `~/.cache/.videostream-analytics` | Your configuration home. `setup_vsa.sh` seeds `config.yaml` here once and never overwrites it; also pre-created by `docker/set_env.sh` so Docker never makes a root-owned directory. |
 | `VIDEOSTREAM_CONFIG` | `config/config.yaml.example` | Alternate configuration file path. |
-| `PREFILTER_MODEL` | `~/models/openvino/yolo11s/FP16/yolo11s.xml` | OpenVINO™ prefilter XML. Retargets the registry entry named by `defaults.prefilter.model`, creating a `detection`/`openvino` entry called `default` when none is configured. `setup_vsa.sh` validates the XML/BIN pair before startup and prepares the static YOLO11s IR automatically when it is missing. The model must be under `MODEL_DIR`. |
 | `VIDEOSTREAM_CONFIG_FILE` | `${VIDEOSTREAM_CACHE_HOST}/config.yaml` | Your live configuration, seeded once by `setup_vsa.sh` from the example template and then yours — re-running setup keeps it. Docker Compose bind-mounts it at `/app/config/config.yaml`; `videostream-analytics/config/config.yaml` is a symlink to it for convenient editing. Seeding pins `model_dir` and the default model's registry `model_path` to the absolute, validated paths. |
 | `OV_CACHE_DIR` | `/tmp/ov_cache` | OpenVINO™ model cache used by the YOLO prefilter. |
 
@@ -683,13 +737,13 @@ Each entry declares one selectable model. Registration makes a model *eligible*;
 it becomes *selectable* only after passing the validation in §3.2.1.
 
 ```yaml
-model_dir: "${MODEL_DIR}"
+model_dir: "${PREFILTER_MODEL_DIR}"
 
 prefilter_models:
   yolo11s:
     kind: detection
     backend: openvino
-    model_path: "${MODEL_DIR}/yolo11s/FP16/yolo11s.xml"
+    model_path: "${PREFILTER_MODEL_DIR}/yolo11s/FP16/yolo11s.xml"
     description: "YOLO11s FP16, static 1280x704 input, COCO-80 classes"
 ```
 
@@ -697,29 +751,12 @@ prefilter_models:
 |-------|------|---------|-------------|
 | `kind` | `string` | — | Required. What the model does. Supported: `detection`. |
 | `backend` | `string` | `"openvino"` | Runtime that executes it, case-insensitive. Supported: `openvino`. |
-| `model_path` | `string` | — | Required. Absolute path to the IR `.xml`, under `model_dir`. `${MODEL_DIR}`, `${HOME}` and `~` are expanded. |
+| `model_path` | `string` | — | Required. Absolute path to the IR `.xml`, under `model_dir`. `${PREFILTER_MODEL_DIR}`, `${HOME}` and `~` are expanded. |
 | `description` | `string` | `""` | Free text, surfaced to agents helping a user choose a model. |
 
 Unknown fields are rejected. `kind` and `backend` accept one value each today;
 they are validated rather than assumed so a future model type or runtime needs
 no change to how monitors are configured.
-
-Ports used by the service and local verification recipes:
-
-- `:8554` — MediaMTX RTSP server (upstream).
-- `:8999` — VSA service (this document).
-- `:9999` — Mock webhook receiver used by integration tests.
-- `:3101` — Production MCP `events-endpoint` (replaces the mock in end-to-end scenarios).
-
----
-
-## 8. Verification
-
-Use the following test suites for unit and integration verification:
-
-- Unit tests: `pytest tests/unit/ --timeout=60` — expected `391 passed`.
-- Integration tests: `pytest tests/integration/ -m integration --timeout=300` — expected `27 passed` (requires MediaMTX, mock webhook, and ffmpeg producer).
-- Manual verification (`V1`–`V12`) covers the `/health` probe, source registration, lifecycle transitions, motion / recording event delivery, health strategies, CLI, real MCP integration, keepalive, and trajectory + ROI crop.
 
 ---
 

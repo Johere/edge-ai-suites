@@ -116,6 +116,16 @@ class SourceManager:
         )
         self._watchdog_thread.start()
 
+    def on_config_reloaded(self) -> None:
+        """Pick up what a config swap cannot reach by object identity alone.
+
+        `self.config` IS the swapped object, so roots/defaults are already
+        current; only the eagerly-built default webhook sink holds stale
+        values and is rebuilt. Sources already running keep the webhook URL
+        they were registered with.
+        """
+        self._default_sink = WebhookSink(self.config.webhook)
+
     def _data_roots(self) -> list[str]:
         return [
             expand_path(self.config.data_dir),

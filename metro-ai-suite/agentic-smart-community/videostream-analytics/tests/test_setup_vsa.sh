@@ -23,8 +23,7 @@ mkdir -p "${MODEL_DIR_T}/yolo11s/FP16"
 printf 'x' > "${MODEL_DIR_T}/yolo11s/FP16/yolo11s.xml"
 printf 'x' > "${MODEL_DIR_T}/yolo11s/FP16/yolo11s.bin"
 
-export MODEL_DIR="$MODEL_DIR_T"
-export PREFILTER_MODEL="${MODEL_DIR_T}/yolo11s/FP16/yolo11s.xml"
+export PREFILTER_MODEL_DIR="$MODEL_DIR_T"
 export VIDEOSTREAM_CACHE_HOST="$CACHE_T"
 
 fail() { echo "[FAIL] $*" >&2; exit 1; }
@@ -37,22 +36,28 @@ if [[ -L "$LINK" ]]; then had_link=1; prev_target="$(readlink "$LINK")"; fi
 
 cleanup() {
   rm -rf "$WORK"
-  if [[ -L "$LINK" && "$(readlink "$LINK")" == "${CACHE_T}/config.yaml" ]]; then
-    if [[ "$had_link" == 1 ]]; then ln -sfn "$prev_target" "$LINK"; else rm -f "$LINK"; fi
+  if [[ "$had_link" == 1 ]]; then
+    ln -sfn "$prev_target" "$LINK"
+  elif [[ -L "$LINK" && "$(readlink "$LINK")" == "${CACHE_T}/config.yaml" ]]; then
+    rm -f "$LINK"
   fi
 }
 trap cleanup EXIT
 
 # --- 1) sourcing defines functions, no side effects ---------------------------
+before_link_state="-"
+[[ -L "$LINK" ]] && before_link_state="$(readlink "$LINK")"
 (
   source "$SETUP"
   declare -F vsa_prepare >/dev/null || exit 1
   declare -F vsa_seed_config >/dev/null || exit 1
   declare -F vsa_prepare_model >/dev/null || exit 1
   [[ ! -e "${CACHE_T}/config.yaml" ]] || exit 1
-  [[ ! -e "$LINK" && ! -L "$LINK" ]] || exit 1
 ) || fail "sourcing produced side effects or is missing functions"
-ok "source: functions defined, no files, no symlink"
+after_link_state="-"
+[[ -L "$LINK" ]] && after_link_state="$(readlink "$LINK")"
+[[ "$before_link_state" == "$after_link_state" ]] || fail "sourcing touched the symlink"
+ok "source: functions defined, no files, symlink untouched"
 
 # --- 2) first run seeds config + creates the symlink --------------------------
 bash "$SETUP" >/dev/null || fail "setup_vsa.sh exited non-zero"

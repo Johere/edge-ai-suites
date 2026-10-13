@@ -36,7 +36,7 @@ def app_and_client(mock_manager, monkeypatch):
     handler creates a real SourceManager on startup. Patching before would
     be overwritten.
     """
-    app = create_app(AppConfig())
+    app = create_app(AppConfig(model_dir="/tmp/models"))
     with TestClient(app, raise_server_exceptions=False) as tc:
         monkeypatch.setattr(service_module, "_manager", mock_manager)
         yield tc, mock_manager
@@ -363,8 +363,7 @@ class TestPrefilterCapabilities:
         data = resp.json()
         assert data["models"] == []
         assert data["rejected"] == []
-        assert data["labels_source"] == "unavailable"
-        assert data["class_names"] == []
+        assert data["default_model"] == ""
         assert data["supported_kinds"] == ["detection"]
         assert data["supported_backends"] == ["openvino"]
         assert data["available_devices"]  # non-empty (at least ["CPU"])
@@ -379,10 +378,7 @@ class TestPrefilterCapabilities:
         assert [m["name"] for m in data["models"]] == [name]
         assert data["models"][0]["backend"] == "openvino"
         assert data["models"][0]["class_names"] == ["person", "knife"]
-        # Flattened default-model view stays in sync with the list.
         assert data["default_model"] == name
-        assert data["labels_source"] == "embedded"
-        assert data["class_names"] == ["person", "knife"]
 
     def test_capabilities_reports_rejection_reason(self, client, tmp_path):
         """A registered entry that cannot be used is diagnosable, not selectable."""
@@ -781,7 +777,7 @@ class TestSourceUrlSchemeAllowlist:
         from service import create_app
         from shared.config import AppConfig
 
-        config = AppConfig()
+        config = AppConfig(model_dir="/tmp/models")
         config.security.allow_file_source = True
         app = create_app(config)
         with TestClient(app, raise_server_exceptions=False) as tc:

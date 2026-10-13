@@ -14,10 +14,9 @@ bash setup_vsa.sh down
 ```
 
 `setup_vsa.sh` needs nothing from the rest of the smart-community repository.
-Pre-exported environment (`MODEL_DIR`, `PREFILTER_MODEL`,
-`VIDEOSTREAM_CACHE_HOST`) is honored; sourcing the script instead defines the
-`vsa_*` functions without running anything (this is how the full stack's
-`setup_docker.sh` reuses it).
+Pre-exported environment (`PREFILTER_MODEL_DIR`, `VIDEOSTREAM_CACHE_HOST`) is
+honored; sourcing the script instead defines the `vsa_*` functions without
+running anything (this is how the full stack's `setup_docker.sh` reuses it).
 
 ## Your configuration
 
@@ -28,12 +27,13 @@ The live configuration is `${VIDEOSTREAM_CACHE_HOST}/config.yaml` (default
 `config/config.yaml` symlink in this directory points at the same file, so the
 familiar in-tree path keeps working for edits.
 
-A plain `docker compose -f docker/docker-compose.yaml up` without setup still
-works: it mounts the example template (defaults only, edits not persisted).
-
-## Tests
+Apply edits without a restart (running sources are untouched): the service
+watches the file and reloads automatically within a couple of seconds, or
+force it with
 
 ```bash
-.venv/bin/python -m pytest tests/unit -q   # unit suite
-bash tests/test_setup_vsa.sh               # setup_vsa.sh contract tests
+curl -X POST localhost:8999/config/reload
 ```
+
+A plain `docker compose -f docker/docker-compose.yaml up` without setup still
+works: it mounts the example template (defaults only, edits not persisted).

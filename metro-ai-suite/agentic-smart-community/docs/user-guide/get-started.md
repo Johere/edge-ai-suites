@@ -82,8 +82,6 @@ source docker/set_env.sh
 bash setup_docker.sh
 ```
 
-The `videostream-analytics` service follows the same seed-once pattern: `videostream-analytics/setup_vsa.sh` (sourced by `setup_docker.sh`, or runnable standalone) seeds its configuration once to `${VIDEOSTREAM_CACHE_HOST}/config.yaml` — default `~/.cache/.videostream-analytics/config.yaml` — and never overwrites it afterwards. Edit that file to customize VSA (prefilter models, motion defaults, webhook, security); `videostream-analytics/config/config.yaml` in the repo is a symlink to it, and the tracked `config.yaml.example` next to it is only the seed template.
-
 `setup_docker.sh` pulls every image it needs, so there is nothing to build or download beforehand. To build the service images from source instead, see [Build the service images from source](#build-the-service-images-from-source).
 
 **Reuse an existing model serving:** Replace only this Step 1 startup procedure as described in [Use an existing model serving](#use-an-existing-model-serving). After the application tier starts, continue with [Step 2 - Verify the MCP server](#step-2---verify-the-mcp-server) and the remaining steps.

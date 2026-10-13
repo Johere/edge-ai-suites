@@ -123,9 +123,10 @@ class RoiConfig(BaseModel):
 SUPPORTED_MODEL_KINDS = ("detection",)
 SUPPORTED_MODEL_BACKENDS = ("openvino",)
 
-# Registry key the PREFILTER_MODEL env override creates when config.yaml names
-# no default model of its own.
-DEFAULT_PREFILTER_MODEL_NAME = "default"
+# Root used when the running config leaves model_dir empty or as an unresolved
+# placeholder (e.g. the built-in-defaults fallback when no config file exists).
+# Matches the deployment default exported by docker/set_env.sh.
+DEFAULT_MODEL_DIR = "~/models/openvino"
 
 
 class PrefilterModelConfig(BaseModel):
@@ -306,8 +307,9 @@ class AppConfig(BaseModel):
     # entry outside it is simply not readable in-container; the registry
     # reports that up front as `rejected` instead of letting the pipeline
     # discover it at stream start. Users organize subdirectories however they
-    # like — containment is the only rule.
-    model_dir: str = "~/models"
+    # like — containment is the only rule. Required: every shipped config
+    # carries it, and a silent default root would mask a broken config.
+    model_dir: str
     # Selectable prefilter models, keyed by the name `prefilter.model` uses.
     prefilter_models: dict[str, PrefilterModelConfig] = Field(default_factory=dict)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
@@ -461,6 +463,11 @@ def load_config(config_path: str | None = None) -> AppConfig:
     if os.path.isfile(path):
         with open(path) as f:
             raw = yaml.safe_load(f) or {}
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"videostream-analytics config must be a YAML mapping at the "
+                f"top level, got {type(raw).__name__}: {path}"
+            )
         config = AppConfig(**raw)
         logger.info("Loaded configuration from %s", path)
     elif os.path.lexists(path):
@@ -482,48 +489,39 @@ def load_config(config_path: str | None = None) -> AppConfig:
             "copy config/config.yaml.example to that path.",
             path,
         )
-        config = AppConfig()
+        config = AppConfig(model_dir=DEFAULT_MODEL_DIR)
 
     config.data_dir = expand_path(config.data_dir)
     config.allowed_data_roots = [expand_path(r) for r in config.allowed_data_roots]
 
-    # MODEL_DIR is the host path docker-compose bind-mounts read-only at the
-    # same path in-container, so it is the one root every registered model has
-    # to sit under. Resolve it before the registry paths below: those commonly
-    # write `${MODEL_DIR}/...`, and the container may not carry the variable.
-    if model_dir := os.environ.get("MODEL_DIR"):
+    # PREFILTER_MODEL_DIR is the host path docker-compose bind-mounts read-only
+    # at the same path in-container, so it is the one root every registered
+    # model has to sit under. Resolve it before the registry paths below: those
+    # commonly write `${PREFILTER_MODEL_DIR}/...`, and the container may not
+    # carry the variable.
+    if model_dir := os.environ.get("PREFILTER_MODEL_DIR"):
         config.model_dir = model_dir
     config.model_dir = expand_path(config.model_dir)
+    if not config.model_dir or "$" in config.model_dir:
+        # Empty value, or a placeholder with no variable behind it (bare host
+        # run): fall back to the documented default root instead of leaving
+        # every registry entry to fail containment against a literal "${...}".
+        config.model_dir = expand_path(DEFAULT_MODEL_DIR)
 
-    # Registry paths may use ${MODEL_DIR} / ${HOME} / ~ placeholders, mirroring the
-    # node side which already expands ${HOME} in monitor-yaml paths. Substituting
-    # ${MODEL_DIR} from the resolved value rather than leaving it to expandvars
-    # keeps config.yaml working when the variable is not exported at all.
+    # Registry paths may use ${PREFILTER_MODEL_DIR} / ${HOME} / ~ placeholders,
+    # mirroring the node side which already expands ${HOME} in monitor-yaml
+    # paths. Substituting from the resolved value rather than leaving it to
+    # expandvars keeps config.yaml working when the variable is not exported
+    # at all. ${MODEL_DIR} is accepted as the legacy spelling.
     for entry in config.prefilter_models.values():
         entry.model_path = expand_path(
-            entry.model_path.replace("${MODEL_DIR}", config.model_dir)
+            entry.model_path.replace("${PREFILTER_MODEL_DIR}", config.model_dir)
+            .replace("${MODEL_DIR}", config.model_dir)
         )
 
     # Environment variable overrides
     if webhook_url := os.environ.get("WEBHOOK_URL"):
         config.webhook.url = webhook_url
-
-    # PREFILTER_MODEL is the absolute, container-visible OpenVINO IR path that
-    # Docker injects (config.yaml may only carry a placeholder). It retargets the
-    # registry entry the deployment defaults to, so /capabilities/prefilter and the
-    # runtime prefilter read the real model even on a plain `docker compose up`
-    # that mounts the example template instead of your seeded config.
-    if prefilter_model := os.environ.get("PREFILTER_MODEL"):
-        name = config.defaults.prefilter.model or DEFAULT_PREFILTER_MODEL_NAME
-        config.defaults.prefilter.model = name
-        resolved = expand_path(prefilter_model.replace("${MODEL_DIR}", config.model_dir))
-        existing = config.prefilter_models.get(name)
-        if existing is not None:
-            existing.model_path = resolved
-        else:
-            config.prefilter_models[name] = PrefilterModelConfig(
-                kind="detection", model_path=resolved
-            )
 
     # SMART_COMMUNITY_DATA_DIR is the MCP server's data root. VSA writes under its
     # `segments/` subdir so the DEFAULT output root lines up with the per-monitor

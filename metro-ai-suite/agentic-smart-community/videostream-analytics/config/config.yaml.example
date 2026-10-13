@@ -40,8 +40,9 @@ data_dir: "~/.mcp-smart-community/segments"
 # Root every registered prefilter model must live under. docker-compose mounts
 # this host directory read-only at the same path in-container, so a model
 # outside it is unreadable at runtime no matter how valid the host path looks.
-# Overridden by the MODEL_DIR environment variable.
-model_dir: "${MODEL_DIR}"
+# Overridden by the PREFILTER_MODEL_DIR environment variable; when the
+# placeholder has nothing behind it, load falls back to ~/models/openvino.
+model_dir: "${PREFILTER_MODEL_DIR}"
 
 # Selectable prefilter models. A monitor picks one by the key used here
 # (`pipeline.prefilter.model` in a register_source body, `prefilter.model` in
@@ -56,14 +57,14 @@ model_dir: "${MODEL_DIR}"
 #
 #   kind        required. What the model does. Supported: detection
 #   backend     optional, default `openvino` (case-insensitive). Supported: openvino
-#   model_path  required. Absolute path to the IR `.xml`; `${MODEL_DIR}`,
+#   model_path  required. Absolute path to the IR `.xml`; `${PREFILTER_MODEL_DIR}`,
 #               `${HOME}` and `~` are expanded
 #   description optional. Shown to agents helping a user choose
 prefilter_models:
   yolo11s:
     kind: detection
     backend: openvino
-    model_path: "${MODEL_DIR}/yolo11s/FP16/yolo11s.xml"
+    model_path: "${PREFILTER_MODEL_DIR}/yolo11s/FP16/yolo11s.xml"
     description: "YOLO11s FP16, static 1280x704 input, COCO-80 classes"
 
 # Input-surface restrictions on the `source_url` a register_source request may

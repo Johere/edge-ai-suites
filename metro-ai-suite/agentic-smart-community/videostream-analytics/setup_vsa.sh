@@ -14,10 +14,10 @@
 #
 # Environment (all optional; pre-exported values — e.g. from docker/set_env.sh
 # in the full smart-community stack — are honored):
-#   MODEL_DIR               read-only model root bind-mounted into the container.
-#                           Default ${HOME}/models/openvino.
-#   PREFILTER_MODEL         OpenVINO IR .xml, must live under MODEL_DIR.
-#                           Default ${MODEL_DIR}/yolo11s/FP16/yolo11s.xml.
+#   PREFILTER_MODEL_DIR   read-only model root bind-mounted into the container.
+#                         Default ${HOME}/models/openvino. The bundled yolo11s
+#                         is prepared at ${PREFILTER_MODEL_DIR}/yolo11s/FP16/;
+#                         other models are registered in the config, not here.
 #   VIDEOSTREAM_CACHE_HOST  your config home. Seeded once, never overwritten.
 #                           Default ${HOME}/.cache/.videostream-analytics.
 #   VIDEOSTREAM_CONFIG_FILE default ${VIDEOSTREAM_CACHE_HOST}/config.yaml.
@@ -29,33 +29,22 @@ RED="${RED:-\033[0;31m}"
 YELLOW="${YELLOW:-\033[0;33m}"
 NC="${NC:-\033[0m}"
 
-MODEL_DIR="${MODEL_DIR:-${HOME}/models/openvino}"
-DEFAULT_PREFILTER_MODEL="${MODEL_DIR}/yolo11s/FP16/yolo11s.xml"
+PREFILTER_MODEL_DIR="${PREFILTER_MODEL_DIR:-${HOME}/models/openvino}"
+DEFAULT_PREFILTER_MODEL="${PREFILTER_MODEL_DIR}/yolo11s/FP16/yolo11s.xml"
 VIDEOSTREAM_CACHE_HOST="${VIDEOSTREAM_CACHE_HOST:-${HOME}/.cache/.videostream-analytics}"
 VIDEOSTREAM_CONFIG_FILE="${VIDEOSTREAM_CONFIG_FILE:-${VIDEOSTREAM_CACHE_HOST}/config.yaml}"
 
-# Validate (and auto-prepare if missing) the prefilter IR pair. Sets the
+# Validate (and auto-prepare if missing) the bundled yolo11s IR pair. Sets the
 # script-level VSA_PREFILTER_MODEL / VSA_MODEL_DIR to resolved absolute paths.
 vsa_prepare_model() {
   local prefilter_bin prefilter_model model_dir
 
-  prefilter_model="${PREFILTER_MODEL:-$DEFAULT_PREFILTER_MODEL}"
-  case "$prefilter_model" in
-    '~') prefilter_model="$HOME" ;;
-    '~/'*) prefilter_model="$HOME/${prefilter_model#~/}" ;;
-  esac
-
-  if [[ "$prefilter_model" != *.xml ]]; then
-    echo "PREFILTER_MODEL must reference a .xml OpenVINO IR; using ${DEFAULT_PREFILTER_MODEL}."
-    prefilter_model="$DEFAULT_PREFILTER_MODEL"
-  fi
-
-  prefilter_model="$(realpath -m "$prefilter_model")"
+  prefilter_model="$(realpath -m "$DEFAULT_PREFILTER_MODEL")"
   prefilter_bin="${prefilter_model%.xml}.bin"
   if [[ ! -s "$prefilter_model" || ! -s "$prefilter_bin" ]]; then
     echo "Prefilter model is missing or incomplete: ${prefilter_model}"
     echo "Preparing the YOLO11s OpenVINO IR automatically..."
-    PREFILTER_MODEL="$prefilter_model" bash "${VSA_DIR}/scripts/helpers/prepare_yolo11s.sh"
+    IR_XML="$prefilter_model" bash "${VSA_DIR}/scripts/helpers/prepare_yolo11s.sh"
   fi
 
   if [[ ! -s "$prefilter_model" || ! -s "$prefilter_bin" ]]; then
@@ -64,9 +53,9 @@ vsa_prepare_model() {
   fi
   prefilter_model="$(realpath -e "$prefilter_model")"
 
-  model_dir="$(realpath -m "$MODEL_DIR")"
+  model_dir="$(realpath -m "$PREFILTER_MODEL_DIR")"
   if [[ "$prefilter_model" != "$model_dir/"* ]]; then
-    echo -e "${RED}Error: PREFILTER_MODEL must be under MODEL_DIR (${model_dir}) so the container can read it.${NC}"
+    echo -e "${RED}Error: prefilter model must be under PREFILTER_MODEL_DIR (${model_dir}) so the container can read it.${NC}"
     return 1
   fi
 
@@ -85,11 +74,10 @@ vsa_seed_config() {
     echo "Keeping your existing configuration: ${VIDEOSTREAM_CONFIG_FILE}"
   else
     # Pin the absolute, validated paths the container will see. The example
-    # carries ${MODEL_DIR} placeholders; writing the resolved values here keeps
-    # the deployment working even if the variable is not exported into the
-    # container. The model the deployment defaults to is retargeted in the
-    # registry, which is the only place a model path is accepted from.
-    PREFILTER_MODEL="$VSA_PREFILTER_MODEL" MODEL_DIR="$VSA_MODEL_DIR" \
+    # carries ${PREFILTER_MODEL_DIR} placeholders; writing the resolved values
+    # here keeps the deployment working even if the variable is not exported
+    # into the container.
+    SEEDED_MODEL_PATH="$VSA_PREFILTER_MODEL" SEEDED_MODEL_DIR="$VSA_MODEL_DIR" \
       python3 - "${VSA_DIR}/config/config.yaml.example" "$VIDEOSTREAM_CONFIG_FILE" <<'PY'
 import os
 import sys
@@ -101,7 +89,7 @@ source_path, output_path = sys.argv[1:]
 with open(source_path, encoding="utf-8") as source_file:
     config = yaml.safe_load(source_file) or {}
 
-config["model_dir"] = os.environ["MODEL_DIR"]
+config["model_dir"] = os.environ["SEEDED_MODEL_DIR"]
 defaults = config.setdefault("defaults", {}).setdefault("prefilter", {})
 name = defaults.get("model") or "default"
 defaults["model"] = name
@@ -109,7 +97,7 @@ registry = config.setdefault("prefilter_models", {})
 entry = registry.setdefault(name, {})
 entry.setdefault("kind", "detection")
 entry.setdefault("backend", "openvino")
-entry["model_path"] = os.environ["PREFILTER_MODEL"]
+entry["model_path"] = os.environ["SEEDED_MODEL_PATH"]
 
 output_dir = os.path.dirname(output_path)
 with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=output_dir, delete=False) as output_file:
@@ -142,10 +130,9 @@ vsa_link_config() {
 vsa_prepare() {
   vsa_prepare_model || return 1
   vsa_seed_config || return 1
-  export PREFILTER_MODEL="$VSA_PREFILTER_MODEL"
-  export MODEL_DIR="$VSA_MODEL_DIR"
+  export PREFILTER_MODEL_DIR="$VSA_MODEL_DIR"
   export VIDEOSTREAM_CACHE_HOST VIDEOSTREAM_CONFIG_FILE
-  echo "Using prefilter model: ${PREFILTER_MODEL}"
+  echo "Using prefilter model: ${VSA_PREFILTER_MODEL}"
   echo "Using videostream configuration: ${VIDEOSTREAM_CONFIG_FILE}"
 }
 

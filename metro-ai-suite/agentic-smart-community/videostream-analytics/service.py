@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager, contextmanager
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
+import yaml
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi import Path as PathParam
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from shared import model_registry
 from shared.config import (
@@ -30,6 +32,7 @@ from shared.config import (
     HealthConfig,
     KeepaliveConfig,
     SecurityConfig,
+    load_config,
 )
 from shared.model_registry import ModelInfo, ModelNotAvailable
 from source_worker import SourceManager
@@ -37,6 +40,7 @@ from source_worker import SourceManager
 logger = logging.getLogger(__name__)
 
 _manager: SourceManager | None = None
+_reload_lock = threading.Lock()
 
 # Same shape as the dashboard's `monitorIdSchema`
 # (packages/mcp-server/src/dashboard/router.ts). A source_id reaches the
@@ -258,19 +262,107 @@ def resolve_default_prefilter_model(config: AppConfig) -> None:
         logger.warning("default prefilter model %r is unavailable: %s", name, e)
 
 
+_CONFIG_WATCH_INTERVAL_S = 2.0
+_CONFIG_WATCH_DEBOUNCE_S = 0.5
+
+
+def _reload_candidate(app: FastAPI) -> str | None:
+    """Prefer the rename-safe ``--reload-config`` view; fall back to ``--config``."""
+    for path in (app.state.reload_path, app.state.config_path):
+        if path and os.path.isfile(path):
+            return path
+    return None
+
+
+def _apply_reload(app: FastAPI, candidate: str) -> dict[str, Any]:
+    """Load ``candidate`` and swap it into the shared AppConfig.
+
+    Raises (yaml.YAMLError, ValueError, ValidationError) on an unreadable or
+    invalid file; the running config is untouched in that case.
+    """
+    config: AppConfig = app.state.config
+    new_config = load_config(candidate)
+    with _reload_lock:
+        # Every consumer — the endpoints' closure, app.state.config and
+        # SourceManager.config — holds this one object, so swapping its
+        # contents in place reaches all of them.
+        config.__dict__.update(new_config.__dict__)
+        config.__pydantic_fields_set__ = new_config.__pydantic_fields_set__
+        resolve_default_prefilter_model(config)
+        get_manager().on_config_reloaded()
+    logger.info("configuration reloaded from %s", candidate)
+    available, rejected = model_registry.list_models(config)
+    return {
+        "status": "reloaded",
+        "path": candidate,
+        "models": [m.name for m in available],
+        "rejected": rejected,
+    }
+
+
+def _config_watch_loop(app: FastAPI, stop: threading.Event) -> None:
+    """Auto-reload when the config file changes.
+
+    One ``os.stat`` per interval — far below the cost of the service's other
+    periodic work. The parse + registry validation only runs on an actual
+    change; a broken file is logged and the running config kept, with the next
+    edit triggering a retry.
+    """
+    last: tuple[str | None, int | None] | None = None
+
+    def _snapshot() -> tuple[str | None, int | None]:
+        candidate = _reload_candidate(app)
+        try:
+            return (candidate, os.stat(candidate).st_mtime_ns if candidate else None)
+        except OSError:
+            return (candidate, None)
+
+    # Prime before the first wait so an edit landing between startup load and
+    # the first tick is seen as a change, not silently adopted as the baseline.
+    last = _snapshot()
+    while not stop.wait(_CONFIG_WATCH_INTERVAL_S):
+        current = _snapshot()
+        if current == last:
+            continue
+        last = current
+        candidate, mtime = current
+        if candidate is None or mtime is None:
+            continue
+        if stop.wait(_CONFIG_WATCH_DEBOUNCE_S):  # let atomic writes settle
+            break
+        try:
+            _apply_reload(app, candidate)
+        except Exception as e:  # endpoint contract: keep the running config
+            logger.warning("config auto-reload failed; keeping running config: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _manager
     config: AppConfig = app.state.config
     resolve_default_prefilter_model(config)
     _manager = SourceManager(config)
+    watch_stop = threading.Event()
+    watcher = threading.Thread(
+        target=_config_watch_loop,
+        args=(app, watch_stop),
+        name="config-watch",
+        daemon=True,
+    )
+    watcher.start()
     logger.info("videostream-analytics started on :%d", config.server.port)
     yield
+    watch_stop.set()
+    watcher.join(timeout=_CONFIG_WATCH_INTERVAL_S + 1)
     _manager.stop_all()
     logger.info("videostream-analytics shut down")
 
 
-def create_app(config: AppConfig) -> FastAPI:
+def create_app(
+    config: AppConfig,
+    config_path: str | None = None,
+    reload_path: str | None = None,
+) -> FastAPI:
     app = FastAPI(
         title="videostream-analytics",
         version="0.1.0",
@@ -278,6 +370,8 @@ def create_app(config: AppConfig) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.config = config
+    app.state.config_path = config_path
+    app.state.reload_path = reload_path
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
@@ -376,7 +470,6 @@ def create_app(config: AppConfig) -> FastAPI:
             )
 
         pf = config.defaults.prefilter
-        default = next((m for m in available if m.name == pf.model), None)
         return {
             "enabled": pf.enabled,
             "default_model": pf.model,
@@ -385,12 +478,42 @@ def create_app(config: AppConfig) -> FastAPI:
             "available_devices": _available_devices(),
             "models": [m.to_dict() for m in available],
             "rejected": rejected,
-            # Flattened view of the default model, for callers that only ever
-            # used the single-model shape.
-            "model_path": default.model_path if default else "",
-            "class_names": default.class_names if default else [],
-            "labels_source": default.labels_source if default else "unavailable",
         }
+
+    @app.post("/config/reload")
+    async def reload_configuration() -> dict[str, Any]:
+        """Re-read the configuration file and swap it in without a restart.
+
+        Running sources are untouched — their pipelines were merged at
+        registration. The reloaded config applies to new registrations,
+        ``PUT /sources/{id}/pipeline`` updates, ``/capabilities/prefilter``
+        and the default webhook sink.
+
+        Reads ``--reload-config`` when it exists (a rename-safe directory
+        bind-mount view of the same file — single-file mounts pin the inode
+        the container started with, so atomic-save edits never show up
+        through them), else the startup ``--config`` path. A missing or
+        invalid file keeps the running config: falling back to built-in
+        defaults here would silently empty the model registry.
+        """
+        candidate = _reload_candidate(app)
+        if candidate is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "config_not_found",
+                    "path": app.state.reload_path or app.state.config_path or "",
+                    "hint": "the running config is kept; point --reload-config "
+                            "at the live configuration file",
+                },
+            )
+        try:
+            return _apply_reload(app, candidate)
+        except (yaml.YAMLError, ValueError, ValidationError) as e:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "config_invalid", "path": candidate, "detail": str(e)},
+            ) from e
 
     def resolve_prefilter_model(
         prefilter: PrefilterConfig | None, current_model: str = ""

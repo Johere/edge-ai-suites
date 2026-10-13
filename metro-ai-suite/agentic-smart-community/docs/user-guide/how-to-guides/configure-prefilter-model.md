@@ -12,7 +12,7 @@ By the end of this guide you will know how to:
 - point one monitor — or several, each at a different model — at the model you want;
 - read the diagnostics when a model does not show up.
 
-**Prerequisites:** the stack is running (see the [Get Started Guide](../get-started.md)), and you can edit the `videostream-analytics` configuration and restart the `videostream-analytics` service. The live configuration is `${VIDEOSTREAM_CACHE_HOST}/config.yaml` (default `~/.cache/.videostream-analytics/config.yaml`) — seeded once by `setup_vsa.sh` and yours ever after — also reachable through the `videostream-analytics/config/config.yaml` symlink in the repo. This guide edits it via the symlink path.
+**Prerequisites:** the stack is running (see the [Get Started Guide](../get-started.md)), and you can edit the `videostream-analytics` configuration. The live configuration is `${VIDEOSTREAM_CACHE_HOST}/config.yaml` (default `~/.cache/.videostream-analytics/config.yaml`) — seeded once by `setup_vsa.sh` and yours ever after — also reachable through the `videostream-analytics/config/config.yaml` symlink in the repo. This guide edits it via the symlink path.
 
 ## When to change the prefilter model
 
@@ -50,7 +50,7 @@ Two consequences are worth knowing up front:
 
 The prefilter runs models in the OpenVINO™ IR format: a `.xml` graph plus a `.bin` weights file with the same stem, side by side.
 
-Put the pair anywhere under `MODEL_DIR` (default `~/models/openvino`). Organize subdirectories however you like — the only requirement is that the files are under that root, because Docker Compose bind-mounts exactly that directory read-only into the container. A model outside it is unreadable at runtime no matter how valid its host path looks.
+Put the pair anywhere under `PREFILTER_MODEL_DIR` (default `~/models/openvino`). Organize subdirectories however you like — the only requirement is that the files are under that root, because Docker Compose bind-mounts exactly that directory read-only into the container. A model outside it is unreadable at runtime no matter how valid its host path looks.
 
 ```text
 ~/models/openvino/
@@ -81,18 +81,18 @@ Class names should be embedded in the model's `rt_info`, which the Ultralytics e
 Add an entry under `prefilter_models` in `videostream-analytics/config/config.yaml` (a symlink to your live configuration at `${VIDEOSTREAM_CACHE_HOST}/config.yaml`; re-running `setup_docker.sh` or `setup_vsa.sh` never overwrites it):
 
 ```yaml
-model_dir: "${MODEL_DIR}"
+model_dir: "${PREFILTER_MODEL_DIR}"
 
 prefilter_models:
   yolo11s:
     kind: detection
     backend: openvino
-    model_path: "${MODEL_DIR}/yolo11s/FP16/yolo11s.xml"
+    model_path: "${PREFILTER_MODEL_DIR}/yolo11s/FP16/yolo11s.xml"
     description: "YOLO11s FP16, static 1280x704 input, COCO-80 classes"
 
   helmet_v2:
     kind: detection
-    model_path: "${MODEL_DIR}/helmet-v2/helmet_v2.xml"
+    model_path: "${PREFILTER_MODEL_DIR}/helmet-v2/helmet_v2.xml"
     description: "Safety-helmet detector, FP16, static 1280x704"
 ```
 
@@ -101,16 +101,18 @@ prefilter_models:
 | *(key)* | ✅ | The name monitors use — `prefilter.model: helmet_v2`. |
 | `kind` | ✅ | What the model does. Supported: `detection`. |
 | `backend` | | Runtime that executes it. Case-insensitive, default `openvino`. Supported: `openvino`. |
-| `model_path` | ✅ | Absolute path to the IR `.xml`, under `model_dir`. `${MODEL_DIR}`, `${HOME}` and `~` are expanded. |
+| `model_path` | ✅ | Absolute path to the IR `.xml`, under `model_dir`. `${PREFILTER_MODEL_DIR}`, `${HOME}` and `~` are expanded. |
 | `description` | | Free text, shown to agents helping a user choose a model. |
 
 `kind` and `backend` each accept one value today. They are validated rather than assumed so that adding a second model type or a second runtime later needs no change to how your monitors are configured.
 
-Restart `videostream-analytics` to pick up the new entry:
+The service watches the file and applies edits automatically within a couple of seconds — running monitors keep streaming. To apply immediately (or to confirm from the response), reload explicitly:
 
 ```bash
-docker compose -f videostream-analytics/docker/docker-compose.yaml restart videostream-analytics
+curl -X POST localhost:8999/config/reload
 ```
+
+Or ask the agent: *"reload the analytics configuration"* (it runs `smart_community_monitor_ctl action=reload_config`). `GET /capabilities/prefilter` shows the new entry either way. `docker compose restart videostream-analytics` works too; reload just avoids interrupting every running monitor.
 
 ## Step 3 — Discover what is available
 
@@ -242,7 +244,7 @@ If `prefilter_classes` is consistently empty while you expect detections, lower 
 | ------ | --- |
 | `kind '<x>' is not supported` | Only `detection` works today. |
 | `backend '<x>' is not supported` | Only `openvino` works today. Remove the field to take the default. |
-| `is not under model_dir (...)` | Move the model under `MODEL_DIR`, or point `model_dir`/the `MODEL_DIR` environment variable at where it already lives. The container only mounts that one root. |
+| `is not under model_dir (...)` | Move the model under `PREFILTER_MODEL_DIR`, or point `model_dir`/the `PREFILTER_MODEL_DIR` environment variable at where it already lives. The container only mounts that one root. |
 | `cannot read <path>.bin` / `is empty` | The IR pair is incomplete. Copy both `.xml` and `.bin`, and check they are not truncated. |
 | `backend 'openvino' expects an IR .xml` | Convert the model to OpenVINO™ IR first. |
 | `openvino could not read <path>` | The file is not a valid IR — re-export it. |

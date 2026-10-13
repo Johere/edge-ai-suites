@@ -10,7 +10,7 @@ from source_worker import SourceManager
 
 @pytest.fixture
 def config():
-    return AppConfig()
+    return AppConfig(model_dir="/tmp/models")
 
 
 @pytest.fixture

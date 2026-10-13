@@ -33,6 +33,7 @@ export HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
 
 # llm-scaler image
 export VLLM_IMAGE=intel/llm-scaler-vllm:0.14.0-b8.3.2
+# export VLLM_IMAGE=intel/llm-scaler-vllm:0.26.0-b2
 
 # Model + context window.
 export LLM_MODEL=${LLM_MODEL:-Qwen/Qwen3.6-35B-A3B}
@@ -130,14 +131,9 @@ fi
 # see docker/mcp-server/). Override only if the MCP server listens elsewhere.
 export WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:3101/events}
 
-# OpenVINO prefilter model root + default model. MODEL_DIR is bind-mounted
-# read-only into the VSA container at the same path, so every registered model
-# must live under it. setup_vsa.sh validates or prepares PREFILTER_MODEL.
-export MODEL_DIR=${MODEL_DIR:-${HOME}/models/openvino}
-export PREFILTER_MODEL=${PREFILTER_MODEL:-${MODEL_DIR}/yolo11s/FP16/yolo11s.xml}
+# Prefilter model root.
+export PREFILTER_MODEL_DIR=${PREFILTER_MODEL_DIR:-${HOME}/models/openvino}
 
-# VSA's user-owned configuration home: videostream-analytics/setup_vsa.sh seeds
-# config.yaml here once (from config/config.yaml.example) and never overwrites
-# it afterwards. Pre-create so Docker bind-mounts a user-owned dir, not root.
+# VSA's user-owned configuration home
 export VIDEOSTREAM_CACHE_HOST=${VIDEOSTREAM_CACHE_HOST:-${HOME}/.cache/.videostream-analytics}
 mkdir -p "${VIDEOSTREAM_CACHE_HOST}"

@@ -165,15 +165,17 @@ export function registerTools(
 
   // --- smart_community_monitor_ctl ---
   server.registerTool("smart_community_monitor_ctl", {
-    description: "Manage monitor lifecycle: register_source | unregister | start | stop | status | list | prefilter_options. " +
+    description: "Manage monitor lifecycle: register_source | unregister | start | stop | status | list | prefilter_options | reload_config. " +
       "For register_source, use_case must be a key in config.yaml's use_case_dict; the tool runs " +
       "smart_community_use_case_validate as a pre-check (rejecting if missing fields or summary service issues). " +
       "prefilter_options is a read-only query listing the prefilter models an operator registered, each with its " +
       "selectable target_classes (class_names + labels_source), plus `rejected` entries that cannot be used and why. " +
       "Put a monitor on one by setting pipeline_config.prefilter.model to a listed model name — a raw model_path " +
-      "in the request is rejected, since models are selected from the server-side registry.",
+      "in the request is rejected, since models are selected from the server-side registry. " +
+      "reload_config hot-swaps the videostream-analytics configuration without a restart (no monitor_id needed); " +
+      "call it after the operator edits the VSA config file, then confirm with prefilter_options.",
     inputSchema: {
-      action: z.enum(["start", "stop", "register_source", "unregister", "status", "list", "prefilter_options"])
+      action: z.enum(["start", "stop", "register_source", "unregister", "status", "list", "prefilter_options", "reload_config"])
         .describe("Control action"),
       monitor_id: z.string().optional().describe("Monitor ID (required for all except list)"),
       source_url: z.string().optional().describe("Source URL — any protocol videostream-analytics supports (for register_source)"),

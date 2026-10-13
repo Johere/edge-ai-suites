@@ -294,7 +294,7 @@ class TestPrefilterModelRegistry:
     """
 
     def _config(self, tmp_path, **entries):
-        config = AppConfig()
+        config = AppConfig(model_dir="/tmp/models")
         config.model_dir = str(tmp_path)
         config.prefilter_models = {
             name: PrefilterModelConfig(**fields) for name, fields in entries.items()

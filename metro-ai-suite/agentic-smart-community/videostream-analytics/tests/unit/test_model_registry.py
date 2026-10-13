@@ -59,8 +59,7 @@ def _ir_pair(directory, stem="m1"):
 
 
 def _config(model_dir, **entries) -> AppConfig:
-    config = AppConfig()
-    config.model_dir = str(model_dir)
+    config = AppConfig(model_dir=str(model_dir))
     config.prefilter_models = {
         name: PrefilterModelConfig(**fields) for name, fields in entries.items()
     }

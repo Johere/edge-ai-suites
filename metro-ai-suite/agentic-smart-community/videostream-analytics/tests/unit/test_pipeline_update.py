@@ -143,7 +143,7 @@ def mock_pipeline_class():
 @pytest.fixture
 def manager(mock_pipeline_class):
     with patch("source_worker.WebhookSink"):
-        mgr = SourceManager(AppConfig())
+        mgr = SourceManager(AppConfig(model_dir="/tmp/models"))
     return mgr
 
 
@@ -269,7 +269,7 @@ def api_client():
     """Create test client using the actual service.create_app."""
     from service import create_app
 
-    config = AppConfig()
+    config = AppConfig(model_dir="/tmp/models")
     app = create_app(config)
 
     with patch("source_worker.StreamPipeline") as mock_cls, \
