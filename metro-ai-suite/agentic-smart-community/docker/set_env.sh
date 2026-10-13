@@ -130,6 +130,14 @@ fi
 # see docker/mcp-server/). Override only if the MCP server listens elsewhere.
 export WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:3101/events}
 
-# OpenVINO prefilter model, e.g., yolo11s. Preserve an explicitly supplied
-# path so setup_docker.sh can validate or prepare that model at runtime.
-export PREFILTER_MODEL=${PREFILTER_MODEL:-${HOME}/models/openvino/yolo11s/FP16/yolo11s.xml}
+# OpenVINO prefilter model root + default model. MODEL_DIR is bind-mounted
+# read-only into the VSA container at the same path, so every registered model
+# must live under it. setup_vsa.sh validates or prepares PREFILTER_MODEL.
+export MODEL_DIR=${MODEL_DIR:-${HOME}/models/openvino}
+export PREFILTER_MODEL=${PREFILTER_MODEL:-${MODEL_DIR}/yolo11s/FP16/yolo11s.xml}
+
+# VSA's user-owned configuration home: videostream-analytics/setup_vsa.sh seeds
+# config.yaml here once (from config/config.yaml.example) and never overwrites
+# it afterwards. Pre-create so Docker bind-mounts a user-owned dir, not root.
+export VIDEOSTREAM_CACHE_HOST=${VIDEOSTREAM_CACHE_HOST:-${HOME}/.cache/.videostream-analytics}
+mkdir -p "${VIDEOSTREAM_CACHE_HOST}"

@@ -12,7 +12,7 @@ By the end of this guide you will know how to:
 - point one monitor — or several, each at a different model — at the model you want;
 - read the diagnostics when a model does not show up.
 
-**Prerequisites:** the stack is running (see the [Get Started Guide](../get-started.md)), and you can edit `videostream-analytics/config/config.yaml` and restart the `videostream-analytics` service.
+**Prerequisites:** the stack is running (see the [Get Started Guide](../get-started.md)), and you can edit the `videostream-analytics` configuration and restart the `videostream-analytics` service. The live configuration is `${VIDEOSTREAM_CACHE_HOST}/config.yaml` (default `~/.cache/.videostream-analytics/config.yaml`) — seeded once by `setup_vsa.sh` and yours ever after — also reachable through the `videostream-analytics/config/config.yaml` symlink in the repo. This guide edits it via the symlink path.
 
 ## When to change the prefilter model
 
@@ -50,24 +50,24 @@ Two consequences are worth knowing up front:
 
 The prefilter runs models in the OpenVINO™ IR format: a `.xml` graph plus a `.bin` weights file with the same stem, side by side.
 
-Put the pair anywhere under `MODEL_DIR` (default `~/models`). Organize subdirectories however you like — the only requirement is that the files are under that root, because Docker Compose bind-mounts exactly that directory read-only into the container. A model outside it is unreadable at runtime no matter how valid its host path looks.
+Put the pair anywhere under `MODEL_DIR` (default `~/models/openvino`). Organize subdirectories however you like — the only requirement is that the files are under that root, because Docker Compose bind-mounts exactly that directory read-only into the container. A model outside it is unreadable at runtime no matter how valid its host path looks.
 
 ```text
-~/models/
-├── openvino/yolo11s/FP16/yolo11s.xml     # the bundled model
-│                        /yolo11s.bin
-└── helmet-v2/helmet_v2.xml               # your own layout is fine
+~/models/openvino/
+├── yolo11s/FP16/yolo11s.xml     # the bundled model
+│              /yolo11s.bin
+└── helmet-v2/helmet_v2.xml      # your own layout is fine
              helmet_v2.bin
 ```
 
 To convert an Ultralytics YOLO checkpoint, the repository ships a converter:
 
 ```bash
-python3 scripts/helpers/convert_yolo_ov.py \
+python3 videostream-analytics/scripts/helpers/convert_yolo_ov.py \
   --weights ~/weights/helmet_v2.pt \
   --precision FP16 \
-  --xml-path ~/models/helmet-v2/helmet_v2.xml \
-  --bin-path ~/models/helmet-v2/helmet_v2.bin \
+  --xml-path ~/models/openvino/helmet-v2/helmet_v2.xml \
+  --bin-path ~/models/openvino/helmet-v2/helmet_v2.bin \
   --dynamic False --imgsz 704 1280
 ```
 
@@ -78,7 +78,7 @@ Class names should be embedded in the model's `rt_info`, which the Ultralytics e
 
 ## Step 2 — Register the model
 
-Add an entry under `prefilter_models` in `videostream-analytics/config/config.yaml`:
+Add an entry under `prefilter_models` in `videostream-analytics/config/config.yaml` (a symlink to your live configuration at `${VIDEOSTREAM_CACHE_HOST}/config.yaml`; re-running `setup_docker.sh` or `setup_vsa.sh` never overwrites it):
 
 ```yaml
 model_dir: "${MODEL_DIR}"
@@ -87,7 +87,7 @@ prefilter_models:
   yolo11s:
     kind: detection
     backend: openvino
-    model_path: "${MODEL_DIR}/openvino/yolo11s/FP16/yolo11s.xml"
+    model_path: "${MODEL_DIR}/yolo11s/FP16/yolo11s.xml"
     description: "YOLO11s FP16, static 1280x704 input, COCO-80 classes"
 
   helmet_v2:
@@ -250,7 +250,9 @@ If `prefilter_classes` is consistently empty while you expect detections, lower 
 
 **`422 unknown target_classes`.** The class is not in the model's embedded label set; the error echoes the valid `class_names`. This check only fires when `labels_source` is `embedded` — an untrusted label list is never used to reject your request.
 
-**`422 model_path is not accepted`.** Models are selected from the registry, not by path. Register the model in `config.yaml` and reference it as `prefilter.model: <name>`.
+**`422 model_path is not accepted`.** Models are selected from the registry, not by path. Register the model in your live configuration and reference it as `prefilter.model: <name>`.
+
+**You edited the file but nothing changed.** Two common causes: you edited the tracked template `config/config.yaml.example`, which no running instance reads — edit `videostream-analytics/config/config.yaml` (the symlink to your live configuration) or `${VIDEOSTREAM_CACHE_HOST}/config.yaml` directly; or the service has not been restarted since the edit. The startup log line `Loaded configuration from <path>` names the file the service actually read.
 
 **`422 model_not_available`.** The name is not registered, or it is registered but did not validate. The error lists the names that *are* selectable; `GET /capabilities/prefilter` explains why the others are not.
 

@@ -1,5 +1,6 @@
 """Tests for configuration loading and validation."""
 
+import logging
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -60,6 +61,47 @@ class TestLoadConfig:
         # be reachable from other hosts unless a deployment opts in.
         assert config.server.host == "127.0.0.1"
         assert config.webhook.url == "http://localhost:3101/events"
+
+    def test_load_nonexistent_logs_warning(self, caplog):
+        # The built-in defaults carry an empty prefilter registry, so a missing
+        # file must not fall back silently.
+        with caplog.at_level(logging.WARNING, logger="shared.config"):
+            config = load_config("/nonexistent/path/config.yaml")
+        assert config.prefilter_models == {}
+        assert any(
+            r.levelno == logging.WARNING and "/nonexistent/path/config.yaml" in r.message
+            for r in caplog.records
+        )
+
+    def test_load_directory_path_raises_with_path_in_message(self, tmp_path):
+        # Docker auto-creates a missing bind-mount source as a directory; that
+        # failure mode must name the path, not crash with a bare IsADirectoryError.
+        with pytest.raises(IsADirectoryError, match=str(tmp_path)):
+            load_config(str(tmp_path))
+
+    def test_default_path_loads_shipped_example(self, monkeypatch, caplog):
+        # The code default must point at the tracked template — a rename that
+        # misses this reference turns every default startup into the warning path.
+        root = Path(__file__).resolve().parents[2]
+        example = root / "config" / "config.yaml.example"
+        assert example.is_file(), "shipped config template must exist"
+        monkeypatch.chdir(root)
+        monkeypatch.delenv("VIDEOSTREAM_CONFIG", raising=False)
+        monkeypatch.delenv("PREFILTER_MODEL", raising=False)
+        with caplog.at_level(logging.WARNING, logger="shared.config"):
+            config = load_config()
+        assert "yolo11s" in config.prefilter_models
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_example_registry_path_expands_under_model_dir(self, monkeypatch):
+        root = Path(__file__).resolve().parents[2]
+        monkeypatch.setenv("MODEL_DIR", "/models/openvino")
+        monkeypatch.delenv("PREFILTER_MODEL", raising=False)
+        config = load_config(str(root / "config" / "config.yaml.example"))
+        assert (
+            config.prefilter_models["yolo11s"].model_path
+            == "/models/openvino/yolo11s/FP16/yolo11s.xml"
+        )
 
     def test_load_from_env_var(self, tmp_path):
         cfg_file = tmp_path / "env_config.yaml"

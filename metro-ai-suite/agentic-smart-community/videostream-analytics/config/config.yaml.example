@@ -1,3 +1,10 @@
+# TEMPLATE — not the live configuration. setup_vsa.sh seeds this file once to
+# ${VIDEOSTREAM_CACHE_HOST}/config.yaml (default ~/.cache/.videostream-analytics/
+# config.yaml) and links videostream-analytics/config/config.yaml to that copy.
+# The seeded copy is yours and is never overwritten by re-running setup; edit it
+# (directly or through the symlink), not this template. Keys added to this
+# template in later releases fall back to code defaults in already-seeded files.
+#
 # The service has no authentication: every endpoint (register/delete a source,
 # rewrite webhook_url, change the pipeline) is open to anyone who can reach the
 # port. Bind loopback so the kernel drops non-local connections outright. The
@@ -56,7 +63,7 @@ prefilter_models:
   yolo11s:
     kind: detection
     backend: openvino
-    model_path: "${MODEL_DIR}/openvino/yolo11s/FP16/yolo11s.xml"
+    model_path: "${MODEL_DIR}/yolo11s/FP16/yolo11s.xml"
     description: "YOLO11s FP16, static 1280x704 input, COCO-80 classes"
 
 # Input-surface restrictions on the `source_url` a register_source request may

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Literal, Optional, TypeVar
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+logger = logging.getLogger(__name__)
 
 
 ConfigModelT = TypeVar("ConfigModelT", bound=BaseModel)
@@ -452,13 +456,32 @@ def merge_config(defaults: ConfigModelT, override: ConfigModelT | None) -> Confi
 
 def load_config(config_path: str | None = None) -> AppConfig:
     path = config_path or os.environ.get(
-        "VIDEOSTREAM_CONFIG", str(Path("config/config.yaml"))
+        "VIDEOSTREAM_CONFIG", str(Path("config/config.yaml.example"))
     )
-    if os.path.exists(path):
+    if os.path.isfile(path):
         with open(path) as f:
             raw = yaml.safe_load(f) or {}
         config = AppConfig(**raw)
+        logger.info("Loaded configuration from %s", path)
+    elif os.path.lexists(path):
+        # Typically a directory bind-mounted over the config path (Docker
+        # auto-creates a missing bind-mount source as a root-owned directory).
+        raise IsADirectoryError(
+            f"videostream-analytics config path exists but is not a readable "
+            f"file: {path}. Point VIDEOSTREAM_CONFIG at a YAML file — run "
+            f"videostream-analytics/setup_vsa.sh to seed one."
+        )
     else:
+        # Built-in defaults carry an empty prefilter registry, so say loudly
+        # which path was looked for and how to fix it instead of silently
+        # running with the prefilter effectively disabled.
+        logger.warning(
+            "videostream-analytics config not found at %s — falling back to "
+            "built-in defaults (empty prefilter model registry). Run "
+            "videostream-analytics/setup_vsa.sh to seed your own config, or "
+            "copy config/config.yaml.example to that path.",
+            path,
+        )
         config = AppConfig()
 
     config.data_dir = expand_path(config.data_dir)
@@ -489,7 +512,7 @@ def load_config(config_path: str | None = None) -> AppConfig:
     # Docker injects (config.yaml may only carry a placeholder). It retargets the
     # registry entry the deployment defaults to, so /capabilities/prefilter and the
     # runtime prefilter read the real model even on a plain `docker compose up`
-    # that mounts the tracked config instead of the one setup_docker.sh generates.
+    # that mounts the example template instead of your seeded config.
     if prefilter_model := os.environ.get("PREFILTER_MODEL"):
         name = config.defaults.prefilter.model or DEFAULT_PREFILTER_MODEL_NAME
         config.defaults.prefilter.model = name
