@@ -21,27 +21,63 @@ Prefilter drops motion clips that contain none of the target classes before they
 reach the VLM, cutting false positives and cost. Enable it when the use case is
 about specific objects/people; skip it when any motion is worth reviewing.
 
-If enabled, fetch the selectable classes from the deployed model — never
-hard-code them:
+If enabled, fetch the available models and their classes — never hard-code
+either:
 
 ```
 smart_community_monitor_ctl action=prefilter_options
 ```
 
-Returns `{ enabled, model_path, class_names, labels_source, available_devices }`.
-Present `class_names` and let the user pick `target_classes`. Interpret
-`labels_source`:
+Returns `{ default_model, supported_kinds, supported_backends, available_devices,
+models, rejected }`. Work through it in two steps.
+
+To answer "what is a RUNNING monitor actually doing" (filtering at all? which
+model? which classes?), read `smart_community_monitor_ctl action=status` —
+its `analyticsPipeline` is the effective defaults←monitor merge VSA runs, so
+a monitor that never configured `prefilter` shows the inherited default there.
+Never infer this from `monitors.yaml` alone.
+
+**P1a — pick the model.** `models[]` is the selectable set; each entry carries
+`name`, `description`, `class_names`, `labels_source`, and `input_shape`.
+
+- **One model available** → use it silently. Do not ask.
+- **Several available** → name them with their `description` and let the user
+  choose. Default to `default_model` if they have no preference.
+- A model listed under `rejected` is **not** selectable — it is a registered
+  entry that failed validation. Never offer one. If the user asks for a model
+  that is only in `rejected`, relay its `reason` and point them at the
+  *Configure the Prefilter Model for a Monitor* how-to guide.
+- The user wants a model that is registered nowhere (e.g. "我有一个 openvino
+  模型放在 xxx，帮我注册/确认注册好了") → register it yourself:
+  `smart_community_monitor_ctl action=register_prefilter_model` with
+  `model=<name>` and `model_path=<absolute .xml path>` (optional `kind`,
+  `backend`, `description`). The tool edits the VSA config file, hot-reloads
+  VSA, and confirms: `selectable` → done, show the entry; `rejected` → relay
+  the `reason` verbatim (missing .bin, not under `model_dir`, not
+  detection-shaped, …) and help the user fix it. A name already registered
+  with different settings errors out — do not retry blindly; show the user the
+  existing entry and let them decide.
+
+Models are selected by **name**. Never put a `model_path` in
+`pipeline_config` — the server rejects it with 422.
+
+**P1b — pick the classes.** Present the chosen model's `class_names` and let the
+user pick `target_classes`. Interpret `labels_source`:
 
 - `embedded` — the list is authoritative (it came from the model). A class the
   user picks that is not in the list is rejected server-side with 422 at
   registration, so only offer names from `class_names`.
 - `fallback_coco` — the model has no embedded labels; the list is a COCO-80
   **guess**. Warn the user and have them confirm the names explicitly.
-- `unavailable` — the model could not be read (empty/missing path). Tell the
-  user prefilter classes cannot be listed; either skip prefilter or proceed with
-  names they supply at their own risk.
+- `unavailable` — the model's labels could not be read. Tell the user prefilter
+  classes cannot be listed; either skip prefilter or proceed with names they
+  supply at their own risk.
 
-Assemble as `prefilter: { enabled: true, target_classes: [<picked>] }`.
+**Device note.** If the user asks for `device: NPU`, check the chosen model's
+`input_shape`: a `?` in it means a dynamic shape, which the NPU plugin cannot
+compile. Say so and offer `CPU`/`GPU` or a statically-shaped model instead.
+
+Assemble as `prefilter: { enabled: true, model: <name>, target_classes: [<picked>] }`.
 
 ## P2 — ROI focus (field detail)
 
@@ -89,6 +125,7 @@ Child-safety example (both features on):
 pipeline_config:
   prefilter:
     enabled: true
+    model: yolo11s
     target_classes: [person, knife, scissors, bottle]
   roi:
     enabled: true
