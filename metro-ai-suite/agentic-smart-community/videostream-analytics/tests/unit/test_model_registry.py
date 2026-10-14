@@ -20,7 +20,7 @@ import pytest
 from shared import model_registry
 from shared.config import AppConfig, PrefilterModelConfig
 from shared.model_registry import ModelNotAvailable
-from stream_monitor.pipeline.prefilter_yolo import ModelShapeInfo
+from shared.model_registry import ModelShapeInfo
 
 
 def _shape_info(**overrides) -> ModelShapeInfo:

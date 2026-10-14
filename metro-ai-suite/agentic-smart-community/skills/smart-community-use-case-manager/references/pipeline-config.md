@@ -31,6 +31,12 @@ smart_community_monitor_ctl action=prefilter_options
 Returns `{ default_model, supported_kinds, supported_backends, available_devices,
 models, rejected }`. Work through it in two steps.
 
+To answer "what is a RUNNING monitor actually doing" (filtering at all? which
+model? which classes?), read `smart_community_monitor_ctl action=status` —
+its `analyticsPipeline` is the effective defaults←monitor merge VSA runs, so
+a monitor that never configured `prefilter` shows the inherited default there.
+Never infer this from `monitors.yaml` alone.
+
 **P1a — pick the model.** `models[]` is the selectable set; each entry carries
 `name`, `description`, `class_names`, `labels_source`, and `input_shape`.
 
@@ -41,14 +47,16 @@ models, rejected }`. Work through it in two steps.
   entry that failed validation. Never offer one. If the user asks for a model
   that is only in `rejected`, relay its `reason` and point them at the
   *Configure the Prefilter Model for a Monitor* how-to guide.
-- The user wants a model that is registered nowhere → you cannot add it
-  yourself: the registry lives in VSA's configuration on the VSA host
-  (`${VIDEOSTREAM_CACHE_HOST}/config.yaml`, reachable in the repo as
-  `videostream-analytics/config/config.yaml`), which the MCP server cannot
-  write. Hand the user the entry YAML to paste and the absolute path to edit,
-  then apply it with `smart_community_monitor_ctl action=reload_config` (no
-  service restart needed) and confirm with `prefilter_options` that the model
-  moved from `rejected` to `models`.
+- The user wants a model that is registered nowhere (e.g. "我有一个 openvino
+  模型放在 xxx，帮我注册/确认注册好了") → register it yourself:
+  `smart_community_monitor_ctl action=register_prefilter_model` with
+  `model=<name>` and `model_path=<absolute .xml path>` (optional `kind`,
+  `backend`, `description`). The tool edits the VSA config file, hot-reloads
+  VSA, and confirms: `selectable` → done, show the entry; `rejected` → relay
+  the `reason` verbatim (missing .bin, not under `model_dir`, not
+  detection-shaped, …) and help the user fix it. A name already registered
+  with different settings errors out — do not retry blindly; show the user the
+  existing entry and let them decide.
 
 Models are selected by **name**. Never put a `model_path` in
 `pipeline_config` — the server rejects it with 422.

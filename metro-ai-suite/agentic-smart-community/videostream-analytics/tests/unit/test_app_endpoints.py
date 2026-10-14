@@ -123,6 +123,32 @@ class TestGetSource:
         assert resp.status_code == 404
 
 
+class TestGetSourcePipeline:
+    def test_pipeline_returns_effective_config(self, client, mock_mgr):
+        mock_mgr.get_source_pipeline.return_value = {
+            "source_id": "cam1",
+            "pipeline": {
+                "prefilter": {
+                    "enabled": True,
+                    "model": "yolo11s",
+                    "target_classes": ["person"],
+                },
+            },
+        }
+        resp = client.get("/sources/cam1/pipeline")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["source_id"] == "cam1"
+        assert data["pipeline"]["prefilter"]["model"] == "yolo11s"
+        # The resolved server path never leaves the process.
+        assert "model_path" not in data["pipeline"]["prefilter"]
+
+    def test_pipeline_nonexistent_source_returns_404(self, client, mock_mgr):
+        mock_mgr.get_source_pipeline.return_value = None
+        resp = client.get("/sources/nonexistent/pipeline")
+        assert resp.status_code == 404
+
+
 class TestRegisterSource:
     def test_register_success_nested(self, client, mock_mgr):
         mock_mgr.register_source.return_value = {
@@ -330,7 +356,7 @@ def register_model(
     from unittest.mock import patch
 
     from shared.config import PrefilterModelConfig
-    from stream_monitor.pipeline.prefilter_yolo import ModelShapeInfo
+    from shared.model_registry import ModelShapeInfo
 
     model = tmp_path / f"{name}.xml"
     model.write_text("<net/>")

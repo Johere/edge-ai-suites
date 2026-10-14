@@ -29,6 +29,7 @@ The service is a long-running single process. Each registered source spawns back
 | `GET`    | `/sources` | List all registered sources (bare array). | §3.3 |
 | `GET`    | `/sources/{source_id}` | Get source status. | §3.4 |
 | `GET`    | `/sources/{source_id}/status` | Alias of `/sources/{source_id}`; the MCP server calls this to check for existence. | §3.4 |
+| `GET`    | `/sources/{source_id}/pipeline` | Get the source's effective (merged) pipeline configuration. | §3.4.1 |
 | `POST`   | `/register_source` | Register and start a new source. | §3.5 |
 | `DELETE` | `/sources/{source_id}` | Unregister a source. | §3.6 |
 | `POST`   | `/sources/{source_id}/stop` | Stop and unregister (equivalent to `DELETE`). | §3.6 |
@@ -86,7 +87,6 @@ curl -s 'localhost:8999/capabilities/prefilter?model=yolo11s'  # one model's det
 
 ```json
 {
-  "enabled": true,
   "default_model": "yolo11s",
   "supported_kinds": ["detection"],
   "supported_backends": ["openvino"],
@@ -203,6 +203,32 @@ Return the status of a single source. Both paths dispatch to the same handler an
 ```json
 { "detail": "Source not found: cam_xxx" }
 ```
+
+### 3.4.1 `GET /sources/{source_id}/pipeline`
+
+Return the source's **effective pipeline**: every block is the per-source value merged over the deployment defaults, so a source that never configured `prefilter` shows the inherited default here. This answers "what is this monitor actually running" — whether it filters, with which model and which classes — without access to the configuration file. `prefilter.model_path` is omitted (it is a resolved server path; §3.2 publishes it per model). `keepalive` reflects the effective block even though it is not part of the `PipelineConfig` request shape.
+
+**Response 200**:
+
+```json
+{
+  "source_id": "cam_child",
+  "pipeline": {
+    "motion":    { "enabled": true, "diff_threshold": 25, "area_ratio": 0.015, "stable_frames": 30 },
+    "segment":   { "max_duration": 10.0, "min_duration": 1.0 },
+    "prefilter": { "enabled": true, "model": "yolo11s", "target_classes": ["person"],
+                   "min_confidence": 0.4, "min_frames_hit": 2, "detect_fps": 2.0, "device": "NPU" },
+    "recording": { "enabled": true, "interval_seconds": 60, "fps": 15 },
+    "keepalive": { "enabled": true, "timeout_seconds": 90.0, "check_interval_seconds": 10.0 }
+  }
+}
+```
+
+Blocks the source does not run (e.g. `roi` when ROI was never configured) are `null`.
+
+**Response 404** when the source is not registered.
+
+---
 
 ### 3.5 `POST /register_source`
 

@@ -32,6 +32,25 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class ModelShapeInfo:
+    """What a capability query / load-time self-check needs to know about an IR.
+
+    Produced by the backend's inspector (e.g. prefilter_yolo.inspect_model),
+    consumed here by registry validation.
+    """
+
+    class_names: list[str]
+    labels_source: str
+    input_shape: str
+    output_shape: str
+    # Whether the output decodes as YOLO detection: rank 3, [1, 4+nc, anchors].
+    # _postprocess assumes exactly that layout and would otherwise read a
+    # classification or pose tensor as boxes, yielding plausible-looking noise.
+    is_detection: bool
+    detection_error: str = ""
+
+
+@dataclass
 class ModelInfo:
     """A registry entry that passed validation, plus what inspection found."""
 

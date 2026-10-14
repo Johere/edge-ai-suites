@@ -124,25 +124,30 @@ passed here.
 
 | Param | Type | Required | Description |
 |---|---|---|---|
-| `action` | enum | ✅ | `list` \| `status` \| `start` \| `stop` \| `register_source` \| `unregister` \| `prefilter_options` |
-| `monitor_id` | string | — | Required for all except `list` and `prefilter_options` |
+| `action` | enum | ✅ | `list` \| `status` \| `start` \| `stop` \| `register_source` \| `unregister` \| `prefilter_options` \| `reload_config` \| `register_prefilter_model` |
+| `monitor_id` | string | — | Required for all except `list`, `prefilter_options`, `reload_config`, `register_prefilter_model` |
 | `source_url` | string | — | Source URL — any protocol analytics supports: rtsp / http / onvif / file / … (required for `register_source`) |
 | `name` | string | — | Display name (for `register_source`) |
 | `use_case` | string | — | `use_case_dict` key (**required** for `register_source`) |
 | `pipeline_config` | object | — | Analytics pipeline config (default: motion + recording) |
-| `model` | string | — | Prefilter model name (for `prefilter_options`): return that one model's detail instead of the full list |
+| `model` | string | — | Prefilter model name (for `prefilter_options`): return that one model's detail instead of the full list; registry key for `register_prefilter_model` |
+| `model_path` | string | — | Absolute path to the model's IR `.xml` (required for `register_prefilter_model`) |
+| `kind` / `backend` | string | — | Model type / runtime for `register_prefilter_model` (defaults `detection` / `openvino`, the only supported values) |
+| `description` | string | — | Free text shown when choosing a model (`register_prefilter_model`) |
 
 **Actions**
 
 | action | Behavior | Returns |
 |---|---|---|
 | `list` | All registered monitors + live analytics reachability | Monitor[] (`analyticsReachable`, `analyticsStatus`) |
-| `status` | One monitor: DB record + live analytics status | Monitor + reachability |
+| `status` | One monitor: DB record + live analytics status + effective pipeline (`analyticsPipeline`) | Monitor + reachability |
 | `register_source` | Validate use case → coordinate DB / analytics / worker (graceful-stop stale worker, then rebuild) | `{ success, monitor_id }` or `{ status: "already_running" }` |
 | `unregister` | Graceful-stop worker → analytics DELETE → delete DB record | `{ success, monitor_id }` |
 | `start` | Resume: analytics `/resume` + start worker + DB `online` | `{ success, monitor_id, status }` |
 | `stop` | Pause: graceful-stop worker → analytics `/pause` → DB `offline` | `{ success, monitor_id, status }` |
 | `prefilter_options` | Read-only: list the selectable prefilter models (see below) | `{ models, rejected, default_model, available_devices, … }` |
+| `reload_config` | Hot-swap the VSA configuration without a restart | `{ status, path, models, rejected }` |
+| `register_prefilter_model` | Register a model into VSA's registry: edit the VSA config file, hot-reload, confirm (see below) | `{ model, status: selectable \| rejected \| written_not_listed, … }` |
 
 > `stop` / `unregister` are **destructive** — confirm with the user first.
 
@@ -181,6 +186,22 @@ target_classes: [...], device: <device> }`. Each monitor chooses independently, 
 cameras can run different models on different devices. See
 [Configure the Prefilter Model for a Monitor](./configure-prefilter-model.md) for how an operator
 registers a new model.
+
+### 5.2 `register_prefilter_model` — adding a model to the registry
+
+Registers a model into VSA's `prefilter_models` without a restart: the tool edits the live
+VSA configuration file (mounted into the MCP container read-write), hot-reloads VSA, and
+confirms the outcome against `/capabilities/prefilter`. Idempotent — re-registering an
+identical entry is a no-op; an existing entry with different settings is an error (resolve
+with the user first, the entry may be deliberate operator config).
+
+Return `status`:
+
+- `selectable` — registered and validated; usable as `pipeline_config.prefilter.model` immediately.
+- `rejected` — registered but failed VSA validation; relay `reason` (missing `.bin`, path not
+  under `model_dir`, not detection-shaped, …) and fix before use.
+- `written_not_listed` — the file was written but VSA did not list the entry; VSA is reading a
+  different configuration file (check `VIDEOSTREAM_CONFIG_FILE` on both services).
 
 ---
 

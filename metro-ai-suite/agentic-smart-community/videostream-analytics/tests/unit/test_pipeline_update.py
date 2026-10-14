@@ -339,7 +339,7 @@ def _register_prefilter_model(api_client, tmp_path, name="m1"):
     from unittest.mock import patch
 
     from shared.config import PrefilterModelConfig
-    from stream_monitor.pipeline.prefilter_yolo import ModelShapeInfo
+    from shared.model_registry import ModelShapeInfo
 
     model = tmp_path / f"{name}.xml"
     model.write_text("<net/>")

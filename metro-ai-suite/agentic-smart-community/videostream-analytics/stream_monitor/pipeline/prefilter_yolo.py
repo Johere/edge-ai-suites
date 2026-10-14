@@ -16,6 +16,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from shared.model_registry import ModelShapeInfo
+
 logger = logging.getLogger(__name__)
 
 _COCO_CLASSES = [
@@ -50,21 +52,6 @@ def labels_from_ov_model(ov_model) -> tuple[list[str], str]:
     except Exception:
         pass
     return list(_COCO_CLASSES), "fallback_coco"
-
-
-@dataclass
-class ModelShapeInfo:
-    """What a capability query / load-time self-check needs to know about an IR."""
-
-    class_names: list[str]
-    labels_source: str
-    input_shape: str
-    output_shape: str
-    # Whether the output decodes as YOLO detection: rank 3, [1, 4+nc, anchors].
-    # _postprocess assumes exactly that layout and would otherwise read a
-    # classification or pose tensor as boxes, yielding plausible-looking noise.
-    is_detection: bool
-    detection_error: str = ""
 
 
 def _port_shape(ov_model, port: str):

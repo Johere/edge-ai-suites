@@ -34,7 +34,7 @@ from shared.config import (
 )
 from shared.model_registry import ModelNotAvailable
 from sinks import NullSink
-from stream_monitor.pipeline.prefilter_yolo import ModelShapeInfo
+from shared.model_registry import ModelShapeInfo
 from stream_monitor.rtsp_monitor import StreamPipeline
 
 

@@ -18,7 +18,7 @@ import service as service_module
 from service import create_app
 from shared.config import AppConfig, load_config
 from source_worker import SourceManager
-from stream_monitor.pipeline.prefilter_yolo import ModelShapeInfo
+from shared.model_registry import ModelShapeInfo
 
 
 def _shape_info():

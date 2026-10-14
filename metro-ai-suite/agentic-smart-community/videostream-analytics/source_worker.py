@@ -479,6 +479,34 @@ class SourceManager:
         prefilter = bundle.pipeline.source.prefilter
         return prefilter.model if prefilter else ""
 
+    def get_source_pipeline(self, source_id: str) -> dict[str, Any] | None:
+        """The source's effective pipeline, for "what is this monitor actually
+        running" questions (e.g. an agent asked whether a monitor that never
+        configured `prefilter` is filtering).
+
+        StreamPipeline writes the defaults←source merge back onto `source` at
+        construction, so the blocks are already effective; keepalive lives on
+        the bundle. `prefilter.model_path` is stripped: it is a resolved server
+        path, and /capabilities/prefilter already publishes it per model.
+        """
+        with self._registry_lock:
+            bundle = self._bundles.get(source_id)
+        if bundle is None:
+            return None
+        source = bundle.pipeline.source
+        pipeline = {
+            name: (cfg.model_dump() if cfg is not None else None)
+            for name in ("motion", "segment", "static", "recording",
+                         "prefilter", "roi", "health")
+            for cfg in [getattr(source, name)]
+        }
+        if pipeline["prefilter"] is not None:
+            pipeline["prefilter"].pop("model_path", None)
+        pipeline["keepalive"] = (
+            bundle.keepalive.model_dump() if bundle.keepalive is not None else None
+        )
+        return {"source_id": source_id, "pipeline": pipeline}
+
     def _describe_bundle(self, source_id: str, bundle: SourceBundle) -> dict[str, Any]:
         pipe = bundle.pipeline
         ts = bundle.last_keepalive_at

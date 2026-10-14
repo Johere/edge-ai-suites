@@ -471,7 +471,6 @@ def create_app(
 
         pf = config.defaults.prefilter
         return {
-            "enabled": pf.enabled,
             "default_model": pf.model,
             "supported_kinds": list(SUPPORTED_MODEL_KINDS),
             "supported_backends": list(SUPPORTED_MODEL_BACKENDS),
@@ -615,6 +614,20 @@ def create_app(
     def get_source_status(source_id: SourceIdPath) -> dict[str, Any]:
         """MCP's `analyticsSourceExists` calls this path."""
         return _source_status(source_id)
+
+    @app.get("/sources/{source_id}/pipeline")
+    def get_source_pipeline(source_id: SourceIdPath) -> dict[str, Any]:
+        """The source's effective (merged) pipeline configuration.
+
+        Answers "what is this monitor actually running": every block is the
+        per-source value merged over the deployment defaults, so a source that
+        never configured `prefilter` shows the inherited default here.
+        """
+        mgr = get_manager()
+        result = mgr.get_source_pipeline(source_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Source not found: {source_id}")
+        return result
 
     @app.post("/register_source")
     def register_source(req: RegisterSourceRequest) -> dict[str, Any]:
