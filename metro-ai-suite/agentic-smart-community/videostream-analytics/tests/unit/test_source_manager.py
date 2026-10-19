@@ -10,7 +10,7 @@ from source_worker import SourceManager
 
 @pytest.fixture
 def config():
-    return AppConfig()
+    return AppConfig(model_dir="/tmp/models")
 
 
 @pytest.fixture
@@ -314,3 +314,39 @@ class TestSourceManagerRestart:
 
     def test_restart_not_found(self, manager):
         assert manager.restart_source("nope")["status"] == "not_found"
+
+
+class TestGetSourcePipeline:
+    def test_returns_effective_blocks_and_strips_model_path(
+        self, manager, mock_pipeline_class
+    ):
+        from shared.config import MotionConfig, PrefilterConfig
+
+        _, instance = mock_pipeline_class
+        # Simulate the post-merge state: StreamPipeline writes the
+        # defaults←source merge back onto `source` at construction; the mock
+        # skips that, so set the effective blocks directly.
+        source = SourceConfig(
+            source_id="cam1",
+            source_url="rtsp://localhost:8554/live/cam1",
+            recording={"enabled": False},
+        )
+        source.prefilter = PrefilterConfig(
+            enabled=True, model="yolo11s", model_path="/server/models/yolo11s.xml"
+        )
+        source.motion = MotionConfig(diff_threshold=9)
+        instance.source = source
+
+        manager.register_source(source)
+        out = manager.get_source_pipeline("cam1")
+
+        assert out["source_id"] == "cam1"
+        assert out["pipeline"]["prefilter"]["enabled"] is True
+        assert out["pipeline"]["prefilter"]["model"] == "yolo11s"
+        # Resolved server path is stripped — /capabilities/prefilter has it.
+        assert "model_path" not in out["pipeline"]["prefilter"]
+        assert out["pipeline"]["motion"]["diff_threshold"] == 9
+        assert out["pipeline"]["keepalive"] is not None
+
+    def test_unknown_source_returns_none(self, manager):
+        assert manager.get_source_pipeline("nope") is None
