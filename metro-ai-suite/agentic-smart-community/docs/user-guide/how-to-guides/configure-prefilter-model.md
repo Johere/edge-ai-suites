@@ -114,6 +114,18 @@ curl -X POST localhost:8999/config/reload
 
 Or ask the agent: *"reload the analytics configuration"* (it runs `smart_community_monitor_ctl action=reload_config`). `GET /capabilities/prefilter` shows the new entry either way. `docker compose restart videostream-analytics` works too; reload just avoids interrupting every running monitor.
 
+### Register by conversation instead of editing the file
+
+Once the model files are under `PREFILTER_MODEL_DIR`, you can also ask the agent to add the entry for you:
+
+> Register the prefilter model `helmet_v2` at `/home/me/models/openvino/helmet-v2/helmet_v2.xml`.
+
+The agent runs `smart_community_monitor_ctl action=register_prefilter_model`, which adds the entry to the same configuration file (comments and the other entries are kept), reloads the service, and reports back whether the model is now selectable or was rejected, with the reason.
+It is idempotent for an identical entry and refuses to overwrite an existing entry that differs — edit the file by hand for that.
+
+If the result is `written_not_listed`, the service is not reading the file the agent just edited.
+This usually follows an editor atomic save or `sed -i` on the host config, after which the MCP server's single-file mount still points at the replaced file; restart the MCP server and retry.
+
 ## Step 3 — Discover what is available
 
 Ask a connected agent, in conversation:

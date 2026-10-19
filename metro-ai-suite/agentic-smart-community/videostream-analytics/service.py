@@ -282,13 +282,17 @@ def _apply_reload(app: FastAPI, candidate: str) -> dict[str, Any]:
     """
     config: AppConfig = app.state.config
     new_config = load_config(candidate)
+    # Resolve before the swap: sources that omit `prefilter` inherit the
+    # default's model_path, and a freshly loaded config carries it empty. Doing
+    # this after the swap leaves a window (a registry read_model on a new file)
+    # in which such a registration is permanently prefilter-less.
+    resolve_default_prefilter_model(new_config)
     with _reload_lock:
         # Every consumer — the endpoints' closure, app.state.config and
         # SourceManager.config — holds this one object, so swapping its
         # contents in place reaches all of them.
         config.__dict__.update(new_config.__dict__)
         config.__pydantic_fields_set__ = new_config.__pydantic_fields_set__
-        resolve_default_prefilter_model(config)
         get_manager().on_config_reloaded()
     logger.info("configuration reloaded from %s", candidate)
     available, rejected = model_registry.list_models(config)

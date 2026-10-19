@@ -296,12 +296,17 @@ async function registerPrefilterModel(analyticsUrl: string, params: MonitorCtlPa
     return { model: name, status: "rejected", reason: rejected.reason, config_file: configPath };
   }
   // Written but absent from the report: VSA is reading a different file than
-  // the one just edited (VIDEOSTREAM_CONFIG_FILE mismatch on either side).
+  // the one just edited. Most often the host file was replaced (atomic save in
+  // an editor, `sed -i`) after this container started, so its single-file mount
+  // still points at the old inode and the write landed on an orphan; otherwise
+  // VIDEOSTREAM_CONFIG_FILE differs between the two services.
   return {
     model: name,
     status: "written_not_listed",
     config_file: configPath,
-    hint: "VSA is not reading this file; check VIDEOSTREAM_CONFIG_FILE on both services",
+    hint: "VSA is not reading the file just edited. If the config was recently saved with an " +
+      "editor or `sed -i`, restart the MCP server so it re-mounts the current file; " +
+      "otherwise check that VIDEOSTREAM_CONFIG_FILE is the same on both services",
   };
 }
 

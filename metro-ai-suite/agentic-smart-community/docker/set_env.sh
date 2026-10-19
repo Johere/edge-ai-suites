@@ -35,6 +35,9 @@ export HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
 export VLLM_IMAGE=intel/llm-scaler-vllm:0.14.0-b8.3.2
 # export VLLM_IMAGE=intel/llm-scaler-vllm:0.26.0-b2
 
+# Whether to offload model weights before quantization
+export VLLM_OFFLOAD_WEIGHTS_BEFORE_QUANT=1
+
 # Model + context window.
 export LLM_MODEL=${LLM_MODEL:-Qwen/Qwen3.6-35B-A3B}
 export MAX_MODEL_LEN=61440            # 60k context; lower (e.g. 32768) to reduce RAM.

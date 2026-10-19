@@ -125,6 +125,42 @@ class TestConfigReload:
             finally:
                 tc.__exit__(None, None, None)
 
+    def test_default_model_path_is_resolved_before_the_swap_is_visible(
+        self, workspace, mock_manager, monkeypatch
+    ):
+        """No window where the live config carries an empty default model_path.
+
+        A source registered with no `prefilter` block inherits the default
+        wholesale; an empty path there silently disables its prefilter for good.
+        Watch the LIVE config at the moment the default is resolved: if the swap
+        has already happened by then, the live path is the new config's empty one.
+        """
+        _, model_dir, cfg = workspace
+        doc = yaml.safe_load(cfg.read_text())
+        doc["defaults"] = {"prefilter": {"enabled": True, "model": "yolo11s"}}
+        cfg.write_text(yaml.safe_dump(doc))
+
+        app = create_app(load_config(str(cfg)), config_path=str(cfg))
+        real_resolve = service_module.resolve_default_prefilter_model
+        live_paths = []
+
+        def spy(config):
+            live_paths.append(app.state.config.defaults.prefilter.model_path)
+            return real_resolve(config)
+
+        with _stub_inspect():
+            tc = _make_client(app, mock_manager, monkeypatch)
+            try:
+                # Startup resolved the default; only calls from the reload count.
+                assert app.state.config.defaults.prefilter.model_path
+                monkeypatch.setattr(service_module, "resolve_default_prefilter_model", spy)
+                assert tc.post("/config/reload").status_code == 200
+            finally:
+                tc.__exit__(None, None, None)
+
+        assert live_paths and all(live_paths), live_paths
+        assert app.state.config.defaults.prefilter.model_path == str(model_dir / "yolo11s.xml")
+
     def test_reload_invalid_yaml_keeps_running_config(
         self, workspace, mock_manager, monkeypatch
     ):
