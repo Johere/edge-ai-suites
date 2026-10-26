@@ -123,8 +123,8 @@ class RoiConfig(BaseModel):
 SUPPORTED_MODEL_KINDS = ("detection",)
 SUPPORTED_MODEL_BACKENDS = ("openvino",)
 
-# Root used when the running config leaves model_dir empty or as an unresolved
-# placeholder (e.g. the built-in-defaults fallback when no config file exists).
+# The model root when PREFILTER_MODEL_DIR is unset (and the config file carries
+# no model_dir of its own, which the shipped config does not).
 # Matches the deployment default exported by docker/set_env.sh.
 DEFAULT_MODEL_DIR = "~/models/openvino"
 
@@ -307,9 +307,12 @@ class AppConfig(BaseModel):
     # entry outside it is simply not readable in-container; the registry
     # reports that up front as `rejected` instead of letting the pipeline
     # discover it at stream start. Users organize subdirectories however they
-    # like — containment is the only rule. Required: every shipped config
-    # carries it, and a silent default root would mask a broken config.
-    model_dir: str
+    # like — containment is the only rule.
+    #
+    # An internal parameter, deliberately absent from the shipped config: its
+    # value is the PREFILTER_MODEL_DIR env var (which is also what compose
+    # mounts), so a copy in the file could only disagree with the mount.
+    model_dir: str = DEFAULT_MODEL_DIR
     # Selectable prefilter models, keyed by the name `prefilter.model` uses.
     prefilter_models: dict[str, PrefilterModelConfig] = Field(default_factory=dict)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
@@ -489,7 +492,7 @@ def load_config(config_path: str | None = None) -> AppConfig:
             "copy config/config.yaml.example to that path.",
             path,
         )
-        config = AppConfig(model_dir=DEFAULT_MODEL_DIR)
+        config = AppConfig()
 
     config.data_dir = expand_path(config.data_dir)
     config.allowed_data_roots = [expand_path(r) for r in config.allowed_data_roots]

@@ -105,7 +105,7 @@ class TestValidationRules:
         with _stub_inspect():
             available, rejected = model_registry.list_models(config)
         assert available == []
-        assert "not under model_dir" in rejected[0]["reason"]
+        assert "not under PREFILTER_MODEL_DIR" in rejected[0]["reason"]
 
     def test_any_depth_under_model_dir_is_accepted(self, model_dir):
         """How the tree is organized under model_dir is the user's business."""

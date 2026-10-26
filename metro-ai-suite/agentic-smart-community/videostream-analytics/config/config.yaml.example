@@ -27,16 +27,10 @@ data_dir: "~/.mcp-smart-community/segments"
 # allowed_data_roots:
 #   - "/mnt/nvme/vsa-segments"
 
-# Root every registered prefilter model must live under; compose bind-mounts
-# it read-only at the same path in-container. Overridden by the
-# PREFILTER_MODEL_DIR env var; an empty/unresolved value falls back to
-# ~/models/openvino.
-model_dir: "${PREFILTER_MODEL_DIR}"
-
 # Selectable prefilter models; a monitor picks one by key name
 # (`prefilter.model`) — a raw path in a request is rejected. An entry becomes
 # selectable only after validation: supported kind/backend, path under
-# model_dir, complete IR pair on disk, readable by OpenVINO, detection-shaped
+# PREFILTER_MODEL_DIR, complete IR pair on disk, readable by OpenVINO, detection-shaped
 # output. GET /capabilities/prefilter lists what passed and why others did not.
 #
 #   kind        required. Supported: detection
@@ -49,6 +43,11 @@ prefilter_models:
     kind: detection
     backend: openvino
     model_path: "${PREFILTER_MODEL_DIR}/yolo11s/FP16/yolo11s.xml"
+    description: "YOLO11s FP16, static 1280x704 input, COCO-80 classes"
+  yolo11m:
+    kind: detection
+    backend: openvino
+    model_path: "${PREFILTER_MODEL_DIR}/yolo11m/FP16/yolo11m.xml"
     description: "YOLO11s FP16, static 1280x704 input, COCO-80 classes"
 
 # Allowlist for register source_url schemes — ffmpeg also speaks file:,

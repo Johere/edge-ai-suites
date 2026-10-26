@@ -7,7 +7,7 @@ detector as a prefilter. Posts motion/static/recording events to a webhook
 ## Quick start (standalone)
 
 ```bash
-bash setup_vsa.sh        # validate/prepare the prefilter model, seed your config
+bash setup_vsa.sh        # validate/prepare the prefilter model, regenerate your config
 bash setup_vsa.sh up     # docker compose up
 curl -s localhost:8999/capabilities/prefilter | jq '.models[].name'
 bash setup_vsa.sh down
@@ -21,11 +21,14 @@ running anything (this is how the full stack's `setup_docker.sh` reuses it).
 ## Your configuration
 
 The live configuration is `${VIDEOSTREAM_CACHE_HOST}/config.yaml` (default
-`~/.cache/.videostream-analytics/config.yaml`). It is seeded once from
-`config/config.yaml.example` and never overwritten by re-running setup — your
-`prefilter_models` entries and tuned `defaults` blocks are safe. The
-`config/config.yaml` symlink in this directory points at the same file, so the
-familiar in-tree path keeps working for edits.
+`~/.cache/.videostream-analytics/config.yaml`). Every run of `setup_vsa.sh`
+(and of `setup_docker.sh`) regenerates it from `config/config.yaml.example`:
+an identical file is left alone, a differing one is first saved as
+`config.yaml.<YYYYMMDD-HHMMSS>.bak` next to it. **Put changes you want to keep in
+`config/config.yaml.example`**; edits made directly to the live file take effect
+at once (hot reload) but only last until the next deploy, and are then found in
+the newest `.bak`. The `config/config.yaml` symlink in this directory points at
+the live file.
 
 Apply edits without a restart (running sources are untouched): the service
 watches the file and reloads automatically within a couple of seconds, or

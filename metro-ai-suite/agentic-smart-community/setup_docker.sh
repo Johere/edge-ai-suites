@@ -40,8 +40,12 @@ source "${SCRIPT_DIR}/videostream-analytics/setup_vsa.sh"
 SERVICE_PORT=${SERVICE_PORT:-8192}
 VLLM_SERVICE_PORT=${VLLM_SERVICE_PORT:-41091}
 
-# Default action flags
+# Default action flags. A start with an unset or `latest` TAG builds the images
+# first (see "decide whether to build" below); a pinned TAG keeps the original
+# pull-and-start behaviour. --build / --build-prod build explicitly, without cache.
 BUILD_IMAGE=false
+BUILD_NO_CACHE=false
+SKIP_BUILD=false
 UP_CONTAINERS=true
 DOWN_CONTAINERS=false
 LIGHT_MODE=false
@@ -365,12 +369,16 @@ Smart-Community Docker Setup
 Usage: $0 [option]
 
 Options:
-  (no option) | --prod   End-to-end: build-less start of all three services
+  (no option) | --prod   End-to-end start of all three services; builds the images first
+                         when TAG is unset or `latest`, otherwise uses the pulled images
                          (vllm-ipex-serving + multilevel-video-understanding + videostream-analytics)
   --light                Reuse an already-healthy serving at VLM_BASE_URL/LLM_BASE_URL;
                          start multilevel-video-understanding + videostream-analytics only
+                         (builds first when TAG is unset or `latest`, as above)
+  --no-build             Never build, even when TAG is unset or `latest`; use the images
+                         already present or pulled (e.g. --light --no-build)
   --fetch                Only clone/refresh edge-ai-libraries (multilevel build context), no build/start
-  --build                Build the local images (multilevel + videostream-analytics
+  --build                Build the local images without cache (multilevel + videostream-analytics
                          + smart-community-mcp-server), no start
   --build-prod           Build, then start all four services
   --down                 Stop and remove all containers, networks, volumes
@@ -395,10 +403,11 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --build-prod) BUILD_IMAGE=true;  UP_CONTAINERS=true;  DOWN_CONTAINERS=false; shift ;;
-    --build)      BUILD_IMAGE=true;  UP_CONTAINERS=false; DOWN_CONTAINERS=false; shift ;;
+    --build-prod) BUILD_IMAGE=true;  BUILD_NO_CACHE=true; UP_CONTAINERS=true;  DOWN_CONTAINERS=false; shift ;;
+    --build)      BUILD_IMAGE=true;  BUILD_NO_CACHE=true; UP_CONTAINERS=false; DOWN_CONTAINERS=false; shift ;;
     --prod)       BUILD_IMAGE=false; UP_CONTAINERS=true;  DOWN_CONTAINERS=false; shift ;;
     --light)      BUILD_IMAGE=false; UP_CONTAINERS=true;  DOWN_CONTAINERS=false; LIGHT_MODE=true; shift ;;
+    --no-build)   SKIP_BUILD=true; shift ;;
     --fetch)      BUILD_IMAGE=false; UP_CONTAINERS=false; DOWN_CONTAINERS=false; FETCH_ONLY=true; shift ;;
     --down)       BUILD_IMAGE=false; UP_CONTAINERS=false; DOWN_CONTAINERS=true;  shift ;;
     --light-down) BUILD_IMAGE=false; UP_CONTAINERS=false; DOWN_CONTAINERS=false; LIGHT_DOWN=true; shift ;;
@@ -406,6 +415,16 @@ while [[ $# -gt 0 ]]; do
     *) echo -e "${RED}Unknown option: $1${NC}"; show_help; exit 1 ;;
   esac
 done
+
+# --- decide whether to build -----------------------------------------------------
+# `latest` is a moving tag: the service code is baked into the image while the
+# configuration is regenerated on every deploy, so a stale local `latest` against
+# fresh config can fail at startup. Build first (layer-cached, so an unchanged
+# tree is quick). A pinned release tag names a published image — pull, don't build.
+if [ "$UP_CONTAINERS" = true ] && [ "$BUILD_IMAGE" = false ] && [ "${TAG:-latest}" = "latest" ]; then
+  BUILD_IMAGE=true
+fi
+[ "$SKIP_BUILD" = true ] && BUILD_IMAGE=false
 
 echo "==== Smart-Community Docker Setup ===="
 
@@ -434,7 +453,9 @@ fi
 # --- build --------------------------------------------------------------------
 if [ "$BUILD_IMAGE" = true ]; then
   echo "Building local images (multilevel-video-understanding + videostream-analytics + smart-community-mcp-server)..."
-  $DOCKER_CMD build --no-cache multilevel-video-understanding videostream-analytics smart-community-mcp-server
+  build_args=()
+  [ "$BUILD_NO_CACHE" = true ] && build_args+=(--no-cache)
+  $DOCKER_CMD build "${build_args[@]}" multilevel-video-understanding videostream-analytics smart-community-mcp-server
   echo "==== Build complete! ===="
 fi
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from pydantic import ValidationError
 
@@ -209,11 +210,20 @@ class TestLoadConfig:
             "~/models/openvino/detect/yolo11s.xml"
         )
 
-    def test_model_dir_is_required(self, tmp_path):
+    def test_model_dir_is_internal_and_defaults_from_env_or_builtin(self, tmp_path, monkeypatch):
+        """The config file carries no model_dir; the root comes from the env var."""
         cfg_file = tmp_path / "no_model_dir.yaml"
         cfg_file.write_text("server:\n  port: 7777\n")
-        with pytest.raises(ValidationError):
-            load_config(str(cfg_file))
+        monkeypatch.delenv("PREFILTER_MODEL_DIR", raising=False)
+        assert load_config(str(cfg_file)).model_dir == os.path.expanduser("~/models/openvino")
+        monkeypatch.setenv("PREFILTER_MODEL_DIR", "/srv/ov-models")
+        assert load_config(str(cfg_file)).model_dir == "/srv/ov-models"
+
+    def test_shipped_example_does_not_expose_model_dir(self):
+        """A key users can see is a key users will edit — and it would not take
+        effect under Docker, where the mount is fixed by the env var."""
+        example = Path(__file__).resolve().parents[2] / "config" / "config.yaml.example"
+        assert "model_dir" not in yaml.safe_load(example.read_text())
 
     def test_empty_registry_stays_empty(self, tmp_path):
         # No prefilter_models block must not blow up the expansion step.

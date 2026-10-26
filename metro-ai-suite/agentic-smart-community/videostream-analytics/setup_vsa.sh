@@ -18,7 +18,9 @@
 #                         Default ${HOME}/models/openvino. The bundled yolo11s
 #                         is prepared at ${PREFILTER_MODEL_DIR}/yolo11s/FP16/;
 #                         other models are registered in the config, not here.
-#   VIDEOSTREAM_CACHE_HOST  your config home. Seeded once, never overwritten.
+#   VIDEOSTREAM_CACHE_HOST  your config home. config.yaml here is regenerated from
+#                           config/config.yaml.example on every run; a differing
+#                           previous copy is kept as config.yaml.<YYYYMMDD-HHMMSS>.bak.
 #                           Default ${HOME}/.cache/.videostream-analytics.
 #   VIDEOSTREAM_CONFIG_FILE default ${VIDEOSTREAM_CACHE_HOST}/config.yaml.
 
@@ -63,22 +65,31 @@ vsa_prepare_model() {
   VSA_MODEL_DIR="$model_dir"
 }
 
-# Seed the user-owned config once; never overwrite it afterwards. Then maintain
-# the config/config.yaml symlink so the familiar in-tree path edits the same
-# live file.
+# Render the live config from the example on every run. An identical file is left
+# untouched (no churn, no backup); a differing one is kept as
+# config.yaml.<YYYYMMDD-HHMMSS>.bak before being replaced — the same convention as
+# the MCP server's config. Then maintain the config/config.yaml symlink so the
+# familiar in-tree path edits the same live file.
 vsa_seed_config() {
+  local rendered backup
   mkdir -p "$VIDEOSTREAM_CACHE_HOST"
+
+  # Check before resolving: realpath would follow a symlink and the check below
+  # would then approve (and overwrite) whatever it points at.
+  if [[ -L "$VIDEOSTREAM_CONFIG_FILE" || ( -e "$VIDEOSTREAM_CONFIG_FILE" && ! -f "$VIDEOSTREAM_CONFIG_FILE" ) ]]; then
+    echo -e "${RED}Error: ${VIDEOSTREAM_CONFIG_FILE} must be a regular file; refusing to replace it.${NC}" >&2
+    return 1
+  fi
   VIDEOSTREAM_CONFIG_FILE="$(realpath -m "$VIDEOSTREAM_CONFIG_FILE")"
 
-  if [[ -f "$VIDEOSTREAM_CONFIG_FILE" ]]; then
-    echo "Keeping your existing configuration: ${VIDEOSTREAM_CONFIG_FILE}"
-  else
+  rendered="$(mktemp "${VIDEOSTREAM_CACHE_HOST}/.config.yaml.XXXXXX")"
+  {
     # Pin the absolute, validated paths the container will see. The example
     # carries ${PREFILTER_MODEL_DIR} placeholders; writing the resolved values
     # here keeps the deployment working even if the variable is not exported
     # into the container.
-    SEEDED_MODEL_PATH="$VSA_PREFILTER_MODEL" SEEDED_MODEL_DIR="$VSA_MODEL_DIR" \
-      python3 - "${VSA_DIR}/config/config.yaml.example" "$VIDEOSTREAM_CONFIG_FILE" <<'PY'
+    SEEDED_MODEL_PATH="$VSA_PREFILTER_MODEL" \
+      python3 - "${VSA_DIR}/config/config.yaml.example" "$rendered" <<'PY'
 import os
 import sys
 import tempfile
@@ -89,7 +100,6 @@ source_path, output_path = sys.argv[1:]
 with open(source_path, encoding="utf-8") as source_file:
     config = yaml.safe_load(source_file) or {}
 
-config["model_dir"] = os.environ["SEEDED_MODEL_DIR"]
 defaults = config.setdefault("defaults", {}).setdefault("prefilter", {})
 name = defaults.get("model") or "default"
 defaults["model"] = name
@@ -105,7 +115,24 @@ with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=output_dir, delete=F
     temporary_path = output_file.name
 os.replace(temporary_path, output_path)
 PY
-    echo "Seeded configuration: ${VIDEOSTREAM_CONFIG_FILE} (from config/config.yaml.example — now yours, setup will not touch it again)"
+  } || { rm -f "$rendered"; return 1; }
+
+  if [[ -f "$VIDEOSTREAM_CONFIG_FILE" ]] && cmp -s "$rendered" "$VIDEOSTREAM_CONFIG_FILE"; then
+    rm -f "$rendered"
+    echo "Configuration unchanged: ${VIDEOSTREAM_CONFIG_FILE}"
+  else
+    if [[ -f "$VIDEOSTREAM_CONFIG_FILE" ]]; then
+      backup="${VIDEOSTREAM_CONFIG_FILE}.$(date '+%Y%m%d-%H%M%S').bak"
+      if [[ -e "$backup" || -L "$backup" ]]; then
+        rm -f "$rendered"
+        echo -e "${RED}Error: backup already exists: ${backup}${NC}" >&2
+        return 1
+      fi
+      cp -- "$VIDEOSTREAM_CONFIG_FILE" "$backup"
+      echo "Backed up ${VIDEOSTREAM_CONFIG_FILE} to ${backup}"
+    fi
+    mv -- "$rendered" "$VIDEOSTREAM_CONFIG_FILE"
+    echo "Updated configuration: ${VIDEOSTREAM_CONFIG_FILE} (from config/config.yaml.example)"
   fi
 
   vsa_link_config

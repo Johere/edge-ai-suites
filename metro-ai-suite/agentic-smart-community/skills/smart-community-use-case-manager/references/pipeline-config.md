@@ -41,8 +41,11 @@ Never infer this from `monitors.yaml` alone.
 `name`, `description`, `class_names`, `labels_source`, and `input_shape`.
 
 - **One model available** → use it silently. Do not ask.
-- **Several available** → name them with their `description` and let the user
-  choose. Default to `default_model` if they have no preference.
+- **Several available** → name every one with its `description`, `input_shape`
+  and class count, then **end the turn** and wait for the user's pick. Do not
+  show class names until a model is chosen: the list depends on it. Mention
+  `default_model` as the deployment default, but a recommendation is never a
+  selection.
 - A model listed under `rejected` is **not** selectable — it is a registered
   entry that failed validation. Never offer one. If the user asks for a model
   that is only in `rejected`, relay its `reason` and point them at the
@@ -53,7 +56,7 @@ Never infer this from `monitors.yaml` alone.
   `model=<name>` and `model_path=<absolute .xml path>` (optional `kind`,
   `backend`, `description`). The tool edits the VSA config file, hot-reloads
   VSA, and confirms: `selectable` → done, show the entry; `rejected` → relay
-  the `reason` verbatim (missing .bin, not under `model_dir`, not
+  the `reason` verbatim (missing .bin, not under `PREFILTER_MODEL_DIR`, not
   detection-shaped, …) and help the user fix it. A name already registered
   with different settings errors out — do not retry blindly; show the user the
   existing entry and let them decide.
@@ -153,6 +156,7 @@ deliberate "off" is provable:
 ```text
 Monitor Pipeline Decision
   Prefilter: enabled | disabled
+  Prefilter Model: <name> (<kind>, <backend>) | not applicable
   Target Classes: <classes> | not applicable
   Labels Source: <source> | not applicable
   ROI Focus: enabled | disabled

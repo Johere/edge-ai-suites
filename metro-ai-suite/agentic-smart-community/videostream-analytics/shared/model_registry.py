@@ -192,7 +192,7 @@ def _validate(config: AppConfig, name: str, entry: PrefilterModelConfig) -> Mode
         )
     except ValueError as e:
         raise ModelNotAvailable(
-            f"{entry.model_path} is not under model_dir ({config.model_dir}): {e}"
+            f"{entry.model_path} is not under PREFILTER_MODEL_DIR ({config.model_dir}): {e}"
         ) from e
 
     return _VALIDATORS[entry.backend](name, entry, resolved_path)

@@ -199,7 +199,7 @@ Return `status`:
 
 - `selectable` — registered and validated; usable as `pipeline_config.prefilter.model` immediately.
 - `rejected` — registered but failed VSA validation; relay `reason` (missing `.bin`, path not
-  under `model_dir`, not detection-shaped, …) and fix before use.
+  under `PREFILTER_MODEL_DIR`, not detection-shaped, …) and fix before use.
 - `written_not_listed` — the file was written but VSA did not list the entry; VSA is reading a
   different configuration file (check `VIDEOSTREAM_CONFIG_FILE` on both services).
 

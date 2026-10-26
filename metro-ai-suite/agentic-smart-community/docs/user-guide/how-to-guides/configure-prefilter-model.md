@@ -12,7 +12,7 @@ By the end of this guide you will know how to:
 - point one monitor — or several, each at a different model — at the model you want;
 - read the diagnostics when a model does not show up.
 
-**Prerequisites:** the stack is running (see the [Get Started Guide](../get-started.md)), and you can edit the `videostream-analytics` configuration. The live configuration is `${VIDEOSTREAM_CACHE_HOST}/config.yaml` (default `~/.cache/.videostream-analytics/config.yaml`) — seeded once by `setup_vsa.sh` and yours ever after — also reachable through the `videostream-analytics/config/config.yaml` symlink in the repo. This guide edits it via the symlink path.
+**Prerequisites:** the stack is running (see the [Get Started Guide](../get-started.md)), and you can edit the `videostream-analytics` configuration. The live configuration is `${VIDEOSTREAM_CACHE_HOST}/config.yaml` (default `~/.cache/.videostream-analytics/config.yaml`) — regenerated from `videostream-analytics/config/config.yaml.example` on every deploy, with the previous copy kept as `config.yaml.<YYYYMMDD-HHMMSS>.bak` — also reachable through the `videostream-analytics/config/config.yaml` symlink in the repo. Models you want to keep across deploys belong in the **template** (`config.yaml.example`); see Step 2.
 
 ## When to change the prefilter model
 
@@ -78,11 +78,11 @@ Class names should be embedded in the model's `rt_info`, which the Ultralytics e
 
 ## Step 2 — Register the model
 
-Add an entry under `prefilter_models` in `videostream-analytics/config/config.yaml` (a symlink to your live configuration at `${VIDEOSTREAM_CACHE_HOST}/config.yaml`; re-running `setup_docker.sh` or `setup_vsa.sh` never overwrites it):
+Add an entry under `prefilter_models` in `videostream-analytics/config/config.yaml.example`, then deploy (`bash videostream-analytics/setup_vsa.sh` or `./setup_docker.sh`).
+Every deploy regenerates the live configuration from that template, so the template is where an entry survives.
+To try a model first, add it to the live file instead (`videostream-analytics/config/config.yaml`, a symlink to `${VIDEOSTREAM_CACHE_HOST}/config.yaml`) — it applies immediately but is replaced at the next deploy, when the previous copy is saved as `config.yaml.<YYYYMMDD-HHMMSS>.bak` beside it:
 
 ```yaml
-model_dir: "${PREFILTER_MODEL_DIR}"
-
 prefilter_models:
   yolo11s:
     kind: detection
@@ -101,7 +101,7 @@ prefilter_models:
 | *(key)* | ✅ | The name monitors use — `prefilter.model: helmet_v2`. |
 | `kind` | ✅ | What the model does. Supported: `detection`. |
 | `backend` | | Runtime that executes it. Case-insensitive, default `openvino`. Supported: `openvino`. |
-| `model_path` | ✅ | Absolute path to the IR `.xml`, under `model_dir`. `${PREFILTER_MODEL_DIR}`, `${HOME}` and `~` are expanded. |
+| `model_path` | ✅ | Absolute path to the IR `.xml`, under `PREFILTER_MODEL_DIR`. `${PREFILTER_MODEL_DIR}`, `${HOME}` and `~` are expanded. |
 | `description` | | Free text, shown to agents helping a user choose a model. |
 
 `kind` and `backend` each accept one value today. They are validated rather than assumed so that adding a second model type or a second runtime later needs no change to how your monitors are configured.
@@ -122,6 +122,7 @@ Once the model files are under `PREFILTER_MODEL_DIR`, you can also ask the agent
 
 The agent runs `smart_community_monitor_ctl action=register_prefilter_model`, which adds the entry to the same configuration file (comments and the other entries are kept), reloads the service, and reports back whether the model is now selectable or was rejected, with the reason.
 It is idempotent for an identical entry and refuses to overwrite an existing entry that differs — edit the file by hand for that.
+Like any edit to the live file, the entry lasts until the next deploy; add it to `config.yaml.example` as well to keep it.
 
 If the result is `written_not_listed`, the service is not reading the file the agent just edited.
 This usually follows an editor atomic save or `sed -i` on the host config, after which the MCP server's single-file mount still points at the replaced file; restart the MCP server and retry.
@@ -256,7 +257,7 @@ If `prefilter_classes` is consistently empty while you expect detections, lower 
 | ------ | --- |
 | `kind '<x>' is not supported` | Only `detection` works today. |
 | `backend '<x>' is not supported` | Only `openvino` works today. Remove the field to take the default. |
-| `is not under model_dir (...)` | Move the model under `PREFILTER_MODEL_DIR`, or point `model_dir`/the `PREFILTER_MODEL_DIR` environment variable at where it already lives. The container only mounts that one root. |
+| `is not under PREFILTER_MODEL_DIR (...)` | Move the model under `PREFILTER_MODEL_DIR` (default `~/models/openvino`), or set that environment variable to where it already lives and redeploy. The container only mounts that one root. |
 | `cannot read <path>.bin` / `is empty` | The IR pair is incomplete. Copy both `.xml` and `.bin`, and check they are not truncated. |
 | `backend 'openvino' expects an IR .xml` | Convert the model to OpenVINO™ IR first. |
 | `openvino could not read <path>` | The file is not a valid IR — re-export it. |
@@ -266,7 +267,9 @@ If `prefilter_classes` is consistently empty while you expect detections, lower 
 
 **`422 model_path is not accepted`.** Models are selected from the registry, not by path. Register the model in your live configuration and reference it as `prefilter.model: <name>`.
 
-**You edited the file but nothing changed.** Two common causes: you edited the tracked template `config/config.yaml.example`, which no running instance reads — edit `videostream-analytics/config/config.yaml` (the symlink to your live configuration) or `${VIDEOSTREAM_CACHE_HOST}/config.yaml` directly; or the service has not been restarted since the edit. The startup log line `Loaded configuration from <path>` names the file the service actually read.
+**You edited the file but nothing changed.** Two common causes: you edited the tracked template `config/config.yaml.example`, which no running instance reads until the next deploy regenerates the live file from it — run `setup_vsa.sh`, or edit the live file for an immediate (temporary) effect; or the service has not been restarted since the edit.
+
+**Your edits to the live file disappeared.** The deploy regenerated it from `config.yaml.example`. The previous copy is the newest `${VIDEOSTREAM_CACHE_HOST}/config.yaml.<YYYYMMDD-HHMMSS>.bak`; copy what you want back into `config.yaml.example` so it survives the next deploy. The startup log line `Loaded configuration from <path>` names the file the service actually read.
 
 **`422 model_not_available`.** The name is not registered, or it is registered but did not validate. The error lists the names that *are* selectable; `GET /capabilities/prefilter` explains why the others are not.
 

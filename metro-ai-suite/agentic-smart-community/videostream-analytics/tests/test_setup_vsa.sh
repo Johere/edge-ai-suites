@@ -66,6 +66,7 @@ bash "$SETUP" >/dev/null || fail "setup_vsa.sh exited non-zero"
 [[ "$(readlink "$LINK")" == "${CACHE_T}/config.yaml" ]] || fail "symlink target wrong: $(readlink "$LINK")"
 grep -q "${MODEL_DIR_T}/yolo11s/FP16/yolo11s.xml" "${CACHE_T}/config.yaml" \
   || fail "seeded config lacks the absolute model path"
+grep -q "^model_dir:" "${CACHE_T}/config.yaml" && fail "seeded config exposes the internal model_dir"
 ok "first run: seeded config, absolute paths, symlink created"
 
 # --- 3) unknown subcommand rejected -------------------------------------------
@@ -73,20 +74,45 @@ bash "$SETUP" bogus >/dev/null 2>&1
 [[ $? -eq 2 ]] || fail "unknown subcommand should exit 2"
 ok "unknown subcommand exits 2"
 
-# --- 4) core contract: re-running preserves a customized config ---------------
-echo "# user-customization-marker" >> "${CACHE_T}/config.yaml"
-before_md5="$(md5sum "${CACHE_T}/config.yaml" | awk '{print $1}')"
-before_mtime="$(stat -c %Y "${CACHE_T}/config.yaml")"
-sleep 1.1
-out="$(bash "$SETUP" 2>&1)" || fail "second run exited non-zero"
-grep -q "Keeping your existing configuration" <<<"$out" || fail "second run did not say it keeps the config"
-after_md5="$(md5sum "${CACHE_T}/config.yaml" | awk '{print $1}')"
-after_mtime="$(stat -c %Y "${CACHE_T}/config.yaml")"
-[[ "$before_md5" == "$after_md5" ]] || fail "config content changed on re-run"
-[[ "$before_mtime" == "$after_mtime" ]] || fail "config mtime changed on re-run"
-grep -q "user-customization-marker" "${CACHE_T}/config.yaml" || fail "custom marker lost on re-run"
+# --- 4) every run regenerates the config; a differing copy is backed up ------
+live="${CACHE_T}/config.yaml"
+echo "# user-customization-marker" >> "$live"
+customized_md5="$(md5sum "$live" | awk '{print $1}')"
+out="$(bash "$SETUP" 2>&1)" || fail "re-run exited non-zero"
+grep -q "Backed up" <<<"$out" || fail "re-run over a customized config did not report a backup"
+grep -q "Updated configuration" <<<"$out" || fail "re-run did not report the update"
+grep -q "user-customization-marker" "$live" && fail "customization survived in the live config (should be regenerated)"
+mapfile -t baks < <(compgen -G "${live}.*.bak" || true)
+[[ ${#baks[@]} -eq 1 ]] || fail "expected exactly one backup, found ${#baks[@]}"
+[[ "$(md5sum "${baks[0]}" | awk '{print $1}')" == "$customized_md5" ]] \
+  || fail "backup does not hold the customized content"
+[[ "${baks[0]}" =~ config\.yaml\.[0-9]{8}-[0-9]{6}\.bak$ ]] || fail "backup name not YYYYMMDD-HHMMSS.bak: ${baks[0]}"
+grep -q "${MODEL_DIR_T}/yolo11s/FP16/yolo11s.xml" "$live" || fail "regenerated config lacks the absolute model path"
 [[ -L "$LINK" ]] || fail "symlink lost on re-run"
-ok "re-run: config preserved (md5 + mtime unchanged), symlink intact"
+ok "re-run: customized config backed up as .bak, live config regenerated"
+
+# --- 4b) an unchanged config is a no-op: no rewrite, no new backup ------------
+before_md5="$(md5sum "$live" | awk '{print $1}')"
+before_mtime="$(stat -c %Y "$live")"
+before_inode="$(stat -c %i "$live")"
+sleep 1.1
+out="$(bash "$SETUP" 2>&1)" || fail "no-op re-run exited non-zero"
+grep -q "Configuration unchanged" <<<"$out" || fail "identical re-run did not report unchanged"
+[[ "$(md5sum "$live" | awk '{print $1}')" == "$before_md5" ]] || fail "content changed on identical re-run"
+[[ "$(stat -c %Y "$live")" == "$before_mtime" ]] || fail "mtime changed on identical re-run"
+[[ "$(stat -c %i "$live")" == "$before_inode" ]] || fail "file was replaced on identical re-run (inode changed)"
+mapfile -t baks < <(compgen -G "${live}.*.bak" || true)
+[[ ${#baks[@]} -eq 1 ]] || fail "identical re-run created a backup (${#baks[@]} total)"
+[[ -z "$(compgen -G "${CACHE_T}/.config.yaml.*" || true)" ]] || fail "temp file left behind"
+ok "identical re-run: untouched (md5, mtime, inode), no extra backup, no temp leftovers"
+
+# --- 4c) a non-regular target is refused, never replaced ----------------------
+mv "$live" "${live}.aside"
+ln -s "${live}.aside" "$live"
+bash "$SETUP" >/dev/null 2>&1 && fail "should refuse a symlink at the config path"
+[[ -L "$live" ]] || fail "the symlink at the config path was replaced"
+rm -f "$live"; mv "${live}.aside" "$live"
+ok "symlink at the config path refused"
 
 # --- 5) a regular file at the link path is not clobbered ----------------------
 rm -f "$LINK"

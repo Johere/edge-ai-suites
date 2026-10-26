@@ -131,7 +131,7 @@ An entry becomes selectable only when every check passes:
 
 1. `kind` is in `supported_kinds`;
 2. `backend` is in `supported_backends`;
-3. `model_path`, after symlink resolution, is under `model_dir`;
+3. `model_path`, after symlink resolution, is under `PREFILTER_MODEL_DIR`;
 4. the path ends in `.xml` and both it and the sibling `.bin` exist and are non-empty;
 5. OpenVINO™ can read the model;
 6. the output tensor is detection-shaped — rank 3, `[1, 4+nc, anchors]` — and, when labels are `embedded`, `nc` equals the label count.
@@ -253,7 +253,7 @@ supplied sub-block are merged onto the corresponding `defaults.<sub_block>`; omi
 their defaults, so a request may override only the values that need to differ.
 
 The values below are the defaults in the shipped `videostream-analytics/config/config.yaml.example`
-template, which `setup_vsa.sh` seeds to your live configuration (see §7). A deployment that loads a
+template, which `setup_vsa.sh` renders into your live configuration on every run (see §7). A deployment that loads a
 different `VIDEOSTREAM_CONFIG` inherits the `defaults` blocks from that file instead.
 
 | Sub-block | Model | Purpose |
@@ -727,8 +727,8 @@ Retention responsibilities:
 
 Four paths come up around configuration, and they are easy to confuse:
 
-- `videostream-analytics/config/config.yaml.example` — the tracked **template**. Editing it does not affect an already-deployed instance.
-- `${VIDEOSTREAM_CACHE_HOST}/config.yaml` (default `~/.cache/.videostream-analytics/config.yaml`) — **your live configuration**, seeded once from the template by `videostream-analytics/setup_vsa.sh` and never overwritten by re-running setup. This is the file to edit.
+- `videostream-analytics/config/config.yaml.example` — the tracked **template**, and the place for changes that must survive a deploy. Editing it does not affect a running instance until the next `setup_vsa.sh` / `setup_docker.sh` run.
+- `${VIDEOSTREAM_CACHE_HOST}/config.yaml` (default `~/.cache/.videostream-analytics/config.yaml`) — **your live configuration**, regenerated from the template by `videostream-analytics/setup_vsa.sh` on every run. An identical file is left untouched; a differing one is first saved as `config.yaml.<YYYYMMDD-HHMMSS>.bak` beside it. Edit it for an immediate (hot-reloaded) trial; durable changes go in the template.
 - `videostream-analytics/config/config.yaml` — a **symlink** `setup_vsa.sh` creates to your live configuration, so the familiar in-tree path edits the same file. Ignored by git.
 - `/app/config/config.yaml` — the **mount point** your live configuration is bind-mounted at inside the container.
 
@@ -747,14 +747,13 @@ Ports around the service:
 | `security.allowed_source_schemes` | `["rtsp", "rtsps", "http", "https"]` | Schemes accepted in a register `source_url`. The URL is handed to `ffmpeg -i` verbatim, and ffmpeg can open local files and exotic inputs without this gate. |
 | `security.allow_file_source` | `false` | Also allow `file://` sources. Enable only for offline evaluation against sample clips on disk; in any shared deployment it is an arbitrary-file-read. |
 | `security.ffmpeg_protocol_whitelist` | `[file, crypto, rtp, udp, tcp, tls, rtsp, rtsps, http, https]` | Passed to ffmpeg as `-protocol_whitelist` — a second gate inside ffmpeg itself, so an input that slips past the scheme check still cannot be opened. `file` and `crypto` are required by the segment muxer's own output handling. |
-| `model_dir` (or env `PREFILTER_MODEL_DIR`) | — (required) | Root every registered prefilter model must live under. Docker Compose bind-mounts this host directory read-only at the same path in-container, so a model outside it is unreadable at runtime. Subdirectory layout below the root is unconstrained. Required in every configuration file; an empty or unresolved-placeholder value falls back to `~/models/openvino`. |
 | `prefilter_models` | `{}` (empty) | The models a monitor may select, keyed by the name `prefilter.model` uses. See §5.1. |
 | `defaults.prefilter.model` | — | Registry key sources inherit when they do not name one themselves. |
 | `SMART_COMMUNITY_DATA_DIR` | `~/.mcp-smart-community` | Overrides the platform data root; VSA writes under its `segments/` subdirectory. |
-| `PREFILTER_MODEL_DIR` | `~/models/openvino` | Sets `model_dir` above, and what `${PREFILTER_MODEL_DIR}` in `config.yaml` expands to. Docker Compose passes it into the container as well as using it for the read-only bind mount — the container sets `HOME=/tmp`, so a `~/models/openvino` fallback would resolve elsewhere. |
-| `VIDEOSTREAM_CACHE_HOST` | `~/.cache/.videostream-analytics` | Your configuration home. `setup_vsa.sh` seeds `config.yaml` here once and never overwrites it; also pre-created by `docker/set_env.sh` so Docker never makes a root-owned directory. |
+| `PREFILTER_MODEL_DIR` | `~/models/openvino` | The root every registered prefilter model must live under — a model outside it is rejected, because the container only mounts this directory (read-only, at the same path). Also what `${PREFILTER_MODEL_DIR}` in `config.yaml` expands to. There is deliberately no matching key in `config.yaml`: the mount is fixed by this variable, so a copy in the file could only disagree with it. Subdirectory layout below the root is unconstrained. Docker Compose passes it into the container as well as using it for the read-only bind mount — the container sets `HOME=/tmp`, so a `~/models/openvino` fallback would resolve elsewhere. |
+| `VIDEOSTREAM_CACHE_HOST` | `~/.cache/.videostream-analytics` | Your configuration home. `setup_vsa.sh` regenerates `config.yaml` here on every run, keeping a differing previous copy as `config.yaml.<YYYYMMDD-HHMMSS>.bak`; also pre-created by `docker/set_env.sh` so Docker never makes a root-owned directory. |
 | `VIDEOSTREAM_CONFIG` | `config/config.yaml.example` | Alternate configuration file path. |
-| `VIDEOSTREAM_CONFIG_FILE` | `${VIDEOSTREAM_CACHE_HOST}/config.yaml` | Your live configuration, seeded once by `setup_vsa.sh` from the example template and then yours — re-running setup keeps it. Docker Compose bind-mounts it at `/app/config/config.yaml`; `videostream-analytics/config/config.yaml` is a symlink to it for convenient editing. Seeding pins `model_dir` and the default model's registry `model_path` to the absolute, validated paths. |
+| `VIDEOSTREAM_CONFIG_FILE` | `${VIDEOSTREAM_CACHE_HOST}/config.yaml` | Your live configuration, regenerated by `setup_vsa.sh` from the example template on every run (a differing previous copy is kept as a timestamped `.bak`). Docker Compose bind-mounts it at `/app/config/config.yaml`; `videostream-analytics/config/config.yaml` is a symlink to it for convenient editing. Rendering pins the default model's registry `model_path` to the absolute, validated paths. |
 | `OV_CACHE_DIR` | `/tmp/ov_cache` | OpenVINO™ model cache used by the YOLO prefilter. |
 
 ### 5.1 `prefilter_models`
@@ -763,8 +762,6 @@ Each entry declares one selectable model. Registration makes a model *eligible*;
 it becomes *selectable* only after passing the validation in §3.2.1.
 
 ```yaml
-model_dir: "${PREFILTER_MODEL_DIR}"
-
 prefilter_models:
   yolo11s:
     kind: detection
@@ -777,7 +774,7 @@ prefilter_models:
 |-------|------|---------|-------------|
 | `kind` | `string` | — | Required. What the model does. Supported: `detection`. |
 | `backend` | `string` | `"openvino"` | Runtime that executes it, case-insensitive. Supported: `openvino`. |
-| `model_path` | `string` | — | Required. Absolute path to the IR `.xml`, under `model_dir`. `${PREFILTER_MODEL_DIR}`, `${HOME}` and `~` are expanded. |
+| `model_path` | `string` | — | Required. Absolute path to the IR `.xml`, under `PREFILTER_MODEL_DIR`. `${PREFILTER_MODEL_DIR}`, `${HOME}` and `~` are expanded. |
 | `description` | `string` | `""` | Free text, surfaced to agents helping a user choose a model. |
 
 Unknown fields are rejected. `kind` and `backend` accept one value each today;
