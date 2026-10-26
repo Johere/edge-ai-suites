@@ -373,7 +373,8 @@ P2 — ROI focus: crop/focus a region of interest?
 Reply exactly: P1=yes|no, P2=yes|no
 ```
 
-Note that P1=yes later requires picking `target_classes`, and P2=yes applies
+Note that P1=yes later requires picking the prefilter model (when more than one
+is selectable) and its `target_classes`, and P2=yes applies
 the ROI template defaults (`mode: crop, expand: 0.25, auto_split_area: 0.35`;
 see the reference) with no further ROI questions. **End the turn immediately.**
 
@@ -388,11 +389,22 @@ ambiguous, ask only for the missing part and end the turn again.
 
 Continue only after an explicit `P1=.., P2=..` reply.
 
-* **P1=yes** — call `smart_community_monitor_ctl action=prefilter_options`, present
-  the returned `class_names` exactly, and have the user explicitly pick
-  `target_classes`. Do not select for the user; a recommendation is never a
-  selection; every pick must match a returned class name; handle `labels_source`
-  per the reference. Continue only after the user's explicit selection.
+* **P1=yes** — call `smart_community_monitor_ctl action=prefilter_options`, then
+  resolve two selections in order (details in the reference):
+  1. **Model.** `models[]` is the selectable set. If it holds **more than one**
+     entry, list every model by `name` with its `description`, `input_shape`
+     and class count, **end the turn**, and have the user explicitly pick one;
+     the class list below depends on this choice, so do not show classes yet.
+     If exactly one is selectable, use it and state which in the M3 summary.
+     Never offer or accept a model listed only under `rejected`; never put a
+     `model_path` in `pipeline_config` — models are chosen by `name`.
+  2. **Classes.** Present the chosen model's `class_names` exactly and have the
+     user explicitly pick `target_classes`.
+
+  Do not select for the user on either step; a recommendation is never a
+  selection; the model must be a returned `name` and every class must match
+  that model's `class_names`; handle `labels_source` per the reference.
+  Continue only after the user's explicit selections.
 * **P2=yes** — apply the ROI template defaults from the reference verbatim
   (`roi: { enabled: true, mode: crop, expand: 0.25, auto_split_area: 0.35 }`).
   No further ROI questions; there is no geometry to collect (ROI is
@@ -408,7 +420,8 @@ Continue only after an explicit `P1=.., P2=..` reply.
 Only after all decisions/selections/parameters are complete:
 
 1. Assemble the exact `pipeline_config` for `register_source` and display it in
-   full — no hidden or summarized fields.
+   full — no hidden or summarized fields. When prefilter is enabled it carries
+   `model: <name>` alongside `target_classes`.
 2. Also display the decision summary (template in the reference).
 
 Even when both features are off, display an **explicit** disabled config
